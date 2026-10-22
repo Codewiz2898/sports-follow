@@ -30,7 +30,7 @@ import logging
 import os
 import sys
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import replace
 from datetime import datetime, time as clock, timedelta, timezone
@@ -49,7 +49,7 @@ from . import alerts, bus, fcm, logs, metrics, sports
 from .config import SITE_URL
 from .db import session
 from .moments import DEFAULT_LEVEL, Found
-from .models import Event, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerCard, PlayerIdentity, PushSubscription
+from .models import Event, EventState, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerCard, PlayerIdentity, PushSubscription
 
 if TYPE_CHECKING:
     from . import livecards
@@ -148,15 +148,16 @@ def make_keys() -> str:
 def record(db: Session, player_id: int, event_id: int | None, found: list[Found], url: str | None = None) -> list[int]:
     """Store new moments; ones already stored (the same key) are skipped. A correction is stored with the
     moment it takes back (its detail is that moment's kind and detail), and not at all if that one never
-    was. Returns the new ids."""
+    was. A game played again after it was called off has moments of its own (edition_of). Returns the new ids."""
     ids = []
+    edition = edition_of(db, event_id) if event_id and found else ""
     for f in found:
         corrects = None
         if f.kind == "correction":
-            corrects = db.scalar(select(Moment.id).where(Moment.key == _key(event_id, player_id, f.detail)))
+            corrects = db.scalar(select(Moment.id).where(Moment.key == _key(event_id, player_id, f.detail, edition)))
             if corrects is None:
                 continue  # what it takes back was never found, so nobody was told it
-        key = _key(event_id, player_id, f"{f.kind}:{f.detail}")
+        key = _key(event_id, player_id, f"{f.kind}:{f.detail}", edition)
         new_id = db.scalar(
             insert(Moment)
             .values(key=key, player_id=player_id, event_id=event_id, kind=f.kind, level=f.level, priority=f.priority or 50, title=f.title[:200], body=f.body, url=url or f"/player/{player_id}", corrects=corrects,
@@ -172,18 +173,19 @@ def record(db: Session, player_id: int, event_id: int | None, found: list[Found]
 
 def record_game(db: Session, event_id: int, found: list[Found], url: str) -> list[int]:
     """Store a game's own moments (Sport.game_moments), for the fans following the game itself; ones already
-    stored are skipped, and a correction is stored with the moment it takes back, or not at all. Returns the
-    new ids."""
+    stored are skipped, and a correction is stored with the moment it takes back, or not at all. Of its edition
+    (edition_of). Returns the new ids."""
     ids = []
+    edition = edition_of(db, event_id) if found else ""
     for f in found:
         corrects = None
         if f.kind == "correction":
-            corrects = db.scalar(select(Moment.id).where(Moment.key == _game_key(event_id, f.detail)))
+            corrects = db.scalar(select(Moment.id).where(Moment.key == _game_key(event_id, f.detail, edition)))
             if corrects is None:
                 continue
         new_id = db.scalar(
             insert(Moment)
-            .values(key=_game_key(event_id, f"{f.kind}:{f.detail}"), player_id=None, event_id=event_id, kind=f.kind, level=f.level, priority=f.priority or 50,
+            .values(key=_game_key(event_id, f"{f.kind}:{f.detail}", edition), player_id=None, event_id=event_id, kind=f.kind, level=f.level, priority=f.priority or 50,
                     title=f.title[:200], body=f.body, url=url, corrects=corrects, about=list(f.about or ("*",)))
             .on_conflict_do_nothing()
             .returning(Moment.id)
@@ -195,33 +197,58 @@ def record_game(db: Session, event_id: int, found: list[Found], url: str) -> lis
 
 
 def told_game(db: Session, event_id: int) -> list[tuple[str, str]]:
-    """A game's own moments so far, oldest first, as each one's kind and detail: what it may take back."""
-    prefix = _game_key(event_id, "")
-    keys = db.scalars(select(Moment.key).where(Moment.event_id == event_id, Moment.player_id.is_(None)).order_by(Moment.id))
+    """A game's own moments so far, of its edition (edition_of), oldest first, as each one's kind and detail: what it
+    may take back."""
+    prefix = _game_key(event_id, "", edition_of(db, event_id))
+    keys = db.scalars(select(Moment.key).where(Moment.event_id == event_id, Moment.player_id.is_(None), Moment.key.startswith(prefix, autoescape=True)).order_by(Moment.id))
     return [(kind, detail) for kind, _, detail in (key.removeprefix(prefix).partition(":") for key in keys)]
 
 
-def _game_key(event_id: int, kind_detail: str) -> str:
-    """A game's own moment's key: its game, "game" where a player's has their id, its kind and detail."""
-    return f"{event_id}:game:{kind_detail}"[:200]
+def _game_key(event_id: int, kind_detail: str, edition: str = "") -> str:
+    """A game's own moment's key: its game and edition, "game" where a player's has their id, its kind and detail."""
+    return f"{event_id}{edition}:game:{kind_detail}"[:200]
 
 
 def told(db: Session, player_id: int, event_id: int) -> list[tuple[str, str]]:
-    """The moments stored for a player in a game, oldest first, as each one's kind and detail (read back
-    from its key): what the sport may take back (moments.detect)."""
-    keys = db.scalars(select(Moment.key).where(Moment.player_id == player_id, Moment.event_id == event_id).order_by(Moment.id))
+    """The moments stored for a player in a game, of its edition (edition_of), oldest first, as each one's kind and
+    detail (read back from its key): what the sport may take back (moments.detect)."""
+    prefix = _key(event_id, player_id, "", edition_of(db, event_id))
+    keys = db.scalars(select(Moment.key).where(Moment.player_id == player_id, Moment.event_id == event_id, Moment.key.startswith(prefix, autoescape=True)).order_by(Moment.id))
     return [kind_detail(key, event_id, player_id) for key in keys]
 
 
 def kind_detail(key: str, event_id: int | None, player_id: int) -> tuple[str, str]:
-    """A player's moment's kind and detail, read back from its key."""
-    kind, _, detail = key.removeprefix(_key(event_id, player_id, "")).partition(":")
+    """A player's moment's kind and detail, read back from its key, whichever edition of its game it's of."""
+    _, _, kind, detail = (key.split(":", 3) + ["", ""])[:4]
     return kind, detail
 
 
-def _key(event_id: int | None, player_id: int, kind_detail: str) -> str:
-    """A moment's key: its game, its player, its kind and detail. The same moment found again has the same key."""
-    return f"{event_id or '-'}:{player_id}:{kind_detail}"[:200]
+def _key(event_id: int | None, player_id: int, kind_detail: str, edition: str = "") -> str:
+    """A moment's key: its game and edition (edition_of), its player, its kind and detail. The same moment found again
+    has the same key."""
+    return f"{event_id or '-'}{edition}:{player_id}:{kind_detail}"[:200]
+
+
+def editions(db: Session, event_ids: Iterable[int | None]) -> dict[int, datetime]:
+    """When each of these games began as the game it is now, where that isn't its first time: one called off
+    (postponed) and set again for later under the same fixture (a match abandoned and replayed), from the last time
+    it was called off before its start now. Its moments and pushes from before are the game called off's: the replay's
+    line-up, start and cards are told afresh (each moment's key has its edition: edition_of), its notification's story
+    is its own, and nothing of the game called off is taken back in it (BUG-185). A game stopped and on again under the
+    start it had (suspended a while) is the same game."""
+    ids = sorted({e for e in event_ids if e})
+    if not ids:
+        return {}
+    rows = db.execute(select(EventState.event_id, func.max(EventState.as_of)).join(Event, Event.id == EventState.event_id)
+                      .where(EventState.event_id.in_(ids), EventState.status == "postponed", EventState.as_of < Event.start_utc)
+                      .group_by(EventState.event_id))
+    return {event_id: at for event_id, at in rows if at is not None}
+
+
+def edition_of(db: Session, event_id: int) -> str:
+    """The mark of a game's edition (editions) its moments' keys carry: none for its first, else when it began."""
+    since = editions(db, [event_id]).get(event_id)
+    return f"~{int(since.timestamp())}" if since is not None else ""
 
 
 def dispatch(moment_ids: list[int]) -> None:
@@ -397,7 +424,7 @@ def send_held(moment_ids: list[int], now: datetime | None = None) -> int:
     jobs, late = [], []
     with session() as db:
         for item in on_boards(db, db.scalars(select(Moment).where(Moment.id.in_(list(entries))).order_by(Moment.id)).all()):
-            twins = [_key(e, item.voice, f"{item.kind}:{item.detail}") for e in item.fixtures] if item.voice is not None else []
+            twins = [_key(e, item.voice, f"{item.kind}:{item.detail}", edition_of(db, e)) for e in item.fixtures] if item.voice is not None else []
             if twins and db.scalar(select(Moment.id).where(Moment.key.in_(twins)).limit(1)) is not None:
                 continue  # its other side said it
             told = replace(item, voice=None)  # told by its own side now
@@ -479,8 +506,11 @@ def for_games(db: Session, items: list[alerts.Item]) -> list[alerts.Item]:
         ids.setdefault((player_id, system), set()).add(external)
     counted: Counter[tuple[int | None, str, Any]] = Counter()
     nth: dict[int, int] = {}
-    for moment_id, event_id, kind, player_id, about in db.execute(select(Moment.id, Moment.event_id, Moment.kind, Moment.player_id, Moment.about)
-                                                                  .where(Moment.event_id.in_(events), Moment.kind.in_({i.kind for i in items})).order_by(Moment.id)):
+    began = editions(db, events)  # a game played again after it was called off counts its own
+    for moment_id, event_id, kind, player_id, about, at in db.execute(select(Moment.id, Moment.event_id, Moment.kind, Moment.player_id, Moment.about, Moment.created_at)
+                                                                      .where(Moment.event_id.in_(events), Moment.kind.in_({i.kind for i in items})).order_by(Moment.id)):
+        if event_id in began and at < began[event_id]:
+            continue
         whose = player_id if player_id is not None else ("game", (about or ["*"])[0])
         counted[(event_id, kind, whose)] += 1
         nth[moment_id] = counted[(event_id, kind, whose)]
@@ -503,6 +533,13 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
 
     players = {i.player_id for i in items if i.player_id is not None}
     events = {i.event_id for i in items if i.event_id}
+    # Each player as their moments' titles name them, in a game the batch has several players' moments of: one play two
+    # of a fan's players tell alike is one line (alerts.fold).
+    shared = {e for e, n in Counter(e for _, e in {(i.player_id, i.event_id) for i in items if i.player_id is not None and i.event_id}).items() if n > 1}
+    if shared:
+        named = {i.player_id for i in items if i.event_id in shared and i.player_id is not None}
+        names = {pid: name for pid, name in db.execute(select(Player.id, Player.name).where(Player.id.in_(named)))}
+        items = [replace(i, who=names.get(i.player_id, "")) if i.event_id in shared and i.player_id is not None else i for i in items]
     levels: dict[str, dict[int, str]] = {}
     for fan, player_id, rules in db.execute(select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(players))) if players else []:
         levels.setdefault(fan, {})[player_id] = (rules or {}).get("level", DEFAULT_LEVEL)
@@ -541,7 +578,10 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
         muted.setdefault(fan, set()).add(event_id)
     sent: dict[str, list[alerts.Sent]] = {}
     earlier = select(Notification).where(Notification.fan_id.in_(devices), Notification.kind.not_in(CALLS), or_(Notification.created_at >= now - timedelta(hours=1), Notification.event_id.in_(fixtures), and_(Notification.event_id.is_(None), Notification.player_id.in_(players))))
+    began = editions(db, fixtures)
     for n in db.scalars(earlier):
+        if n.event_id in began and n.created_at < began[n.event_id]:
+            continue  # the game called off before this one, played again under its fixture (editions): not this one's
         sent.setdefault(n.fan_id, []).append(alerts.Sent(n.event_id, n.player_id, n.loud, n.lines or [], n.created_at, n.moment_ids or []))
 
     # What earlier pushes of these games sent the fans who follow one by itself, or a player on a board under several
@@ -563,14 +603,18 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
     for fan, fan_devices in devices.items():
         heard = [told[m] for s in sent.get(fan, []) if s.event_id in games.get(fan, {}) or s.event_id in on_board for m in s.moment_ids if m in told]
         left: list[alerts.Item] = []
+        hushed = [quiet(d.timezone, d.quiet_start, d.quiet_end, now) for d in fan_devices]  # each device's quiet hours
         for p in alerts.plan(items, levels.get(fan, {}), muted.get(fan, set()), sent.get(fan, []), now, taken_back, games.get(fan, {}), heard, left):
-            row = Notification(fan_id=fan, event_id=p.event_id, player_id=p.player_id, moment_ids=p.moment_ids, kind=p.kind, lines=p.lines, loud=p.loud, devices=len(fan_devices), delivered=0, created_at=now)
+            # Logged as loud only where it makes a sound on a device: one that arrives silent in quiet hours on all of
+            # them leaves the hour's sound (alerts.LOUD_PER_HOUR) and the game's to the pushes after it (BUG-242).
+            row = Notification(fan_id=fan, event_id=p.event_id, player_id=p.player_id, moment_ids=p.moment_ids, kind=p.kind, lines=p.lines, loud=p.loud and not all(hushed),
+                               devices=len(fan_devices), delivered=0, created_at=now)
             db.add(row)
             db.flush()
             payload = {"id": row.id, "title": p.title, "body": p.body, "url": p.url, "tag": p.tag, "event_id": p.event_id, "player_id": p.player_id, "kind": p.kind, "loud": p.loud}
             android = {**payload, **_scorecard_or_none(p, drawn)}
-            for d in fan_devices:
-                jobs.append((row.id, (d.id, d.transport, d.endpoint, d.p256dh, d.auth), {**(android if d.transport == "fcm" else payload), "quiet": quiet(d.timezone, d.quiet_start, d.quiet_end, now)}, p.ttl, p.tag))
+            for d, hush in zip(fan_devices, hushed):
+                jobs.append((row.id, (d.id, d.transport, d.endpoint, d.p256dh, d.auth), {**(android if d.transport == "fcm" else payload), "quiet": hush}, p.ttl, p.tag))
         for item in left:
             held.setdefault(item.id, (item, set()))[1].add(fan)
     if not _hold(held):
@@ -618,6 +662,7 @@ def scorecard(p: alerts.Push, items: dict[int, alerts.Item], boards: dict[int, l
 
     lead = items.get(p.moment_ids[0]) if p.moment_ids else None
     who, sport_name, photo = players.get(p.player_id, ("", "", "")) if p.player_id is not None else ("", "", "")
+    who = p.who or who  # several of the fan's players, where its line is theirs at once (alerts.fold)
     board = boards.get(p.event_id) if p.event_id is not None else None
     sport = board.sport if board is not None else sports.of(sport_name)
 
@@ -661,19 +706,19 @@ def _settle(results: list[tuple[int, int, int | str | None]]) -> None:
 def _health(db: Session, device_id: int, error: int | str | None) -> None:
     """A device the push service says is gone (404, 410) is removed; one that keeps failing is removed after MAX_FAILURES.
     A message too big for the push service (413) isn't counted against the device, nor a refusal of this
-    server's own key (401: an FCM key that's wrong or revoked would otherwise remove every Android device)."""
+    server's own key (401: an FCM key that's wrong or revoked would otherwise remove every Android device), nor the
+    push service holding back a device sent more than its quota (429: FCM's for a busy fan's phone). A failure is
+    added to the count in the database, so batches writing back at once each count theirs (BUG-187)."""
     if error is None:
         db.execute(update(PushSubscription).where(PushSubscription.id == device_id).values(last_ok_at=datetime.now(timezone.utc), failures=0))
     elif error in (404, 410):
         db.execute(delete(PushSubscription).where(PushSubscription.id == device_id))
-    elif error in (401, 413):
-        return  # this server's key, or a message too big for the push service: not the device's fault
+    elif error in (401, 413, 429):
+        return  # this server's key, a message too big for the push service, or one holding pushes back: not the device's fault
     else:
-        row = db.get(PushSubscription, device_id)
-        if row is not None:
-            row.failures += 1
-            if row.failures >= MAX_FAILURES:
-                db.delete(row)
+        failures = db.scalar(update(PushSubscription).where(PushSubscription.id == device_id).values(failures=PushSubscription.failures + 1).returning(PushSubscription.failures))
+        if failures is not None and failures >= MAX_FAILURES:
+            db.execute(delete(PushSubscription).where(PushSubscription.id == device_id))
 
 
 def transports() -> tuple[str, ...]:

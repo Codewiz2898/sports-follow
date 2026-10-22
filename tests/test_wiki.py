@@ -276,6 +276,23 @@ def test_a_player_bound_to_a_live_source_after_wikidata_gave_their_teams_keeps_t
     assert page.player.teams == page.published[7]["player"]["teams"] == ["India", "Mumbai Indians"]
 
 
+@pytest.mark.parametrize("label, named", [
+    ("Asha Rao", "Asha Rao"),  # the source's legal name, "Asha Gopal Rao": the name fans know, Wikidata's, instead
+    ("Asha G. Rao", "Asha Gopal Rao"),  # not fewer words: theirs stays
+    ("Ash Rao", "Asha Gopal Rao"),  # a word the source's name hasn't: another spelling, a nickname
+    ("Rao", "Asha Gopal Rao"),  # a surname alone isn't a name to show
+    (None, "Asha Gopal Rao"),
+])
+def test_a_player_the_source_names_by_their_legal_name_goes_by_wikidatas(monkeypatch, redis, label, named):
+    # BUG-086: cricketers made from their source showed under their full legal names ("Jasprit Jasbirsingh Bumrah",
+    # "Rohit Gurunath Sharma") on tiles, pages and alerts.
+    page = _page(monkeypatch, bound=True, qid="Q1", card={"status": "ready", "player": {"name": "Asha Gopal Rao"}}, status="ready",
+                 profile=wiki.Profile(qid="Q1", name=label, born="1994-03-09"))
+    page.player.name = "Asha Gopal Rao"
+    pipeline.refresh_profile(7)
+    assert page.player.name == page.published[7]["player"]["name"] == named
+
+
 # ---------------------------------------------------------------- precedence (pipeline.merge_profile, keep_profile)
 
 

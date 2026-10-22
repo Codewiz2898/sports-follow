@@ -404,6 +404,37 @@ def test_signed_in_fans_reports_lower_their_channels_trust_to_half_at_most_and_a
     assert rows()["edit0000001"].score == pytest.approx(before)
 
 
+def test_one_fans_reports_count_once_against_a_channel_however_many_of_its_videos_and_players_they_cover(made):
+    # BUG-120: one signed-in fan reporting three of a channel's videos, one of them held for two players, halved its
+    # trust for everyone: each report, and each player's copy, counted as another fan's.
+    pid = asha()
+    with db_module.session() as s:
+        other = Player(slug="riya-sen", name="Riya Sen", sport="cricket", teams=["Riverside XI"])
+        s.add(other)
+        s.flush()
+        rohit = other.id
+    stored(pid, "edit0000001", "Every boundary", EDITS, 8, verdict=said())
+    for n in (2, 3, 4):
+        stored(pid, f"edit000000{n}", f"Every wicket, part {n}", EDITS, 30, verdict=said())
+    stored(rohit, "edit0000004", "Every wicket, part 4", EDITS, 30, verdict=said())
+    rank.rescore()
+    before = rows()["edit0000001"].score
+    assert before
+
+    def report(fan: str, player_id: int, vid: str, verdict: str = "report") -> None:
+        with db_module.session() as s:
+            s.add(FeedFeedback(fan_id=fan, player_id=player_id, item_id=feed.item_id(f"https://www.youtube.com/watch?v={vid}"), verdict=verdict))
+
+    for player_id, vid in ((pid, "edit0000002"), (pid, "edit0000003"), (pid, "edit0000004"), (rohit, "edit0000004")):
+        report("acct-one", player_id, vid)
+    rank.rescore()
+    assert rows()["edit0000001"].score == pytest.approx(before / (1 + 1 / rank.FEEDBACK_SCALE), abs=1e-3)  # one fan: one report's worth
+    report("acct-two", pid, "edit0000002", "not_about_player")
+    report("acct-two", pid, "edit0000003")  # their strongest word counts, once
+    rank.rescore()
+    assert rows()["edit0000001"].score == pytest.approx(before / (1 + 2 / rank.FEEDBACK_SCALE), abs=1e-3)
+
+
 def test_the_admin_feed_page_lists_candidates_with_their_verdicts_and_every_channels_trust(made):
     pid = asha()
     stored(pid, "edit0000001", "Every boundary", EDITS, 8, verdict=said())

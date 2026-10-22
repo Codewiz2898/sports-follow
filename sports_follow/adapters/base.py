@@ -100,8 +100,8 @@ class Fixture:
     # fixture is the game, or the source doesn't know it yet.
     board: str = ""
     # A game with no start time of its own that the source says is next: it starts once the one before it is over
-    # (a chess round set to start after the previous one). It's armed while it is, so its start is seen when it
-    # comes (structured.reschedule).
+    # (a chess round set to start after the previous one), or some time on its day (a lobby entered without a time,
+    # whose start_utc is its day's). It's armed while it is, so its start is seen when it comes (structured.reschedule).
     next_up: bool = False
 
 
@@ -260,7 +260,9 @@ class LiveSearch:
     """A provider's own player search, asked when the registry has few matches for what a fan typed.
 
     find(query, sport, adapters) returns results best first; sport is the fan's filter (None for every
-    sport), adapters are the provider's running ones. It's asked under a filter its adapters serve."""
+    sport), adapters are the provider's running ones. It's asked under a filter its adapters serve. It reads
+    through its source's Cache (cache.py): search asks it first for what's kept (cache.kept_only), so a search
+    the cache answers isn't counted against a client's limit."""
 
     find: Callable[[str, str | None, list["Adapter"]], list[SearchResult]]
     unfiltered: bool = True  # asked when the fan hasn't picked a sport, too

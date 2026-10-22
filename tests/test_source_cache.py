@@ -100,6 +100,29 @@ def test_a_fetch_that_waits_for_its_turn_is_as_old_as_its_request(clock):
     assert reads.read("/broadcast/round/1", 5, Source()) == {"data": "made up"}  # still fresh for a 5 s ttl
 
 
+def test_a_kept_only_call_is_answered_from_whats_kept_or_sends_nothing(clock):
+    # BUG-148: search asks a source's own search first for what's kept, so only a search that sends something counts
+    # against a client's minute.
+    api, worker = cache.Cache("example"), cache.Cache("example")
+    source = Source()
+
+    def look(c: cache.Cache, key: str, ttl: float = 3600) -> Any:
+        return c.read(key, ttl, source)
+
+    with pytest.raises(cache.NotKept):
+        cache.kept_only(look)(api, "/search?q=warne")
+    assert source.fetched == 0
+    look(api, "/search?q=warne")
+    assert cache.kept_only(look)(worker, "/search?q=warne")["data"]["read"] == 1 and source.fetched == 1  # from Redis
+    clock["t"] += 7200
+    for kept_only in (lambda: cache.kept_only(look)(api, "/search?q=warne"), lambda: cache.kept_only(look)(api, "/live", 0),
+                      lambda: cache.kept_only(api.peek)("/search?q=warne", 3600)):  # too old; never kept; only looked at
+        with pytest.raises(cache.NotKept):
+            kept_only()
+    assert source.fetched == 1 and api.peek("/search?q=warne", 3600) is None  # and outside one, as before
+    assert look(api, "/search?q=warne")["data"]["read"] == 2
+
+
 def test_a_ttl_of_0_is_fetched_every_time_and_never_kept(source_cache):
     reads, source = cache.Cache("example"), Source()
     reads.read("/livescores", 0, source)

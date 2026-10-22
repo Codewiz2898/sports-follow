@@ -42,8 +42,10 @@ def _time(value: str | None) -> datetime | None:
 
 
 def _status(status: dict[str, Any]) -> str:
+    """A match's status; one called off (_called_off), which ESPN still calls over ("post"), is off, as a postponed one
+    is: the score it was stopped at isn't a result."""
     kind = status.get("type") or {}
-    if "POSTPONED" in (kind.get("name") or "") or "CANCELED" in (kind.get("name") or ""):
+    if "POSTPONED" in (kind.get("name") or "") or _called_off(status):
         return "postponed"
     return _STATUS.get(kind.get("state"), "scheduled")
 

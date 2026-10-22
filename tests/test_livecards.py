@@ -4,6 +4,7 @@ sends them to the fans of a game in a real database."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -77,6 +78,14 @@ def test_a_games_own_moment_is_read_without_the_games_name():
     # A goal whose title says only what happened has its kind's word.
     plain = ["Arsenal v Chelsea: Bukayo Saka scores"]
     assert notify.scorecard(push(plain), {1: item(1, "goal", plain[0], player_id=None)}, {1: board()}, {})["word"] == "Goal"
+
+
+def test_a_line_two_teammates_tell_alike_has_its_kinds_word_not_their_names():
+    # One push's line for two of the fan's players at once (alerts.fold): its head is whom it names, not a word.
+    line = "TenZ and zekken: Sentinels win map 1"
+    folded = replace(push([line], player_id=3, kind="map"), who="TenZ and zekken")
+    drawn = notify.scorecard(folded, {1: item(1, "map", line, player_id=3)}, {}, {3: ("TenZ", "Valorant", "")})
+    assert (drawn["word"], drawn["line"]) == ("Map", line)
 
 
 def test_a_players_news_wears_their_sports_colour_and_their_photo(monkeypatch):
@@ -243,3 +252,30 @@ def test_a_lobby_has_no_sides_and_no_bar(fake_fcm, redis, cards):  # noqa: F811
     [(_, _, made)] = cards.sent
     assert (made["sport"], made["colour"], made["sides"], made["status"], made["progress"], made["marks"]) == ("bgmi", "#166534", [], "After match 3 of 6", "", [])
     assert livecards.fcm.data_message("t" * 40, made, 60)["data"]["live"] == "1"
+
+
+def test_a_test_match_at_stumps_takes_its_card_down_for_the_night_and_puts_it_up_when_play_resumes(fake_fcm, redis, cards):  # noqa: F811
+    # BUG-186: a "Stumps Day 2" board is still on (it's polled every minute all night), and its unchanged card went again
+    # every REFRESH: an ongoing "live" notification on the lock screen all night, the app woken ~96 times, for five nights.
+    test = SimpleNamespace(id=8, sport="Cricket", competition="Border-Gavaskar Trophy", key="sportmonks_cricket:71300", title="India v Australia")
+    state = {"kind": "cricket", "format": "Test", "teams": [{"id": "1", "name": "India", "abbr": "IND", "score": "311/4"}, {"id": "2", "name": "Australia", "abbr": "AUS", "score": "445"}],
+             "innings": [{"team": "Australia", "runs": 445, "wickets": 10, "overs": 120.2, "batting": False}, {"team": "India", "runs": 311, "wickets": 4, "overs": 88.0, "batting": True}]}
+
+    def day(clock: str, overs: float = 88.0) -> Snapshot:
+        innings = [*state["innings"][:1], {**state["innings"][1], "overs": overs, "batting": "Stump" not in clock}]
+        return Snapshot("live", "AUS 445 (120.2 ov) · IND 311/4 (88 ov)", clock, {**state, "innings": innings})
+
+    livecards.polled(test, day("2nd Innings", 87.5))
+    assert [kind for _, kind, _ in cards.sent] == ["live"]
+    livecards.polled(test, day("Stump Day 2"))
+    assert [kind for _, kind, _ in cards.sent] == ["live", "end"]  # down for the night
+    for _ in range(3):  # the night's polls, ten minutes apart: nothing goes
+        cards.clock.now += livecards.REFRESH + 1
+        livecards.polled(test, day("Stump Day 2"))
+    assert [kind for _, kind, _ in cards.sent] == ["live", "end"]
+    cards.clock.now += 9 * 3600
+    livecards.polled(test, day("2nd Innings", 88.1))  # the morning's first ball: up again at once
+    assert [kind for _, kind, _ in cards.sent] == ["live", "end", "live"] and cards.sent[-1][2]["status"] == "88.1 ov"  # type: ignore[index]
+    # ESPN says it its own way.
+    livecards.polled(test, day("Day 3 · Stumps"))
+    assert [kind for _, kind, _ in cards.sent][-1] == "end"

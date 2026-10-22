@@ -22,6 +22,7 @@ import io
 import math
 import re
 import threading
+import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass
 from functools import lru_cache
@@ -382,11 +383,15 @@ def _has(name: str, char: str) -> bool:
 
 
 def _drawable(text: str, *names: str) -> tuple[str, str]:
-    """The first of the typefaces that draws all of the text, and the text. When none does (a name in a
-    script none of them has), the one that draws the most of it, and the text without what it can't."""
+    """The first of the typefaces that draws all of the text, and the text. When none does, the one that draws
+    the most of it, and the text without the symbols it lacks (an emoji); but none of the text where it lacks a
+    letter (words in a script none of them has, Devanagari): drawn without them, "Follow गुकेश and Sindarov" read
+    "Follow and Sindarov"."""
     best = max(names, key=lambda name: (sum(_has(name, c) for c in text), -names.index(name)))
     if all(_has(best, c) for c in text):
         return best, text
+    if any(unicodedata.category(c)[0] in "LM" and not _has(best, c) for c in text):
+        return best, ""
     return best, " ".join("".join(c for c in text if _has(best, c)).split())
 
 
@@ -506,9 +511,9 @@ def _draw(picture: Picture) -> bytes:
     ceiling = PAD + 80  # under the tag
 
     bottom = HEIGHT - BAND - 44
-    for line in reversed(picture.lines[:2]):
-        font = _font("manrope", 34)
-        draw.text((PAD, bottom), _cut(_drawable(line, "manrope")[1], font, width), font=font, fill=picture.ink, anchor="ls")
+    font = _font("manrope", 34)
+    for line in reversed([shown for line in picture.lines[:2] if (shown := _drawable(line, "manrope")[1])]):  # one it can't draw goes
+        draw.text((PAD, bottom), _cut(line, font, width), font=font, fill=picture.ink, anchor="ls")
         bottom -= 50
     bottom -= 14
 

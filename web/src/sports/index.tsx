@@ -3,12 +3,12 @@
 // is its facts module (facts/), its view module, and one line in VIEWS; a sport without one still shows, with
 // the plain score and no line art.
 
-import type { CSSProperties } from 'react'
+import { useSyncExternalStore, type CSSProperties } from 'react'
 import { basketball } from './basketball'
 import { chess } from './chess'
 import { cricket } from './cricket'
 import { esports } from './esports'
-import { sportDrawn } from './catalog'
+import { onSports, sportDrawn, sportsVersion } from './catalog'
 import { artPlace } from './facts'
 import { football } from './football'
 import { tennis } from './tennis'
@@ -18,6 +18,12 @@ export { loadSports, runningSports, sportDrawn, sportInfo, sportKey, sportName, 
 export type { BoardProps, MatchProps, SportView } from './view'
 
 const VIEWS: SportView[] = [football, cricket, basketball, tennis, chess, esports]
+
+/** The sports' version, which changes when the server's catalog does: a component using it draws again then, so a
+ * sport switched on or off in /admin reaches an app that's open (BUG-166). The app's frame uses it (main.tsx). */
+export function useSports(): number {
+  return useSyncExternalStore(onSports, sportsVersion)
+}
 
 /** The view for a sport's key ("football"), or none; a sport of a group (an esports game) is drawn by its group's
  * (sportDrawn). */

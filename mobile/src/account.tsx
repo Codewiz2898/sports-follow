@@ -12,9 +12,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { router } from 'expo-router'
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AppState, Pressable, Text } from 'react-native'
+import { PHONE_KEPT, welcome } from '../../web/src/fanChange'
 import { changedHands } from '../../web/src/resync'
 import StannNotifications from '../modules/stann-notifications'
 import { api, type Account, type Me, type ServerConfig } from './api'
+import { forgetFeedSeen } from './feedSeen'
 import { CloseIcon } from './icons'
 import { t } from './theme'
 import { Notice } from './ui'
@@ -35,11 +37,6 @@ interface AccountState {
 }
 
 const AccountContext = createContext<AccountState | null>(null)
-
-function welcome(added: number): string {
-  if (!added) return 'Signed in.'
-  return `Signed in. ${added === 1 ? 'The player' : `The ${added} players`} you followed on this device ${added === 1 ? 'is' : 'are'} in your account now.`
-}
 
 export function AccountProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null)
@@ -67,9 +64,11 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(timer)
   }, [start])
 
-  /** Forget what this phone showed as the fan it was, and start the app over at `path`, as who it is now. */
+  /** Forget what this phone showed and kept as the fan it was (fanChange.ts: BUG-169), and start the app over at
+   * `path`, as who it is now. */
   const startOver = useCallback((path: string, said: string | null) => {
-    AsyncStorage.removeItem('stann.alerts-seen').catch(() => {}).then(start).finally(() => {
+    forgetFeedSeen()
+    AsyncStorage.multiRemove(PHONE_KEPT).catch(() => {}).then(start).finally(() => {
       setNotice(said)
       setEpoch((n) => n + 1)
       router.replace(path as never)
@@ -94,7 +93,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   }, [startOver])
 
   const dismissNotice = useCallback(() => setNotice(null), [])
-  const signedIn = useCallback((account: Account) => startOver('/account', welcome(account.players_added ?? 0)), [startOver])
+  const signedIn = useCallback((account: Account) => startOver('/account', welcome(account.players_added ?? 0, account.teams_dropped ?? 0)), [startOver])
   // Signed out or deleted, the phone is off the server (its session's devices go): its live cards, the account's
   // games, would stay on the lock screen with nothing to end them, so they go now.
   const signOut = useCallback(async (everywhere = false) => {

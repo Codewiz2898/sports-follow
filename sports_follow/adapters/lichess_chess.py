@@ -280,6 +280,7 @@ def ref_for(record: dict[str, Any]) -> PlayerRef:
 # A PGN tag: [Name "value"], where the value escapes a quote or a backslash with a backslash
 # ([Event "The \"Alcalá\" Open"]).
 _TAG = r'\[(\w+) "((?:[^"\\]|\\.)*)"\]'
+_MOVED = re.compile(r"(?:^|\s)\d+\.")  # a move number in a game's moves: it had one
 
 
 def _pgn_player(tags: dict[str, str], colour: str) -> dict[str, Any]:
@@ -292,10 +293,12 @@ def parse_pgn_rounds(pgn: str) -> dict[str, list[dict[str, Any]]]:
     """A tournament's PGN export -> its games grouped by round id, shaped like the round JSON's games.
 
     One request for a whole event, instead of one per round: Lichess rate-limits round reads hard.
-    Each game's GameURL ends in /{roundId}/{gameId}.
+    Each game's GameURL ends in /{roundId}/{gameId}. One its tags say wasn't played (Termination "Unplayed"), or with
+    no move, is marked so (unplayed).
     """
     rounds: dict[str, list[dict[str, Any]]] = {}
-    for block in re.finditer(rf"(?:^{_TAG}\n?)+", pgn, flags=re.M):
+    blocks = list(re.finditer(rf"(?:^{_TAG}\n?)+", pgn, flags=re.M))
+    for block, after in zip(blocks, [*blocks[1:], None]):
         tags = {name: re.sub(r"\\(.)", r"\1", value) for name, value in re.findall(_TAG, block[0])}
         parts = (tags.get("GameURL") or "").rstrip("/").split("/")
         if len(parts) < 2:
@@ -305,6 +308,9 @@ def parse_pgn_rounds(pgn: str) -> dict[str, list[dict[str, Any]]]:
         game = {"id": game_id, "players": players, "status": tags.get("Result", "*"), "fen": ""}
         if ARMAGEDDON.search(" ".join(tags.get(k) or "" for k in ("Event", "ChapterName"))):
             game["armageddon"] = True
+        moves = re.sub(r"\{[^}]*\}", " ", pgn[block.end():after.start() if after else len(pgn)])  # its moves, comments out
+        if (tags.get("Termination") or "").lower() == "unplayed" or not _MOVED.search(moves):
+            game["unplayed"] = True
         rounds.setdefault(round_id, []).append(game)
     return rounds
 
@@ -381,10 +387,19 @@ def moves_to(kept: dict[str, Any] | None, fen: str | None, last_move: str | None
 
 
 def games_of(round_data: dict[str, Any], fide_id: str) -> list[dict[str, Any]]:
-    """The player's games in a round, in board order, an armageddon marked so (its "armageddon"). Knockout rounds hold
-    a whole mini-match (Esports World Cup "Grand Final": eight games between the same two players)."""
+    """The player's games in a round, in board order, an armageddon marked so (its "armageddon"), and none that wasn't
+    played (unplayed). Knockout rounds hold a whole mini-match (Esports World Cup "Grand Final": eight games between
+    the same two players)."""
     return [{**g, "armageddon": True} if armageddon(round_data, g) else g
-            for g in round_data.get("games") or [] if any(str(p.get("fideId")) == fide_id for p in g.get("players") or [])]
+            for g in round_data.get("games") or [] if any(str(p.get("fideId")) == fide_id for p in g.get("players") or []) and not unplayed(g)]
+
+
+def unplayed(game: dict[str, Any]) -> bool:
+    """Whether a game in a round has a result but wasn't played, so it's no game of its players', not a point in a
+    match's score nor a result in their form (the Esports World Cup's third-place match, won 3–1 after four games, lists
+    a fifth "1-0" with Termination "Unplayed"; a forfeit): its PGN says so, or has no move (parse_pgn_rounds), or, in a
+    round's JSON, which doesn't say how a game ended, no move was made, its board at the start."""
+    return bool(_result(game.get("status"))) and (bool(game.get("unplayed")) or (fen_ply(game.get("fen")) == 0 and not game.get("lastMove")))
 
 
 def armageddon(round_data: dict[str, Any], game: dict[str, Any]) -> bool:
@@ -439,10 +454,28 @@ def may_follow(round_data: dict[str, Any], games: list[dict[str, Any]]) -> bool:
         return True
     pairs: dict[frozenset[str], int] = {}
     for g in round_data.get("games") or games:
-        # Its players by FIDE id, or by name where they have none (an open's unrated boards are each a pairing of their own).
-        pair = frozenset(str(p.get("fideId") or p.get("name") or "") for p in g.get("players") or [])
+        pair = pairing(g)
         pairs[pair] = pairs.get(pair, 0) + 1
     return max(pairs.values(), default=0) > 1
+
+
+def pairing(game: dict[str, Any]) -> frozenset[str]:
+    """A game's two players by FIDE id, or by name where they have none (an open's unrated boards are each a pairing of
+    their own)."""
+    return frozenset(str(p.get("fideId") or p.get("name") or "") for p in game.get("players") or [])
+
+
+MATCH = re.compile(r"\bmatch\b", re.I)  # Lichess's format for an event of two players' games ("14-game match")
+
+
+def a_match(tour: dict[str, Any], pairings: set[frozenset[str]], fide_id: str) -> bool:
+    """Whether an event is a match between two players, the player one of them (a World Championship), so each of its
+    rounds is their meeting, before its pairing's out too: every round of it read so far paired the same two, or, with
+    none read yet, its players line names two and its format says it's a match."""
+    if pairings:
+        return len(pairings) == 1 and fide_id in next(iter(pairings))
+    info = tour.get("info") or {}
+    return len([p for p in str(info.get("players") or "").split(",") if p.strip()]) == 2 and bool(MATCH.search(str(info.get("format") or "")))
 
 
 def round_status(round_info: dict[str, Any], games: list[dict[str, Any]], now: datetime, follows: bool = False, waited: float | None = None) -> str:
@@ -619,10 +652,12 @@ def parse_board(round_data: dict[str, Any], fide_id: str, now: datetime | None =
 
 
 def fixture_for(tour: dict[str, Any], rnd: dict[str, Any], games: list[dict[str, Any]], fide_id: str, now: datetime,
-                follows: bool = False, waited: float | None = None, upnext: bool = False) -> Fixture:
+                follows: bool = False, waited: float | None = None, upnext: bool = False, meeting: bool = False) -> Fixture:
     """A player's fixture in one round: their game (or match) once paired, the round itself before that.
     `follows` and `waited` as round_status's: a refresh calls a game over no sooner than its polls do; `upnext`, a
-    round with no start time of its own that's next (next_up)."""
+    round with no start time of its own that's next (next_up); `meeting`, a round of a match between two players
+    (a_match), whose board before its pairing's out is the round, the same under both players' fixtures, so Coming
+    up shows it once."""
     status = round_status(rnd, games, now, follows, waited)
     title = f"{tour.get('name', '')} · {rnd.get('name', '')}"
     result = None
@@ -646,20 +681,22 @@ def fixture_for(tour: dict[str, Any], rnd: dict[str, Any], games: list[dict[str,
         locator={"round": rnd["id"], "fide": fide_id},
         detail=rnd.get("name") if games else "Pairings not published yet",
         result=result,
-        board=str((current_game(games) or {}).get("id") or ""),  # the game parse_board will show, under each player's fixture
+        board=str((current_game(games) or {}).get("id") or "") or (f"round:{rnd['id']}" if meeting else ""),  # the game parse_board will show, under each player's fixture
         next_up=upnext,
     )
 
 
 def result_label(fixture: Fixture, team_ids: list[str]) -> str:
-    """ "Won 1–0" for a game, "Won 6–2" for a match; always from the followed player's side (a chess
-    fixture belongs to one player)."""
+    """ "Won 6–2" for a match, from the followed player's side (a chess fixture belongs to one player), its colours
+    changing game to game; a game's result as chess writes it, White's points first, from either side ("Lost 1–0":
+    a loss with Black), so the score alone (the app's results drop the word) never says the other side won."""
     r = fixture.result
     if not r or not r.get("games"):
         return ""
     pts, other = r["points"], r["games"] - r["points"]
     word = "Won" if pts > other else "Lost" if pts < other else "Drew"
-    return f"{word} {fmt_points(pts)}–{fmt_points(other)}" + (" on armageddon" if r.get("armageddon") else "")
+    white, black = (other, pts) if r.get("games") == 1 and r.get("colour") == "Black" else (pts, other)
+    return f"{word} {fmt_points(white)}–{fmt_points(black)}" + (" on armageddon" if r.get("armageddon") else "")
 
 
 # ---------------------------------------------------------------- search and recognising a name
@@ -884,6 +921,7 @@ class LichessChess(Adapter):
                 continue
             games: list[Fixture] = []
             unpaired: list[dict[str, Any]] = []
+            pairings: set[frozenset[str]] = set()  # every pairing in its rounds read: one, in a match between two players
             finished = {}
             if any(r.get("finished") for r in rounds):
                 done = all(r.get("finished") for r in rounds)
@@ -909,6 +947,7 @@ class LichessChess(Adapter):
                     except AdapterError:
                         continue
                 read = {**data, "round": rnd, "tour": tour}  # a finished round's games come from the PGN, without it
+                pairings.update(pairing(g) for g in read.get("games") or [])
                 mine = games_of(read, ref.athlete_id)
                 if mine:
                     games.append(fixture_for(tour, rnd, mine, ref.athlete_id, now, may_follow(read, mine), self._waited(read, ref.athlete_id), next_up(rounds, rnd, now)))
@@ -917,7 +956,8 @@ class LichessChess(Adapter):
                 # else: paired without them (a bye, or not in this section)
             # Rounds not yet paired count as the player's only if they've played in this event or it names them.
             if games or names_them(tour, names):
-                out += games + [fixture_for(tour, rnd, [], ref.athlete_id, now, upnext=next_up(rounds, rnd, now)) for rnd in unpaired[:3]]
+                meeting = a_match(tour, pairings, ref.athlete_id)
+                out += games + [fixture_for(tour, rnd, [], ref.athlete_id, now, upnext=next_up(rounds, rnd, now), meeting=meeting) for rnd in unpaired[:3]]
         return sorted(out, key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
 
     def history_pages(self, ref: PlayerRef, anchor: date) -> list[dict[str, Any]]:

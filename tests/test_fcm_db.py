@@ -22,8 +22,8 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import moments, notify, server
-from sports_follow.models import Event, EventState, Follow, Notification, Player, PlayerCard, PushSubscription
+from sports_follow import accounts, moments, notify, server
+from sports_follow.models import Account, AccountSession, Event, EventState, Follow, Notification, Player, PlayerCard, PushSubscription
 
 from .test_fcm import TOKEN, fake_fcm  # noqa: F401  (the fixture)
 
@@ -39,7 +39,7 @@ BROWSER = "https://fcm.googleapis.com/fcm/send/browser"
 def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE player, event, follow, moment, notification, notification_mute, push_subscription RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE player, event, follow, moment, notification, notification_mute, push_subscription, account, account_session RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -160,6 +160,31 @@ def test_a_token_moves_with_whoever_presents_it_and_a_new_one_replaces_the_old(d
     assert OTHER_PHONE in devices(db)  # not another fan's to remove
     server.unregister_fcm(body={"token": OTHER_PHONE}, fan="fan-b", db=db)
     assert set(devices(db)) == {BROWSER}
+
+
+def test_a_phone_signed_in_to_an_account_isnt_another_fans_to_take(db, fake_fcm):  # noqa: F811
+    """BUG-103: whoever presented a phone's token moved the phone to their own fan, so it got their alerts and stopped
+    getting its own (a browser moves only with its own keys). A phone signed in to an account moves into it as it signs
+    in and goes with its session, so no other fan takes it; nor does an account take an anonymous fan's phone, which it
+    then couldn't take back. Anonymous fans' phones still move by their token: a cookie lost (or the server's cookie key
+    changed) leaves the phone a new fan, who must have it back."""
+    db.add(Account(id=1, email="fan@example.com", fan_id="acct-1"))
+    db.flush()
+    db.add(AccountSession(id=1, account_id=1, token_hash="h", expires_at=datetime.now(timezone.utc) + timedelta(days=365)))
+    db.commit()
+    signed = accounts.Signed(account_id=1, fan_id="acct-1", session_id=1)
+    server.register_fcm(body={"token": PHONE, "timezone": "Asia/Kolkata"}, fan="acct-1", signed=signed, db=db)
+    with pytest.raises(HTTPException) as refused:
+        register(db, "fan-b", quiet_start="00:00", quiet_end="23:59")  # someone else, with the phone's token
+    assert refused.value.status_code == 409
+    server.register_fcm(body={"token": PHONE, "quiet_start": "22:00", "quiet_end": "07:00"}, fan="acct-1", signed=signed, db=db)  # the phone itself
+    assert devices(db)[PHONE] == ("acct-1", "fcm", "22:00", "07:00")
+    server.register_fcm(body={"token": OTHER_PHONE}, fan="fan-a", signed=None, db=db)
+    with pytest.raises(HTTPException) as refused:
+        server.register_fcm(body={"token": OTHER_PHONE}, fan="acct-1", signed=signed, db=db)
+    assert refused.value.status_code == 409 and devices(db)[OTHER_PHONE][0] == "fan-a"
+    server.register_fcm(body={"token": OTHER_PHONE}, fan="fan-c", signed=None, db=db)  # anonymous to anonymous: as before
+    assert devices(db)[OTHER_PHONE][0] == "fan-c"
 
 
 def test_a_fans_android_devices_and_browsers_share_the_cap(db, fake_fcm):  # noqa: F811

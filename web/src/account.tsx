@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, type Account, type Me, type ServerConfig } from './api'
 import { CloseIcon } from './components/Icons'
+import { WEB_KEPT, welcome } from './fanChange'
 import { changedHands } from './resync'
 
 /**
@@ -49,6 +50,13 @@ function takeAfterSignIn(): string | null {
   }
 }
 
+/** Forget what this device kept of the fan it was (fanChange.ts: BUG-169), as it becomes another. */
+function forgetKept() {
+  try {
+    for (const key of WEB_KEPT) localStorage.removeItem(key)
+  } catch { /* storage blocked */ }
+}
+
 /** Forget what this device showed as the fan it was, and start the app over at `path`. */
 async function startOver(path: string, notice: string | null, stopPush: boolean) {
   if (stopPush) {
@@ -59,8 +67,8 @@ async function startOver(path: string, notice: string | null, stopPush: boolean)
     } catch { /* no service worker or push here */ }
   }
   await forgetCachedAnswers()
+  forgetKept()
   try {
-    localStorage.removeItem('sf-alerts-seen')
     if (notice) sessionStorage.setItem(NOTICE, notice)
   } catch { /* storage blocked */ }
   window.location.replace(path)
@@ -71,11 +79,6 @@ async function forgetCachedAnswers() {
   try {
     for (const key of await caches.keys()) if (key.startsWith('data-')) await caches.delete(key)
   } catch { /* no Cache Storage here */ }
-}
-
-function welcome(added: number): string {
-  if (!added) return 'Signed in.'
-  return `Signed in. ${added === 1 ? 'The player' : `The ${added} players`} you followed on this device ${added === 1 ? 'is' : 'are'} in your account now.`
 }
 
 export function AccountProvider({ children }: { children: ReactNode }) {
@@ -95,19 +98,22 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   })
 
   useEffect(() => {
-    // Back from Google (/account?welcome=N, server.google_callback): the server signed this device in.
-    const back = new URLSearchParams(window.location.search).get('welcome')
+    // Back from Google (/account?welcome=N, with &teams_dropped=M if some didn't fit: server.google_callback): the
+    // server signed this device in.
+    const query = new URLSearchParams(window.location.search)
+    const back = query.get('welcome')
     if (back !== null) {
       forgetCachedAnswers()
-      try { localStorage.removeItem('sf-alerts-seen') } catch { /* storage blocked */ }
+      forgetKept()
+      const said = welcome(Number(back) || 0, Number(query.get('teams_dropped')) || 0)
       // Signed in from a page that asked to be come back to (a league's invite): there, saying so.
       const after = takeAfterSignIn()
       if (after) {
-        try { sessionStorage.setItem(NOTICE, welcome(Number(back) || 0)) } catch { /* storage blocked */ }
+        try { sessionStorage.setItem(NOTICE, said) } catch { /* storage blocked */ }
         window.location.replace(after)
         return
       }
-      setNotice(welcome(Number(back) || 0))
+      setNotice(said)
     }
     // Turned back at Google's (/account?error=…): no page to come back to after a later sign-in.
     if (new URLSearchParams(window.location.search).has('error')) takeAfterSignIn()
@@ -142,7 +148,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
 
   const dismissNotice = useCallback(() => setNotice(null), [])
   const signedIn = useCallback((account: Account, back?: string) => {
-    startOver(ownPage(back) ?? '/account', welcome(account.players_added ?? 0), false)
+    startOver(ownPage(back) ?? '/account', welcome(account.players_added ?? 0, account.teams_dropped ?? 0), false)
   }, [])
   const signOut = useCallback(async (everywhere = false) => {
     await api.signOut(everywhere)

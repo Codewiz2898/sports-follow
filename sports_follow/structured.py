@@ -26,7 +26,7 @@ from sqlalchemy import and_, delete, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import distinct_on, insert
 from sqlalchemy.orm import Session
 
-from . import bus, engine, livecards, matches, metrics, moments, naming, notify, predictions, registry, shutdown, sports, tracing
+from . import alerts, bus, engine, livecards, matches, metrics, moments, naming, notify, predictions, registry, shutdown, sports, tracing
 from .adapters import ADAPTERS, KNOWN, NOT_FOUND, Adapter, AdapterError, Fixture, Line, NotFound, PlayerRef, Snapshot, budget, for_sport, providers, source_name
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
@@ -460,7 +460,8 @@ def refresh(player_id: int) -> None:
     finds nobody isn't retried for BIND_RETRY seconds, and a moving player keeps the old source till then.
     A source down to what its live games need isn't read (spare), nor one whose share for this lane is spent
     for now (budget.RateLimited): both are tried at the next tick, and neither is a failure. A failure is noted
-    in the binding's health, which the scheduler waits on before the next try (retry_at).
+    in the binding's health, which the scheduler waits on before the next try (retry_at). A player of a sport
+    turned off isn't read at all, though their source runs for another sport (an esports game).
     """
     lock = f"structured:{player_id}"
     token = bus.try_lock(lock, REFRESH_LOCK)
@@ -469,8 +470,12 @@ def refresh(player_id: int) -> None:
     try:
         with session() as db:
             row = binding(db, player_id)
-            preferred = for_sport(db.scalar(select(Player.sport).where(Player.id == player_id)))
+            sport = db.scalar(select(Player.sport).where(Player.id == player_id))
+            preferred = for_sport(sport)
             current = row.adapter if row else None
+        if not sports.on(sport):
+            log.info("refresh %s: %s is turned off; not read", player_id, sport)
+            return
         reading = ADAPTERS.get(current) if current else preferred
         if reading is not None and not spare(reading):
             log.info("refresh %s: %s is down to what live games need; next tick", player_id, reading.system)
@@ -643,9 +648,9 @@ def unpicked(db: Session, adapter: Adapter, player_id: int, fixtures: list[Fixtu
 def upcoming(fixtures: list[Fixture], now: datetime) -> list[Fixture]:
     """The games still to come or under way, at most UPCOMING_LIMIT. A "scheduled" game long past its
     start is one the source never updated, and a postponed one long past is off (or waits for a new
-    date): both are left out."""
+    date): both are left out. Not one its source says is next (Fixture.next_up), whose start is only its day."""
     stale = now - timedelta(hours=12)
-    return [f for f in fixtures if f.status != "final" and not (f.status in ("scheduled", "postponed") and f.start_utc and f.start_utc < stale)][:UPCOMING_LIMIT]
+    return [f for f in fixtures if f.status != "final" and not (f.status in ("scheduled", "postponed") and f.start_utc and f.start_utc < stale and not f.next_up)][:UPCOMING_LIMIT]
 
 
 def finish(unfinished: dict[int, Snapshot | None]) -> None:
@@ -774,12 +779,13 @@ def reschedule(db: Session, event: Event, start: datetime | None, status: str, s
     itself for one no followed player's or team's refresh brings up to date (predictions.made). Put back (or brought
     forward), its questions start then (predictions.moved); an armed one put back hours is disarmed (next_status).
     One with no start time of its own is armed while its source says it's next (Fixture.next_up: a chess round set
-    to start once the one before is over), so its start is seen when it comes, and disarmed once it doesn't."""
+    to start once the one before is over, a lobby with only its day), so its start is seen when it comes, and one with
+    no start at all is disarmed once it isn't."""
     if event.start_utc is not None and start is not None and start != event.start_utc:
         predictions.moved(db, event, start)
     event.start_utc = start
     later = start is not None and start > _now() + arm_before(event.sport or sport) + timedelta(hours=1)
-    if start is None and status == "scheduled":
+    if status == "scheduled" and (next_up or start is None):
         status, later = ("armed", False) if next_up else (status, True)
     event.status = next_status(event.status, status, moved_later=later)
 
@@ -1091,6 +1097,14 @@ def baseline(latest: EventState | None, last: PlayerLine | None, snap: Snapshot,
     return moments.Seen(latest.status, latest.state or {}, last.stats if last else None, latest.score_label or "", latest.clock_label or "")
 
 
+def long_over(rules: sports.Sport, event: Event, snap: Snapshot, now: datetime) -> bool:
+    """Whether a poll finds a game over that can't have ended lately: past the latest its sport's games end after its
+    start (Sport.over_by), and a result's time to be news (alerts.LATE_TTL) more. A first look at it (baseline: polling
+    came back to it after its sport was off, or a worker down for days) tells nothing: its result is old news (BUG-259)."""
+    by = rules.over_by(event.start_utc, snap.state) if snap.status == "final" else None
+    return by is not None and now - by > timedelta(seconds=alerts.LATE_TTL)
+
+
 def first_line_news(latest: EventState, snap: Snapshot, line: dict[str, Any] | None) -> bool:
     """Whether a player's first line in a game polled all along, with none at its last poll while it was live, is
     news since that poll, as their sport says (Sport.first_line_is_news): a cricketer has none till their first
@@ -1210,6 +1224,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
         opened = opened_live(adapter, event, latest, now)
         snap = hold_result(rules, snap, latest)
         reopens = reopened(adapter, latest, snap)
+        old_news = long_over(rules, event, snap, now)  # a first look at it tells nothing
         if rules.engine:
             _evaluate(rules, db, event_id, snap, latest, [w[0] for w in watchers])
         if snap.squad:
@@ -1247,7 +1262,8 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
                 elif before is None and reopens:
                     before = baseline(latest, last, snap)  # on again after it was over: against how it was then
                 told = notify.told(db, player_id, event_id) if before else []  # what a source may take back (a goal VAR rules out)
-                new_moments += notify.record(db, player_id, event_id, moments.detect(sport, name, athlete_id, before, seen, told))
+                if before is not None or not old_news:
+                    new_moments += notify.record(db, player_id, event_id, moments.detect(sport, name, athlete_id, before, seen, told))
             card_row = db.get(PlayerCard, player_id)
             if card_row is None or card_row.status != "ready":
                 continue
@@ -1273,7 +1289,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
             card_row.is_live = bool(card["live"].get("is_live"))
             published.append((player_id, card))
         if matches.followed(db, event_id):
-            found, game_kept = _game_moments(db, event, adapter, snap, recent, people, watchers)
+            found, game_kept = _game_moments(db, event, adapter, snap, recent, people, watchers, old_news)
             new_moments += found
             if changed:
                 live = matches.board(event, snap.status, snap.score_label, snap.clock_label, snap.state, snap.source_url, now)
@@ -1302,12 +1318,13 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
 
 
 def _game_moments(db: Session, event: Event, adapter: Adapter, snap: Snapshot, recent: bool,
-                  people: dict[int, tuple[str, str]], watchers: list[tuple[int, str]]) -> tuple[list[int], tuple[str, str, int]]:
+                  people: dict[int, tuple[str, str]], watchers: list[tuple[int, str]], old_news: bool = False) -> tuple[list[int], tuple[str, str, int]]:
     """The game's own moments since its last poll, for the fans following it by itself (matches.py), as its
     sport finds them (Sport.game_moments), against that poll as Redis kept it, for as long as a poll after it
     is recent (_polled's gap): a copy from before a gap (nobody followed the game a while, though its players'
     polls went on) would tell what happened meanwhile as new. A first look (no recent copy, or polling had a
-    gap) is the baseline, as a player's is: only a result is told from it. Returns the new moments' ids, and this
+    gap) is the baseline, as a player's is: only a result is told from it, and not that of a game long over
+    (`old_news`: long_over). Returns the new moments' ids, and this
     poll as Redis is to keep it (its key, value and seconds), which apply_poll writes once they're committed. A
     game a fan follows a team in (teams.py) tells its result from that team's side too, for them."""
     from . import teams  # a team's games are followed games (teams reads cards and boards from here)
@@ -1331,6 +1348,8 @@ def _game_moments(db: Session, event: Event, adapter: Adapter, snap: Snapshot, r
         # their games read again soon, so the result reaches their Following and Today.
         found += teams.side_finals(db, event, rules, snap.state, snap.score_label, snap.clock_label)
         teams.ended(db, event.id)
+    if before is None and old_news:
+        found = []  # a first look at a game long over: its result is old news
     for f in found:
         f.priority = f.priority or moments.PRIORITY.get(f.kind, 50)
     gap = max(POLL_GAP, 3 * int((event.live_binding or {}).get("cadence") or 10))

@@ -180,8 +180,8 @@ export function FriendLeaguePage() {
       <section className="section" aria-label="Table">
         <SectionHead title="Table" />
         <ol className="card league-table">
-          {league.table.map((r) => (
-            <li key={`${r.place}-${r.name}`} className={r.you ? 'you' : undefined}>
+          {league.table.map((r, i) => (
+            <li key={i} className={r.you ? 'you' : undefined}>
               <span className="num">{r.place}</span>
               <span className="stack">
                 <span className="title">{r.you ? `${r.name} (you)` : r.name}</span>
@@ -202,8 +202,8 @@ export function FriendLeaguePage() {
               <PickCard q={q} onChange={() => { void load() }} />
               {(q.friends ?? []).length > 0 && (
                 <div className="friends" aria-label="Friends' picks">
-                  {(q.friends ?? []).map((f) => (
-                    <span key={f.name} className="friend">{f.you ? 'You' : f.name}{f.option ? ` · ${q.options.find((o) => o.key === f.option)?.label ?? ''}` : ' · picked'}</span>
+                  {(q.friends ?? []).map((f, i) => (
+                    <span key={i} className="friend">{f.you ? 'You' : f.name}{f.option ? ` · ${q.options.find((o) => o.key === f.option)?.label ?? ''}` : ' · picked'}</span>
                   ))}
                 </div>
               )}

@@ -1,7 +1,7 @@
 // The admin panel's API (sports_follow/admin.py, the /api/admin routes in server.py). Its session is a cookie
 // of its own, sent only to /api/admin.
 
-import { json, request } from '../api'
+import { ApiError, json, request } from '../api'
 
 /** A sport: whether the server's settings let it run (SPORTS_FOLLOW_SPORTS), whether the panel has it on, its running
  * sources, and the group it's one of ("Esports" for each game; "" for none). */
@@ -42,6 +42,7 @@ export interface Allowance {
   declared: Limits
   limits: Limits
   changed: boolean
+  saved: Limits | null // what the panel saved, as stored (null: nothing): a change made from this view sends it back as based_on
   standing: Standing
   usage: LaneUse[]
 }
@@ -65,7 +66,7 @@ export interface LinearStatus {
 }
 
 export interface Overview { accounts: number; active_week: number; blocked: number; anonymous: number; devices: number }
-/** Predictions with friends (sports_follow/predictions.py numbers): leagues, invites, and fans who came back to call another game day. */
+/** Predictions with friends (sports_follow/predictions.py numbers): leagues, invites, and fans who came back to call on another day (an IST day: BUG-193). */
 export interface PredictionNumbers { leagues: number; leagues_3: number; invites_shared: number; invites_opened: number; pickers: number; picks: number; game_day_returns: number }
 export interface AccountRow {
   id: number
@@ -79,7 +80,11 @@ export interface AccountRow {
   devices: number
 }
 export interface AccountDetail extends AccountRow {
-  following: { id: number; name: string; sport: string; since: string }[]
+  following: { id: number; name: string; sport: string; since: string }[] // players
+  teams: { id: number; name: string; sport: string; since: string }[]
+  games: { id: number; title: string; sport: string; start: string | null; since: string; over: boolean }[] // over: the follow lapsed with the game
+  picks: number // calls made, predictions with friends
+  leagues: number
   sessions: { created_at: string; last_seen_at: string; expires_at: string }[]
   alert_devices: { created_at: string; last_ok_at: string | null; timezone: string; failures: number }[]
 }
@@ -104,7 +109,7 @@ export interface FeedCandidateRow {
   video: { youtube_id: string } | null // how the app's player plays it (the source says); null: it can't
   title: string
   channel: string
-  channel_id: string
+  channel_id: string // a video channel's id, or a news feed's address
   published: string | null
   fetched_at: string
   judged_at: string | null
@@ -129,7 +134,7 @@ export interface ChannelYield {
 }
 /** A video channel: listed by a running sport or not, its trust as the panel set it (null: its default), and what fans said of its videos. */
 export interface FeedChannel {
-  channel_id: string
+  channel_id: string // a video channel's id, or a news feed's address
   name: string
   listed: boolean
   trust: number | null
@@ -152,7 +157,44 @@ export interface FeedPage {
 export type AdminFeedLayout = 'edge' | 'full'
 export interface FeedLayoutView { layout: AdminFeedLayout; default: string; set: AdminFeedLayout | null; choices: AdminFeedLayout[] }
 
+/** A clip published from the Mac app (sports_follow/clips.py for_admin), whatever its status, with its reports. Its video and
+ * poster are at their public address while it's live (a hidden one's are moved off it); without the bucket set up, only
+ * its id and line. */
+export interface AdminClip {
+  id: string
+  status: 'uploading' | 'live' | 'hidden' | 'failed' | 'removed'
+  reports: number
+  source: string
+  by: string | null // the publishing key's name
+  created: string
+  line: string
+  caption?: string
+  game_title?: string
+  competition?: string | null
+  sport?: string | null
+  match?: string | null
+  poster?: string
+  video?: string
+  published?: string | null
+}
+/** A publishing key (its secret is shown once, when made, and kept nowhere). */
+export interface ClipKey { id: number; name: string; created: string; last_used: string | null; revoked: string | null }
+export type ClipShow = 'reported' | 'all' | 'live' | 'hidden'
+export interface ClipsView { clips: AdminClip[]; keys: ClipKey[]; set_up: boolean }
+
 const at = (path: string) => `/api/admin/${path}`
+
+/** A call answered with no body (204), which request() would try to read as JSON. */
+async function answered(path: string, init: RequestInit): Promise<void> {
+  const res = await fetch(path, { credentials: 'same-origin', ...init })
+  if (res.ok) return
+  let message = `Request failed (${res.status})`
+  try {
+    const body = await res.json()
+    if (typeof body.detail === 'string') message = body.detail
+  } catch { /* not JSON */ }
+  throw new ApiError(message, res.status)
+}
 
 export const admin = {
   /** Signed in; and whether sign-in asks for an authenticator code. */
@@ -163,14 +205,22 @@ export const admin = {
   setSport: (key: string, on: boolean) => request<{ sports: AdminSport[] }>(at(`sports/${encodeURIComponent(key)}`), json('PUT', { on })),
   sources: () => request<SourcesView>(at('sources')),
   setSource: (system: string, on: boolean) => request<SourcesView>(at(`sources/${encodeURIComponent(system)}`), json('PUT', { on })),
-  setLimits: (name: string, limits: Limits) => request<SourcesView>(at(`budgets/${encodeURIComponent(name)}`), json('PUT', limits)),
+  /** basedOn: what the view the change was made from had saved; changed since (another tab), it's a 409. */
+  setLimits: (name: string, limits: Limits, basedOn: Limits | null) =>
+    request<SourcesView>(at(`budgets/${encodeURIComponent(name)}`), json('PUT', { ...limits, based_on: basedOn })),
   resetLimits: (name: string) => request<SourcesView>(at(`budgets/${encodeURIComponent(name)}`), { method: 'DELETE' }),
   linear: () => request<LinearStatus>(at('linear')),
   feed: (show: FeedShow, offset = 0) => request<FeedPage>(at(`feed?show=${show}&offset=${offset}`)),
   review: (id: number, review: Review | null) => request<FeedCandidateRow>(at(`feed/${id}`), json('PUT', { review })),
+  /** A video channel's id or a news feed's address, in the body: an address doesn't fit in a path. */
   channelTrust: (channel: string, trust: number | null) =>
-    request<{ channels: FeedChannel[] }>(at(`feed/channels/${encodeURIComponent(channel)}`), json('PUT', { trust })),
+    request<{ channels: FeedChannel[] }>(at('feed/channels'), json('PUT', { channel, trust })),
   feedLayout: (layout: AdminFeedLayout | null) => request<{ layout: FeedLayoutView }>(at('feed/layout'), json('PUT', { layout })),
+  clips: (show: ClipShow) => request<ClipsView>(at(`clips${show === 'all' ? '' : `?status=${show}`}`)),
+  hideClip: (id: string, hidden: boolean) => request<{ id: string; status: string }>(at(`clips/${encodeURIComponent(id)}`), json('POST', { hidden })),
+  removeClip: (id: string) => answered(at(`clips/${encodeURIComponent(id)}`), { method: 'DELETE' }),
+  /** hide: its live clips are hidden too (a key that leaked). */
+  revokeKey: (id: number, hide: boolean) => answered(at(`clip-keys/${id}${hide ? '?hide=true' : ''}`), { method: 'DELETE' }),
   users: (q: string, offset = 0) =>
     request<{ overview: Overview; predictions?: PredictionNumbers; accounts: AccountRow[]; next: number | null }>(at(`users?q=${encodeURIComponent(q)}&offset=${offset}`)),
   user: (id: number) => request<AccountDetail>(at(`users/${id}`)),

@@ -24,7 +24,10 @@ from sports_follow import adapters, campaigns, players, registry, server, share,
 from sports_follow.adapters import AdapterError, PlayerRef, SourceTeam
 from sports_follow.adapters.pandascore_esports import parse_team
 from sports_follow.config import APP_NAME
-from sports_follow.models import Athlete, Campaign, Follow, Player, PlayerCard, PlayerIdentity
+from sports_follow.models import Athlete, AthleteOverride, Campaign, Follow, Player, PlayerCard, PlayerIdentity
+
+from .test_mobile_app_links import campaigns_take
+from .test_web_refetch import NODE
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 needs_db = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -56,14 +59,15 @@ def test_no_campaign_can_take_an_address_the_android_app_has():
     assert web - pages == {"admin"}, web - pages
 
 
+@pytest.mark.skipif(NODE is None, reason="needs Node")
 def test_a_campaign_link_typed_with_capitals_opens_the_android_app():
-    """BUG-191: Android matches a link's path as it's typed, so the campaign pages' pattern takes capitals too (the
-    server finds /Gukesh as /gukesh). It's still one word: /match/<source>/<game> isn't claimed by it."""
-    pattern = re.search(r"pathAdvancedPattern: '([^']+)'", (APP_ROUTES.parent.parent / "app.config.ts").read_text())[1]
+    """BUG-191: Android matches a link's path as it's typed, so the campaign pages' patterns take capitals too (the
+    server finds /Gukesh as /gukesh). It's still one word: /match/<source>/<game> isn't claimed by them. They're
+    spelled out around the admin panel's /admin (mobile/links.js, BUG-157)."""
     for path in ("/gukesh", "/Gukesh", "/IPL-2027"):
-        assert re.fullmatch(pattern, path), path
+        assert campaigns_take(path), path
     for path in ("/", "/match/x/1", "/sw.js", "/a b"):
-        assert not re.fullmatch(pattern, path), path
+        assert not campaigns_take(path), path
 
 
 def test_no_campaign_can_take_the_apis_own_docs_addresses():
@@ -268,6 +272,32 @@ def test_a_team_is_added_from_its_source_and_its_roster_kept_up_to_date(db, team
 
 
 @needs_db
+def test_a_campaigns_pin_goes_with_its_player_or_the_campaign(db, monkeypatch):
+    # BUG-199: adding a player pinned them ("on /<slug>") so no import drops them; taking them off, or the campaign
+    # down, left the pin for good, and adding one an operator had kept wrote over the operator's pin.
+    for qid, name in (("Q1", "Gukesh D"), ("Q2", "Javokhir Sindarov"), ("Q3", "Magnus Carlsen")):
+        _athlete(db, qid, "chess", name, {"lichess_chess": qid})
+    players.pin(db, "Q3", "chess", note="kept by hand")
+    db.commit()
+    monkeypatch.setattr(players, "check_source", lambda person: "lichess_chess")
+    campaigns.main(["set", "gukesh", "--sport", "chess", "--title", "Gukesh v Sindarov"])
+    campaigns.main(["set", "candidates", "--sport", "chess", "--title", "The Candidates"])
+    for slug, qid in (("gukesh", "Q1"), ("gukesh", "Q2"), ("gukesh", "Q3"), ("candidates", "Q2")):
+        assert campaigns.main(["player", "add", slug, qid]) == 0
+
+    def pins() -> dict[str, str | None]:
+        db.expire_all()
+        return {o.qid: o.note for o in db.scalars(select(AthleteOverride).where(AthleteOverride.action == "keep"))}
+
+    assert pins() == {"Q1": "on /gukesh", "Q2": "on /gukesh", "Q3": "kept by hand"}
+    for qid in ("Q1", "Q2", "Q3"):
+        assert campaigns.main(["player", "remove", "gukesh", qid]) == 0
+    assert pins() == {"Q2": "on /candidates", "Q3": "kept by hand"}  # Sindarov is still on another; the operator's stays
+    assert campaigns.main(["remove", "candidates"]) == 0
+    assert pins() == {"Q3": "kept by hand"}
+
+
+@needs_db
 def test_a_campaign_of_a_sport_turned_off_has_no_page(db, monkeypatch):
     campaigns.main(["set", "gukesh", "--sport", "chess", "--title", "Gukesh v Sindarov"])
     assert campaigns.page(db, "gukesh", None) is not None and campaigns.page(db, "nope", None) is None
@@ -286,6 +316,21 @@ def test_an_esports_campaign_takes_any_games_teams(db, teams, monkeypatch):
     assert [(t["game"], len(t["players"])) for t in campaigns.page(db, "ewc", None)["teams"]] == [("League of Legends", 1), ("Valorant", 1)]
     monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "valorant"))
     assert [(t["game"], len(t["players"])) for t in campaigns.page(db, "ewc", None)["teams"]] == [("League of Legends", 1), ("Valorant", 0)]
+
+
+@needs_db
+def test_an_esports_campaigns_own_players_of_a_game_turned_off_arent_offered(db, monkeypatch):
+    # BUG-097: only its teams' rows asked whether their game runs; its own players were offered, and "Follow all"
+    # followed them, with their game turned off.
+    _athlete(db, "pandascore:7", "valorant", "TenZ", {"pandascore_esports": "7"})
+    _athlete(db, "pandascore:8", "lol", "Faker", {"pandascore_esports": "8"})
+    monkeypatch.setattr(players, "check_source", lambda person: "pandascore_esports")
+    campaigns.main(["set", "ewc", "--sport", "esports", "--title", "Esports World Cup"])
+    assert campaigns.main(["player", "add", "ewc", "pandascore:7"]) == 0 and campaigns.main(["player", "add", "ewc", "pandascore:8"]) == 0
+    monkeypatch.setitem(adapters.ADAPTERS, "pandascore_esports", adapters.KNOWN["pandascore_esports"])
+    assert [r["name"] for r in campaigns.page(db, "ewc", None)["players"]] == ["TenZ", "Faker"]
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "valorant"))
+    assert [r["name"] for r in campaigns.page(db, "ewc", None)["players"]] == ["Faker"]
 
 
 @needs_db

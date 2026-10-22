@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from .. import naming
@@ -94,6 +94,7 @@ class Fired:
     game: str = ""  # the game's title: "India vs England"
     competition: str = ""
     venue: str = ""
+    notes: str = ""  # the game's own note, its stage or round where its source names one: "Final", "Round Robin", "1st ODI"
 
 
 # The statuses of a game not under way yet.
@@ -281,8 +282,8 @@ def num(value: str | None) -> float:
 
 def outcome(result: str) -> str | None:
     """W, D or L from a result put from the player's side ("Won 2–1"); None if it doesn't say."""
-    if "(w/o)" in (result or ""):
-        return None  # a walkover wasn't played, so it isn't form (as the tennis Win–loss leaves it out)
+    if "(w/o)" in (result or "") or " by forfeit" in (result or ""):
+        return None  # a walkover or a forfeit wasn't played, so it isn't form (as the tennis Win–loss leaves it out)
     word = (result or "").split(" ", 1)[0]
     return {"Won": "W", "Drew": "D", "Lost": "L"}.get(word)
 
@@ -351,6 +352,9 @@ class Sport:
     # ---- the registry (registry.build): who's current, their league and title
 
     wikidata_title: str | None = None  # the property for a title worth showing (chess: GM, IM…)
+    # The sport itself on Wikidata, as a team's "sport" (P641) names it: a team listed for one of its athletes that
+    # plays another of the app's sports, and not this one, isn't theirs here (Ellyse Perry's football club).
+    wikidata_sport: tuple[str, ...] = ()
     nation_first = False  # a player's country before their club (cricket)
     retire_age = 75  # an individual sport's athletes count as current to this age
 
@@ -450,6 +454,19 @@ class Sport:
     def result_pending(self, state: dict[str, Any], score: str, clock: str) -> bool:
         """Whether a finished game's result is still to come from its source, though it says the game is over: its
         final is held a poll or two (structured.apply_poll), so fans hear who won. False where the board says it."""
+        return False
+
+    # The longest a game of the sport runs, start to end, delays and all (a five-set match, an esports Bo5, a lobby).
+    lasts = timedelta(hours=12)
+
+    def over_by(self, start: datetime | None, state: dict[str, Any]) -> datetime | None:
+        """The latest a game that started at `start` can have ended, as its board says what it is: one first seen over
+        long after this tells nothing, its result old news (structured.long_over). None without a start."""
+        return start + self.lasts if start is not None else None
+
+    def paused(self, state: dict[str, Any], score: str, clock: str) -> bool:
+        """Whether a game that's on has stopped for the day, to go on tomorrow (a Test at stumps): its Android live card
+        comes down till play resumes (livecards.py), rather than go again all night. False for a break in play."""
         return False
 
     def start(self, who: str, now: Seen) -> Found:

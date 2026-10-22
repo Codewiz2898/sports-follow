@@ -27,6 +27,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, cast
 
 from .. import bus, naming, sports
+from ..sports import esports
 from . import budget, dota, opendota, pandascore
 from .base import DIGITS, Adapter, AdapterError, Fixture, LiveGame, PlayerRef, Roster, Rostered, Snapshot, SourceTeam, Stream
 
@@ -45,6 +46,9 @@ GAME_IDS = {"league-of-legends": 1, "cs-go": 3, "dota-2": 4, "ow": 14, "rl": 22,
 IMPORT_GAMES = [g for g in os.environ.get("SPORTS_FOLLOW_ESPORTS_GAMES", ",".join(GAMES)).split(",") if g in GAME_IDS]
 
 _STATUS = {"not_started": "scheduled", "running": "live", "finished": "final", "canceled": "postponed", "postponed": "postponed"}
+# A series put off after it began (a technical pause) is still on, paused, this long from its last map's news: polled
+# as one, so what happens when it resumes is told. Longer than that, it's postponed (to another day, say).
+PAUSE_FOR = timedelta(hours=3)
 
 # The tournament tiers whose series are among the big games on now (live_now), as LiveGame tiers, biggest
 # first. PandaScore rates a tournament S > A > B > C > D, or "unranked", by its organiser, teams and prize
@@ -56,6 +60,8 @@ LIVE_TIERS = {"s": 3, "a": 2, "b": 1}
 # closed qualifier, a smaller league (EPL Masters), so a game with a series on isn't empty for days between
 # its big events. A LiveGame tier of 0, below every rated one. D and unranked never.
 STAND_IN_TIER = "c"
+# Pages of 100 series on now live_now reads: a busy day's first page can be all small series, a big one on the next.
+RUNNING_PAGES = 2
 # And whose series are among the big results and big games coming up (schedule): world events and top leagues.
 SCHEDULE_TIERS = ("s", "a")
 DOTA_WAIT = 6 * 3600  # how long after a Dota 2 series ends its match page waits for OpenDota to parse its maps
@@ -112,11 +118,23 @@ def _winner(m: dict[str, Any]) -> str | None:
     return str(m["winner_id"]) if m.get("winner_id") is not None and m.get("winner_type") in (None, "Team") else None
 
 
-def _status(m: dict[str, Any]) -> str:
+def _paused(m: dict[str, Any], now: datetime | None = None) -> bool:
+    """A series put off ("postponed") after it began (a map played or under way), within PAUSE_FOR of its last map's
+    news (or its start's)."""
+    games = m.get("games") or []
+    if m.get("status") != "postponed" or not any(g.get("status") in ("running", "finished") for g in games):
+        return False
+    news = [t for t in (_time(x) for x in (m.get("begin_at"), *(g.get(k) for g in games for k in ("begin_at", "end_at")))) if t]
+    return bool(news) and (now or datetime.now(timezone.utc)) < max(news) + PAUSE_FOR
+
+
+def _status(m: dict[str, Any], now: datetime | None = None) -> str:
     """Ours from PandaScore's. A forfeit is "canceled" with the series awarded (forfeit and a winner):
-    a result, not a cancelled series."""
+    a result, not a cancelled series. One put off mid-way is still on a while (_paused)."""
     if m.get("status") == "canceled" and m.get("forfeit") and _winner(m):
         return "final"
+    if _paused(m, now):
+        return "live"
     return _STATUS.get(m.get("status") or "", "scheduled")
 
 
@@ -173,14 +191,14 @@ def _streams(m: dict[str, Any]) -> list[Stream]:
 # ---------------------------------------------------------------- parsers (pure)
 
 
-def parse_fixtures(rows: list[dict[str, Any]]) -> list[Fixture]:
+def parse_fixtures(rows: list[dict[str, Any]], now: datetime | None = None) -> list[Fixture]:
     """Matches (/matches?filter[opponent_id]=…) -> fixtures, with the series result for finished ones."""
     out = []
     for m in rows:
         teams = _teams(m)
         if not teams or not m.get("id"):
             continue  # a 1v1 title's match, or no team decided yet
-        status = _status(m)
+        status = _status(m, now)
         names = [t.get("name") or "" for t in teams]
         result = None
         if status == "final":
@@ -215,21 +233,18 @@ def result_label(fixture: Fixture, team_ids: list[str]) -> str:
         return ""
     a, b = r["teams"]
     ours, theirs = (a, b) if a["id"] in team_ids else (b, a) if b["id"] in team_ids else (None, None)
-    if ours is None:
+    if ours is None or theirs is None:
         return f"{a['name']} {a['score']}–{b['score']} {b['name']}"
     if r.get("forfeit"):
         return "Won by forfeit" if ours.get("winner") else "Lost by forfeit" if theirs.get("winner") else "Forfeit"
     score = f"{ours['score']}–{theirs['score']}"
-    if ours.get("winner"):
-        return f"Won {score}"
-    if theirs.get("winner"):
-        return f"Lost {score}"
-    return f"Drew {score}" if r.get("draw") or ours["score"] == theirs["score"] else score
+    won = esports.took(ours, theirs, bool(r.get("draw")))  # the winner as marked, else (a poll late) by the maps
+    return f"Won {score}" if won else f"Lost {score}" if won is False else f"Drew {score}"
 
 
-def parse_match(m: dict[str, Any]) -> Snapshot:
+def parse_match(m: dict[str, Any], now: datetime | None = None) -> Snapshot:
     """A match -> snapshot: the series score, each map's winner, which map is on."""
-    status = _status(m)
+    status = _status(m, now)
     teams = _teams(m)
     scores, winner = _scores(m), _winner(m)
     sides = [{
@@ -242,7 +257,9 @@ def parse_match(m: dict[str, Any]) -> Snapshot:
     maps = [{"n": g.get("position"), "status": g.get("status"), "winner": str((g.get("winner") or {}).get("id")) if (g.get("winner") or {}).get("id") is not None else None} for g in games]
     running = next((g for g in games if g.get("status") == "running"), None)
     fmt = _format(m)
-    if status == "live":
+    if status == "live" and m.get("status") == "postponed":
+        clock = "Paused"
+    elif status == "live":
         clock = f"Map {running.get('position')}" if running else "Between maps" if any(g.get("status") == "finished" for g in games) else "Starting"
     elif status == "final":
         clock = "Forfeit" if m.get("forfeit") else "Final"
@@ -263,6 +280,7 @@ def parse_match(m: dict[str, Any]) -> Snapshot:
         "format": fmt,
         "stage": _stage(m),
         "forfeit": bool(m.get("forfeit")),
+        "draw": bool(m.get("draw")),  # level when every game's played: the series has no winner to wait for
         # Called off for good, not put back to a later date: what's still to be played of it won't be.
         "cancelled": status == "postponed" and m.get("status") == "canceled",
     }
@@ -674,18 +692,29 @@ class PandascoreEsports(Adapter):
         return parsed >= len(finished)
 
     def live_now(self) -> list[LiveGame]:
-        """The big series on now in the plan's games (matches/running, one request): those of a tournament in
-        LIVE_TIERS, the biggest tier first and of equals in PandaScore's order; in a game with none of those on,
-        its STAND_IN_TIER series. Its teams, not its players: a match names no players, and the registry knows
-        the teams' pros."""
+        """The big series on now in the plan's games (matches/running, one request, or on a busy day up to
+        RUNNING_PAGES): those of a tournament in LIVE_TIERS, the biggest tier first and of equals in PandaScore's
+        order; in a game with none of those on, its STAND_IN_TIER series. Its teams, not its players: a match names
+        no players, and the registry knows the teams' pros."""
         games = game_ids(self._on())
         if not games:
             return []
         # Matches filter by game as "videogame" (ids or slugs); "videogame_id" is the teams' and players' name for it.
-        # It can't filter by tier, so the big series are picked from a page of PandaScore's most.
-        rows = pandascore.get_json("/matches/running", ttl=60, **{"filter[videogame]": games, "page[size]": pandascore.PAGE})
-        rows = rows if isinstance(rows, list) else []
-        by_id = {str(m.get("id")): m for m in rows}
+        # It can't filter by tier, so the big series are picked from pages of PandaScore's most: the next only after
+        # a full one, and a next one the budget can't spare leaves what the first had.
+        by_id: dict[str, dict[str, Any]] = {}
+        for page in range(1, RUNNING_PAGES + 1):
+            try:
+                got = pandascore.get_json("/matches/running", ttl=60, **{"filter[videogame]": games, "page[size]": pandascore.PAGE, **({"page[number]": page} if page > 1 else {})})
+            except AdapterError:
+                if page == 1:
+                    raise
+                break
+            got = got if isinstance(got, list) else []
+            by_id.update((str(m.get("id")), m) for m in got if m.get("id") and str(m.get("id")) not in by_id)  # a series that moved up a page is one
+            if len(got) < pandascore.PAGE:
+                break
+        rows = list(by_id.values())
         out, stand_ins = [], []
         for f in parse_fixtures(rows):
             m = by_id[f.source_id]

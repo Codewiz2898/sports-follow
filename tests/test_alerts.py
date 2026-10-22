@@ -199,3 +199,34 @@ def test_a_board_under_two_fixtures_is_one_notification_with_one_story():
     assert plan([turned], {CARLSEN: "key", LAZAVIK: "key"}, {ON_CARLSENS}, earlier, NOW) == []
     # A game whose fixture is the game keeps its event's notification.
     assert plan([item(1, "fifty", "Virat Kohli reaches 50")], {KOHLI: "key"}, set(), [], NOW)[0].tag == "e10"
+
+
+def test_teammates_telling_the_same_play_are_one_line_naming_them_both():
+    # BUG-206: a fan who follows two teammates got one push, but every line in it twice: "zekken: Sentinels win 2–0 |
+    # TenZ: Sentinels win 2–0". The same play in the same words but for whom they start with is one line, naming both.
+    tenz, zekken, aspas = 3, 4, 5
+
+    def said(id: int, kind: str, title: str, who: int, detail: str = "", body: str = "v NRG · Upper bracket final", priority: int = 80) -> Item:
+        name = {tenz: "TenZ", zekken: "zekken", aspas: "aspas"}[who]
+        return replace(item(id, kind, title, player=who, body=body, priority=priority), who=name, detail=detail)
+
+    batch = [said(1, "final", "TenZ: Sentinels win 2–0", tenz), said(2, "final", "zekken: Sentinels win 2–0", zekken),
+             said(3, "kda", "TenZ: 12/2/9 on Jett", tenz, "kda2", "Map 2 won", 60), said(4, "kda", "zekken: 3/5/10 on Raze", zekken, "kda2", "Map 2 won", 30)]
+    both = {tenz: "everything", zekken: "everything"}
+    [p] = plan(batch, both, set(), [], NOW)
+    assert (p.title, p.lines) == ("TenZ and zekken: Sentinels win 2–0", ["TenZ and zekken: Sentinels win 2–0", "TenZ: 12/2/9 on Jett", "zekken: 3/5/10 on Raze"])
+    assert p.body == "v NRG · Upper bracket final\nTenZ: 12/2/9 on Jett\nzekken: 3/5/10 on Raze"  # each player's own numbers stay theirs
+    assert sorted(p.moment_ids) == [1, 2, 3, 4] and p.moment_ids[:3] == [2, 3, 4]  # each line's moment first, then those folded in
+    assert p.who == "TenZ and zekken"
+    # A fan of one of them hears theirs, as before.
+    [one] = plan(batch, {tenz: "everything"}, set(), [], NOW)
+    assert one.lines == ["TenZ: Sentinels win 2–0", "TenZ: 12/2/9 on Jett"]
+    # A series starting, and a whole squad: one line.
+    starts = [said(5 + n, "start", f"{who}'s series has started", p, body="SEN v NRG · Bo3") for n, (p, who) in enumerate([(tenz, "TenZ"), (zekken, "zekken"), (aspas, "aspas")])]
+    [start] = plan(starts, {**both, aspas: "key"}, set(), [], NOW)
+    assert start.lines == ["aspas, TenZ and zekken's series has started"] and start.loud
+    # Moments that only look alike aren't folded: other plays, or other games.
+    goals = [said(9, "goal", "Goal: TenZ", tenz, "goal@1", "1–0"), said(10, "goal", "Goal: zekken", zekken, "goal@2", "2–0")]
+    assert plan(goals, both, set(), [], NOW)[0].lines == ["Goal: zekken", "Goal: TenZ"]
+    apart = [batch[0], replace(batch[1], event_id=OTHER)]
+    assert sorted(len(p.lines) for p in plan(apart, both, set(), [], NOW)) == [1, 1]

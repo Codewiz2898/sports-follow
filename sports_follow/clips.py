@@ -27,7 +27,7 @@ import json
 import secrets
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import delete, func, literal, or_, select, update
@@ -44,6 +44,8 @@ MAX_BYTES = 80 * 1024 * 1024
 MAX_POSTER = 2 * 1024 * 1024
 MAX_PLAYERS = 20
 PAGE = 30
+SWEEP = 500  # clips a sweep (retention.py) looks at, of each kind
+LINGER = timedelta(days=3)  # how far back a sweep looks for clips failed or taken down while a link could still put a file
 # What may be published, by what it was recorded from (BHA-369). A stream is its broadcaster's production:
 # while the app's own admins post clips, those stay on the device.
 RIGHTS = {"game_client": True, "file": True, "browser": False}
@@ -100,6 +102,8 @@ def key_from(db: Session, token: str, now: datetime | None = None) -> ClipKey | 
 
 
 def revoke(db: Session, key_id: int, now: datetime | None = None) -> bool:
+    """Revoke a key: it stops at once (its uploads under way can't be finished: sweep clears them). Its clips stay up
+    unless hidden too (hide_from)."""
     row = db.get(ClipKey, key_id)
     if row is None or row.revoked_at is not None:
         return False
@@ -142,6 +146,8 @@ def create(db: Session, key: ClipKey, body: dict[str, Any], now: datetime | None
         raise Refused(403, "Clips recorded from a browser (a broadcast) stay on your device for now: save or share them instead.")
     seconds = _number(body, "seconds", 1, MAX_SECONDS)
     size = int(_number(body, "bytes", 1, MAX_BYTES))
+    # The poster's size, which its upload URL is signed for as the video's is; an app from before doesn't say it.
+    poster_size = int(_number(body, "poster_bytes", 1, MAX_POSTER)) if "poster_bytes" in body else None
     width = int(_number(body, "width", 16, 4096))
     height = int(_number(body, "height", 16, 4096))
     caption = body.get("caption") or ""
@@ -176,8 +182,8 @@ def create(db: Session, key: ClipKey, body: dict[str, Any], now: datetime | None
                 created_at=now or datetime.now(timezone.utc))
     db.add(clip)
     db.flush()
-    # The video's URL is signed for the size it said, so a bigger file can't be put in its place.
-    return Upload(clip, bucket.put_url(video_key(clip.slug), VIDEO_TYPE, size), bucket.put_url(poster_key(clip.slug), POSTER_TYPE))
+    # Each URL is signed for the size the app said, so a bigger file can't be put in its place.
+    return Upload(clip, bucket.put_url(video_key(clip.slug), VIDEO_TYPE, size), bucket.put_url(poster_key(clip.slug), POSTER_TYPE, poster_size))
 
 
 def _own(db: Session, key: ClipKey, slug: str) -> Clip:
@@ -211,27 +217,99 @@ def finish(db: Session, key: ClipKey, slug: str, now: datetime | None = None) ->
 
 
 def remove(db: Session, slug: str, key: ClipKey | None = None) -> bool:
-    """Takes a clip down for good: its files deleted, its row kept as removed. By its uploader's key, or an admin."""
+    """Takes a clip down for good: its files deleted (where a hide put them too), its row kept as removed. By its
+    uploader's key, or an admin."""
     clip = _own(db, key, slug) if key is not None else db.scalar(select(Clip).where(Clip.slug == slug))
     if clip is None:
         return False
     bucket = store()
-    bucket.delete(video_key(slug))
-    bucket.delete(poster_key(slug))
+    for file in (video_key(slug), poster_key(slug)):
+        bucket.delete(file)
+        if clip.hidden_as:
+            bucket.delete(clipstore.hidden(clip.hidden_as, file))
     clip.status = "removed"
     return True
 
 
+def _move(bucket: clipstore.Store, source: str, key: str) -> None:
+    """An object moved in the bucket; nothing if it isn't there (moved already: a hide asked twice, or a retry)."""
+    if bucket.size(source) is not None:
+        bucket.copy(source, key)
+        bucket.delete(source)
+
+
 def set_hidden(db: Session, slug: str, hidden: bool) -> Clip | None:
-    """An admin hides a clip, or puts a hidden one back (its reports cleared)."""
+    """An admin hides a clip, or puts a hidden one back (its reports cleared). Hidden, its files are moved off their
+    public address to names made with a token of its own (clipstore.hidden, Clip.hidden_as), so a link to them plays
+    nothing either; put back, they're moved back. Refused (502) when the bucket fails on it: the caller's change is
+    rolled back, and asking again finishes the move; and (409) putting back one whose files are in neither place,
+    rather than showing a clip with nothing to play."""
     clip = db.scalar(select(Clip).where(Clip.slug == slug))
     if clip is None or clip.status not in ("live", "hidden"):
         return None
+    token = clip.hidden_as or secrets.token_urlsafe(24)
+    bucket = clipstore.STORE
+    if bucket is not None:
+        try:
+            for file in (video_key(slug), poster_key(slug)):
+                away = clipstore.hidden(token, file)
+                if hidden:
+                    _move(bucket, file, away)
+                elif bucket.size(away) is None and bucket.size(file) is None:
+                    raise Refused(409, "This clip's files aren't in the bucket, hidden or not: take it down instead.")
+                else:
+                    _move(bucket, away, file)
+        except Refused:
+            raise
+        except Exception as exc:
+            raise Refused(502, f"The clips bucket failed on its files ({type(exc).__name__}): nothing changed, try again.") from exc
+    clip.hidden_as = token
     clip.status = "hidden" if hidden else "live"
     if not hidden:
         clip.reports = 0
         db.execute(delete(ClipReport).where(ClipReport.clip_id == clip.id))
     return clip
+
+
+def hide_from(db: Session, key_id: int) -> int:
+    """Hide every live clip put up with a key (one revoked because it leaked): how many. Refused (502) when the bucket
+    fails, the ones hidden before it staying hidden."""
+    hidden = 0
+    for slug in list(db.scalars(select(Clip.slug).where(Clip.key_id == key_id, Clip.status == "live").order_by(Clip.id))):
+        set_hidden(db, slug, True)
+        db.flush()
+        hidden += 1
+    return hidden
+
+
+def sweep(db: Session, now: datetime | None = None, count: bool = False) -> int:
+    """Clips' files nothing will read (retention.py, daily): an upload that never reached done (the app gave up, or its
+    key was revoked), once its upload links have run out (clipstore.SIGNED_FOR), its files deleted and the clip kept as
+    failed; and a file a link still running put back after its clip failed or was taken down. How many clips had any;
+    with count, nothing is changed. Without a bucket, none."""
+    bucket = clipstore.STORE
+    if bucket is None:
+        return 0
+    now = now or datetime.now(timezone.utc)
+    ran_out = now - timedelta(seconds=clipstore.SIGNED_FOR + 60)
+    found = 0
+    for clip in db.scalars(select(Clip).where(Clip.status == "uploading", Clip.created_at < ran_out).order_by(Clip.id).limit(SWEEP)):
+        found += 1
+        if not count:
+            bucket.delete(video_key(clip.slug))
+            bucket.delete(poster_key(clip.slug))
+            clip.status = "failed"
+    if not count:
+        db.flush()
+    lately = select(Clip.slug).where(Clip.status.in_(("failed", "removed")), Clip.created_at < ran_out, Clip.created_at >= now - LINGER)
+    for slug in list(db.scalars(lately.order_by(Clip.id).limit(SWEEP))):
+        there = [f for f in (video_key(slug), poster_key(slug)) if bucket.size(f) is not None]
+        if there:
+            found += 1
+            if not count:
+                for f in there:
+                    bucket.delete(f)
+    return found
 
 
 def report(db: Session, slug: str, fan: str, reason: str = "") -> bool | None:

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { followsKey } from './alerts'
 import { api, type ActivityItem } from './api'
 import { useFollowing } from './following'
 import { ACTIVITY, refetcher, type Refetcher } from './refetch'
@@ -34,14 +35,14 @@ function writeSeen(id: number) {
  * level changes and picks up new moments as the stream brings them. "Seen" is per device, like quiet hours.
  */
 export function ActivityProvider({ children }: { children: ReactNode }) {
-  const { cards, loaded: following, heard, matches } = useFollowing()
+  const { cards, loaded: following, heard, matches, teams } = useFollowing()
   const [items, setItems] = useState<ActivityItem[]>([])
   const [next, setNext] = useState<number | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [seen, setSeen] = useState<number | null>(readSeen)
   const [muted, setMutedIds] = useState<Set<number>>(new Set())
-  // Following someone new, or turning a player off, changes the whole list.
-  const who = [...cards.map((c) => `${c.player_id}:${c.alerts ?? 'key'}`), ...matches.map((m) => `game${m.event_id}:${m.alerts}`)].sort().join(',')
+  // Following someone new, or turning a player off, changes the whole list; a game or a team too.
+  const who = followsKey(cards, matches, teams)
 
   useEffect(() => {
     if (!following) return

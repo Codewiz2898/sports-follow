@@ -650,7 +650,7 @@ class Notification(Base):
     moment_ids: Mapped[list] = mapped_column(JSONB, default=list)
     kind: Mapped[str] = mapped_column(String(30))  # the lead moment's
     lines: Mapped[list] = mapped_column(JSONB, default=list)  # every moment's title, lead first
-    loud: Mapped[bool] = mapped_column(Boolean)  # with sound (before each device's quiet hours)
+    loud: Mapped[bool] = mapped_column(Boolean)  # with sound: a moment's, on one of its devices at least, outside its quiet hours
     devices: Mapped[int] = mapped_column(Integer, default=0)
     delivered: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = _now()
@@ -867,6 +867,9 @@ class Clip(Base):
     # and removed (files deleted) after.
     status: Mapped[str] = mapped_column(String(12), default="uploading", index=True)
     reports: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # The random token its files' hidden names are made with (clipstore.hidden), from its first hide on: kept here,
+    # so a change of the bucket's keys can't lose where they are.
+    hidden_as: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = _now()
     live_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 

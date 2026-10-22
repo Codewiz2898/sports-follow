@@ -109,11 +109,16 @@ def test_the_watch_page_may_hold_its_players_frame_and_nothing_else(api):
 @pytest.mark.parametrize("path", [
     "/watch/vimeo/riotgames", "/watch/Twitch/riotgames", "/watch/embed/riotgames",  # only a player the app has, by its name
     "/watch/twitch/riot.games", "/watch/twitch/" + "a" * 26, "/watch/youtube/short", "/watch/youtube/dQw4w9WgXcQx",  # only what it plays
-    "/watch/kick/a%22%20onload%3D%22x", "/watch/twitch/%3Cscript%3E", "/watch/youtube/dQw4w9WgXc%00",
+    "/watch/kick/a%22%20onload%3D%22x", "/watch/twitch/%3Cscript%3E",
 ])
 def test_a_player_the_app_doesnt_have_or_what_isnt_of_its_shape_is_a_404(api, path):
     got = api.call("GET", path)
     assert got.status_code == 404 and got.json() == {"detail": "Not Found"}
+
+
+def test_a_nul_in_a_players_address_is_refused_before_the_page(api):
+    """As in any address (server.NoNul, BUG-096): a plain 400, never the player."""
+    assert api.call("GET", "/watch/youtube/dQw4w9WgXc%00").status_code == 400
 
 
 def test_every_stream_the_app_plays_has_a_watch_page_and_a_host_that_isnt_one_none():

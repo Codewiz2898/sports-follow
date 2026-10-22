@@ -6,6 +6,8 @@ the judge's rows; the routes need Postgres and are skipped without one (tests/te
 
 from __future__ import annotations
 
+import base64
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -63,12 +65,18 @@ def test_an_undated_item_is_earlier_and_a_pinned_old_one_this_week():
 
 
 def test_a_cursor_keeps_its_time_and_place_and_one_never_made_is_refused():
-    cursor = feed._write_cursor(NOW - timedelta(hours=1), 20, "0123456789abcdef")  # pyright: ignore[reportPrivateUsage]
-    assert feed._read_cursor(cursor, NOW) == (NOW - timedelta(hours=1), 20, "0123456789abcdef")  # pyright: ignore[reportPrivateUsage]
+    cursor = feed._write_cursor(NOW - timedelta(hours=1), 20, ["fedcba9876543210", "0123456789abcdef"])  # pyright: ignore[reportPrivateUsage]
+    assert feed._read_cursor(cursor, NOW) == (NOW - timedelta(hours=1), 20, ("fedcba9876543210", "0123456789abcdef"))  # pyright: ignore[reportPrivateUsage]
     # One from days ago carries on in today's order, from its last item.
-    old = feed._write_cursor(NOW - timedelta(days=5), 20, "0123456789abcdef")  # pyright: ignore[reportPrivateUsage]
-    assert feed._read_cursor(old, NOW) == (NOW, 20, "0123456789abcdef")  # pyright: ignore[reportPrivateUsage]
-    for bad in ("", "not base64!", "W10", "WzEsMiwzXQ", feed._write_cursor(NOW, 1, "x").replace("A", "B")):  # pyright: ignore[reportPrivateUsage]
+    old = feed._write_cursor(NOW - timedelta(days=5), 20, ["0123456789abcdef"])  # pyright: ignore[reportPrivateUsage]
+    assert feed._read_cursor(old, NOW) == (NOW, 20, ("0123456789abcdef",))  # pyright: ignore[reportPrivateUsage]
+    # It keeps a page's last few, and one made before it did (its last item alone) is still read.
+    assert len(feed._read_cursor(feed._write_cursor(NOW, 20, ["0123456789abcdef"] * 9), NOW)[2]) == feed.CURSOR_TAIL  # pyright: ignore[reportPrivateUsage]
+    assert len(feed._write_cursor(NOW, 100_000, ["0123456789abcdef"] * 9)) <= 200  # pyright: ignore[reportPrivateUsage]  # the route's limit
+    before = base64.urlsafe_b64encode(json.dumps([int(NOW.timestamp()), 20, "0123456789abcdef"]).encode()).decode().rstrip("=")
+    assert feed._read_cursor(before, NOW) == (NOW, 20, ("0123456789abcdef",))  # pyright: ignore[reportPrivateUsage]
+    for bad in ("", "not base64!", "W10", "WzEsMiwzXQ", feed._write_cursor(NOW, 1, ["x"]).replace("A", "B"),  # pyright: ignore[reportPrivateUsage]
+                feed._write_cursor(NOW, 1, []), feed._write_cursor(NOW, 1, ["0123456789abcdef", "x"])):  # pyright: ignore[reportPrivateUsage]
         with pytest.raises(ValueError, match="isn't a page"):
             feed._read_cursor(bad, NOW)  # pyright: ignore[reportPrivateUsage]
 
@@ -161,6 +169,29 @@ def test_the_fans_feed_is_by_day_with_players_taking_turns_and_pages_with_a_curs
     assert [e.item.title for e in get(player=kohli, tz=IST).items] == ["k1", "Kohli's knock"] and len(get(player=kohli).players) == 2
     empty = get(limit=0)
     assert empty.items == [] and empty.cursor is None and empty.count == 5 and empty.newest
+
+
+@needs_db
+def test_a_page_carries_on_after_the_last_item_still_there_when_the_page_ended_on_one_since_gone(db, monkeypatch):  # noqa: F811
+    # BUG-121: the next page read on from where the last one ended by count once its last item had left every feed
+    # (an admin hid it, the weekly check dropped it, fans' apps said it won't play), one too far: an item was skipped.
+    gukesh = player(db, "gukesh", {"player": {"name": "Gukesh D", "sport": "chess"}, "news": []})
+    kept = {gukesh: [Candidate(item(f"v{i}", i), score=1 - i / 100, channel=f"c{i}") for i in range(1, 9)]}
+    monkeypatch.setattr(feed, "judged", lambda db, ids, now=None: {i: list(kept[i]) for i in ids if i in kept})
+    follow(db, "fan", gukesh)
+    one = feed.page(db, "fan", now=NOW, limit=3)
+    assert [e.item.title for e in one.items] == ["v1", "v2", "v3"] and one.cursor
+    kept[gukesh] = [c for c in kept[gukesh] if c.item.title != "v3"]  # gone for everyone before the next page
+    two = feed.page(db, "fan", now=NOW + timedelta(minutes=2), limit=3, cursor=one.cursor)
+    assert [e.item.title for e in two.items] == ["v4", "v5", "v6"]
+    kept[gukesh] = [c for c in kept[gukesh] if c.item.title not in ("v5", "v6")]  # the last two, this time
+    three = feed.page(db, "fan", now=NOW + timedelta(minutes=4), limit=3, cursor=two.cursor)
+    assert [e.item.title for e in three.items] == ["v7", "v8"] and three.cursor is None
+    # A cursor an app had from before kept only its last item: that one gone, it carries on from one place back.
+    v4 = next(c.item.id for c in kept[gukesh] if c.item.title == "v4")
+    legacy = base64.urlsafe_b64encode(json.dumps([int(NOW.timestamp()), 3, v4]).encode()).decode().rstrip("=")
+    kept[gukesh] = [c for c in kept[gukesh] if c.item.title != "v4"]  # v1, v2, v7, v8
+    assert [e.item.title for e in feed.page(db, "fan", now=NOW + timedelta(minutes=6), limit=3, cursor=legacy).items] == ["v7", "v8"]
 
 
 @needs_db

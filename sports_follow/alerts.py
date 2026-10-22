@@ -20,8 +20,9 @@ phone, notifications should feel like one sports app, not a feed of every poll:
 - **One notification per game.** Everything a fan hears from one game, whichever of their players
   it's about, lands on the same notification (tag "e{event}"): a new moment replaces it, with the
   story so far underneath, so the tray holds "Kohli reaches 100" over "Rohit out for 45", not a
-  stack. Moments found in one poll go as one push, led by the highest priority. News is one
-  notification per player.
+  stack. Moments found in one poll go as one push, led by the highest priority; the same play told alike by
+  several of the fan's players (two teammates' "TenZ: Sentinels win 2–0") is one line naming them all (fold).
+  News is one notification per player.
 - **A game under several fixtures is one game.** A chess board is a fixture of each of its players, so an
   event of each, polled apart (BHA-378): its notification is the game's first fixture's (Item.fixtures),
   whichever finds the moment, all through a mini-match, and each of its moments is found from both sides,
@@ -41,14 +42,16 @@ phone, notifications should feel like one sports app, not a feed of every poll:
   notification, by the same rules, for the fans who were sent that moment; a fan who never heard it
   hears nothing, and a moment taken back before it went isn't sent at all. The same rules include the
   fan's level now: one who has since set the player to results only or off isn't sent the correction.
-  The moment leaves the story underneath.
+  The moment leaves the story underneath. A game called off and played again under its fixture is another game
+  (notify.editions): nothing of the one called off is in its story, nor taken back in it.
 
-Quiet hours are per device, so notify.py applies them after this.
+Quiet hours are per device, so notify.py applies them after this; a push that arrived silent on every device in them is
+logged as silent, so it leaves the hour's sound and the game's to the pushes after it.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from itertools import zip_longest
 
@@ -101,6 +104,9 @@ class Item:
     # A player's moment of such a game: the player here whose side tells it to a fan who follows both (Found.voice),
     # its own player or the other side's, whose fixture is being polled to say it. None where only its player says it.
     voice: int | None = None
+    # The player as its title names them, where notify knows it: the same play told by two of a fan's players in the
+    # same words but for their names (teammates' "TenZ: Sentinels win 2–0") is one line naming both (fold).
+    who: str = ""
 
 
 @dataclass
@@ -145,6 +151,7 @@ class Push:
     tag: str  # the notification it replaces on the phone, and the push service's topic
     ttl: int
     story: list[str] = field(default_factory=list)  # earlier lines from the same game
+    who: str = ""  # whom its lead line names, as several of the fan's players where it's theirs at once (fold): "TenZ and zekken"
 
 
 def tier(level: str, item: Item) -> str | None:
@@ -212,6 +219,40 @@ def tag_of(item: Item) -> str:
     return f"e{min(item.fixtures or {item.event_id})}" if item.event_id else f"p{item.player_id}"
 
 
+def fold(members: list[tuple[Item, bool]]) -> tuple[list[tuple[Item, bool]], list[int]]:
+    """A push's moments (each with whether it makes a sound), those that are the same play told by several of the fan's
+    players as one, naming them all: of one game, kind and detail, in the same words but for the name each starts with
+    (two teammates' "TenZ: Sentinels win 2–0" and "zekken: Sentinels win 2–0" are "TenZ and zekken: Sentinels win 2–0").
+    Each player's own (their numbers on a map) stays theirs. Returns them in their order, and the moments folded into
+    another (BUG-206)."""
+    same: dict[tuple, list[tuple[Item, bool]]] = {}
+    for item, loud in members:
+        same.setdefault(_said(item), []).append((item, loud))
+    out, folded = [], []
+    for told in same.values():
+        lead = told[0][0]
+        names = sorted({i.who for i, _ in told}, key=str.casefold)
+        if len(names) > 1:
+            who = f"{', '.join(names[:-1])} and {names[-1]}"
+            lead = replace(lead, title=_named(lead.title, lead.who, who), body=_named(lead.body, lead.who, who), who=who)
+        out.append((lead, any(loud for _, loud in told)))
+        folded += [i.id for i, _ in told[1:]]
+    return out, folded
+
+
+def _said(item: Item) -> tuple:
+    """What a player's moment says but for their name where its title or body starts with it, as its game, kind and
+    detail: the same for each of a fan's players who tell the same play (fold). Its own id where notify gave no name."""
+    if item.player_id is None or not item.who:
+        return (item.id,)
+    return item.event_id, item.kind, item.detail, _named(item.title, item.who, ""), _named(item.body, item.who, "")
+
+
+def _named(text: str, who: str, names: str) -> str:
+    """A moment's title or body with the name it starts with, if it does, as `names`."""
+    return names + text[len(who):] if who and text.startswith(who) else text
+
+
 def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[Sent], now: datetime, taken_back: set[int] | None = None,
          games: dict[int, Watch] | None = None, heard: list[Item] | None = None, held: list[Item] | None = None) -> list[Push]:
     """One fan's pushes for a batch of new moments (see the module docstring). `taken_back` is the
@@ -265,6 +306,7 @@ def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[
     # The biggest moments get the hour's sound first.
     for tag, members in sorted(groups.items(), key=lambda g: -max(i.priority for i, _ in g[1])):
         members.sort(key=lambda m: (m[0].priority, m[0].id), reverse=True)
+        members, folded = fold(members)
         lead = members[0][0]
         # The game's earlier pushes, of any of its fixtures; a player's news, theirs.
         of_it = [s for s in sent if s.event_id == lead.event_id or s.event_id in lead.fixtures] if lead.event_id else [s for s in sent if s.event_id is None and s.player_id == lead.player_id]
@@ -286,7 +328,7 @@ def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[
             event_id=lead.event_id,
             player_id=lead.player_id,
             kind=lead.kind,
-            moment_ids=[i.id for i, _ in members],
+            moment_ids=[i.id for i, _ in members] + folded,  # each line's, then those folded into one (fold)
             lines=lines,
             title=lead.title,
             body="\n".join(body.split("\n")[:MAX_LINES]),
@@ -295,5 +337,6 @@ def plan(items: list[Item], levels: dict[int, str], muted: set[int], sent: list[
             tag=tag,
             ttl=max(ttl(i.kind) for i, _ in members),
             story=story,
+            who=lead.who,
         ))
     return pushes

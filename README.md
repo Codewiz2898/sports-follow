@@ -270,13 +270,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   competition's (`?competition=`), a player's (`?player=`) or everyone's, newest first (`?before=` pages back).
   Only a publishing key's holder publishes, for now admins (`python -m sports_follow.clips key "<name>"`, or
   `POST /api/admin/clip-keys`; the key is shown once). The app sends `Authorization: Bearer slam_pk_…` to
-  `POST /api/clips` with the match page's address, the moment it read, length, size and source, and gets two
-  upload URLs signed for 15 minutes. It puts the video and its poster frame straight into the bucket (Cloudflare R2;
+  `POST /api/clips` with the match page's address, the moment it read, length, size, its poster's size and source,
+  and gets two upload URLs signed for 15 minutes, each for its file's type and size. It puts the video and its poster frame straight into the bucket (Cloudflare R2;
   the server never carries a video), then `POST /api/clips/<id>/done`: both files are checked and the clip goes
   live, served from the CDN domain. A clip recorded from a browser window (a broadcast, its organiser's production)
   is refused while Slam itself posts clips (`clips.RIGHTS`, BHA-369). Fans report a clip once each
   (`POST /api/clips/<id>/report`), which flags it for the admin panel (`/api/admin/clips?status=reported`) to hide
-  or take down; reports never hide a clip by themselves, as an anonymous fan is just a request without a cookie. Without the bucket's settings, publishing says it isn't set up and the feeds are empty.
+  or take down; reports never hide a clip by themselves, as an anonymous fan is just a request without a cookie.
+  A hidden clip's files are moved off their public address, to a name made with the bucket's secret (the CDN domain
+  serves every name), and back when it's put back; one taken down has them deleted, wherever they are. Without the bucket's settings, publishing says it isn't set up and the feeds are empty.
 - **Predictions with friends** (`sports_follow/predictions.py`, BHA-317): before a game, or a map of a series, a
   fan calls it in a tap; the app settles it from the board its poller reads anyway, and friends compare in small
   leagues joined by an invite link. Bragging rights only: no entry fee, no prize of any value (India's online gaming
@@ -284,8 +286,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   a draw), who takes each map of a team esports series, who wins a football match (home, a draw or away, from its
   final score: extra time counts, a shootout doesn't) and who wins a limited-overs cricket match (a tie a Super Over
   doesn't settle, no result or a washout is voided); a game called off is voided (the board's `cancelled`),
-  one postponed waits for its new date. Other sports ask nothing yet. A question (`prediction_question`)
-  belongs to the game, whichever fixture shows it (a chess board is one of each player's: `Sport.board` gives the
+  one postponed waits for its new date (no picks, no reminder and no closing till then). Other sports ask nothing
+  yet. A question (`prediction_question`) belongs to the game, whichever fixture shows it (a chess board is one of each player's: `Sport.board` gives the
   id they share), and is made from its board the first time it's seen before the start: a poll of a followed
   game, a look at its match page (which lists its questions), or the worker's read of a fan's game, or one of
   Today's big games, coming up within a day (`prepare_questions`, every ten minutes, at most once every two hours a
@@ -318,9 +320,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`GET /api/me/predictions`, `web/src/components/Calls.tsx`); `/me/leagues`, `/league/<code>` and the invite `/j/<code>`, whose sign-in comes back
   to it. A question's own link (`/match/<game>?q=<id>`, its card's Share) previews the question, and its split once
   it's closed (`share.of_question`).
-  The admin panel's Users tab counts leagues (and those of three or more), invites shared and opened, and fans who
-  picked on two game days. Pushes (`sports_follow/predictions_push.py`, the worker every minute): "Make your pick" two
-  hours before a campaign's game (`campaigns.player_ids`: its players' game within three hours of one on its
+  The admin panel's Users tab counts leagues (and those of three or more), invites shared (once a day a member) and
+  opened (by fans who came with their own cookie), and fans who picked on two days or more (IST). Pushes
+  (`sports_follow/predictions_push.py`, the worker every minute): "Make your pick" two hours before a campaign's game (`campaigns.player_ids`: its players' game within three hours of one on its
   schedule, not their other events) to the fans who follow someone in it, its team or the game
   and haven't picked, and how each pick went once its question settles, with the fan's best league place. They go as
   moments' pushes do (Web Push, FCM), logged as notification rows (kinds "pick" and "called"), and as each fan set
@@ -375,9 +377,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   sheet (on the web where the browser has one, else the link copied). It shares a link on the site, never
   the app's own, so it previews for anyone; `web/src/share.ts` says which link and title, for both. Every
   link carries `s=share`. Where a fan came from is kept with them (`fan_source`): the tags on the first link
-  they open (`s=`, `utm_source`, `utm_medium`, `utm_campaign`) and its page, told by the app before its other
-  calls (`web/src/visit.ts`, `POST /api/me/source`), moved to their account when they sign in and deleted
-  with it. Nothing reads it yet: the launch numbers (BHA-239) will.
+  they open (`s=`, `utm_source`, `utm_medium`, `utm_campaign`) and its page, told by the web app as it starts
+  (`web/src/visit.ts`) and by the Android app when a link opens it (`mobile/src/visit.ts`), to `POST
+  /api/me/source`, which keeps it for a fan whose cookie came with it, a hundred a day from one address; moved
+  to their account when they sign in and deleted with it. Nothing reads it yet: the launch numbers (BHA-239) will.
 - **A Feed on every player's page** (`sports_follow/feed.py`, `web/src/components/Feed.tsx`, epic BHA-296): what
   fans, creators and the player share about them, judged before a fan sees it. Three layers: L0 fetches
   candidates from the sources into `feed_candidates`, L1 (the judge) keeps the ones really about the player with
@@ -503,20 +506,22 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   pushes: their level for the player (key moments, the default; everything; results only; off) says
   what reaches the phone, and only key moments make a sound. Each game is one notification on the
   phone, replaced as moments come with the story so far underneath, whichever followed players are
-  in it; "Mute this game" stops it. A game under several fixtures (a chess board is one of each player's)
+  in it (two teammates' same play, "TenZ and zekken: Sentinels win 2–0", is one line); "Mute this game" stops it. A game under several fixtures (a chess board is one of each player's)
   is one game too, its fixtures found by the players on it (`Sport.board_players`): one notification all
   through a mini-match, one Android live card and one mute, and a fan who follows both players hears each
   moment once, from the side it went toward (`Found.voice`), where that side's fixture is being polled to
   say it (else from both: twice beats never), and late from the other side should it never say it. A goal VAR rules out is corrected on that notification, for the
   fans who were sent it, and told again if the source shows it again (a goal the source credits to
-  another player instead is left as it was).
+  another player instead is left as it was). A game called off and set again for later under the same fixture (a
+  match abandoned and replayed) is told afresh, its line-up and start too, and nothing of the game called off is
+  taken back in it (`notify.editions`).
   Sound is rationed (once every 3 minutes a game, 6 times an hour a phone) except for the biggest
   moments. `sports_follow/notify.py` claims each batch once, logs every
   push (`notification`), sends it to each device at once (by Web Push with VAPID to browsers, by FCM to
   the Android app, `fcm.py`), and the tick sweeps up any batch a restart dropped. Devices that took their last
   push go by threads of their own, apart from new and failing ones, and each push service gets 2 s to connect, so
   a device that never answers holds up no other fan's alerts; push addresses must be a known service's own, and
-  one network turns notifications on for only so many new devices a day. Quiet hours are per device and make notifications arrive without a sound or vibration (on Android still on the lock screen, so a phone set to wake its screen for notifications may light it).
+  one network turns notifications on for only so many new devices a day. Quiet hours are per device and make notifications arrive without a sound or vibration (on Android still on the lock screen, so a phone set to wake its screen for notifications may light it); one that arrived silent on every device doesn't count toward the hour's sound.
   With the app open and in front, a moment shows as an in-app toast instead. The Alerts tab's Latest
   list shows every moment of a fan's players, pushed or not, with what's new counted on the tab.
   `python -m sports_follow.notify stats` shows what was sent and how much was opened, by kind.
@@ -646,7 +651,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`Provider.budgets`), so the usage report finds it through `adapters.KNOWN`. Before each request it
   sends it takes one; it reports what the source says is left and its 429s, which pause every process.
   The research agent's `fetch_url` spends the same budget when it reads a source's API (`Budget.urls`).
-  Counts are kept in Redis, so the API and the worker spend from one allowance. Every request is in a
+  Counts are kept in Redis, so the API and the worker spend from one allowance. A minute's allowance (a
+  rate limit) is counted over the last minute, whenever it began, so a burst across a minute's edge can't
+  send twice it; an hour's or a day's from its start, as the source resets it. Every request is in a
   lane, set once where the work starts: `live` (polls), `fan` (every API request: search, previews,
   following), `refresh`, `history`, `import` and `feed` (the curator's). The background lanes stop at the reserve; a fan loop
   stops at its share and is logged, so live games keep the rest of the reserve. `python -m sports_follow.usage` shows each
@@ -907,12 +914,16 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   no restart: it turns sports (each esports game on its own) and sources off and on, sets what each source may spend (its allowance a
   minute, an hour or a day, as a new plan gives; the margin; the reserve for live games and fans; the
   fans' share; the pause after a 429) next to what was spent, by lane, and looks after accounts (find
-  one by address, see who they follow and their devices, sign them out everywhere, block them from
-  signing in, delete them). What it changes is rows in `control` (`sports_follow/controls.py`), which
+  one by address, see the players, teams and games they follow, their calls and devices, sign them out everywhere,
+  block them from signing in, delete them) and clips (those fans reported first: hide one, put it back or take it
+  down; revoke a publishing key, hiding its clips too if it leaked). A change of a source's allowance made from a
+  view that's since gone stale (another tab saved one) is refused, and the panel shows the newer one. What it changes is rows in `control` (`sports_follow/controls.py`), which
   every process reads again every 10 seconds; `sports.ENABLED`, `adapters.ADAPTERS` and the source
   budgets follow them. A sport turned off while its games are on is safe: the next tick puts them off
   (`structured.put_off`: no longer polled, nor LIVE on cards or phones), and once it's on again its
-  players' and teams' games are read at the next tick, which brings each back as its source has it.
+  players' and teams' games are read at the next tick, which brings each back as its source has it. One that
+  polling comes back to (a worker down for days too) only after it's over, past the longest its sport's games run
+  and half a day more (`Sport.over_by`: 12 hours, a Test's six days), tells nothing: its result is old news.
   The server's settings stay the ceiling: a sport `SPORTS_FOLLOW_SPORTS` leaves out, or a source
   `SPORTS_FOLLOW_SOURCES` leaves out or without its token, can't be turned on there. It opens
   with a password of its own, not a fan's account, and a 6-digit code from an authenticator app (TOTP,
@@ -1217,8 +1228,10 @@ needs a new app build, not only new JavaScript. Removing chess removes the modul
 shared on WhatsApp, a campaign's link in a launch post. The app claims the addresses it has a page for,
 which `mobile/app.config.ts` reads from its routes (`mobile/src/app`): `/`, `/player/…`, `/match/…`,
 `/search` and the rest, and any one-word address for a campaign, capitals and all, since Android matches a
-path as it's typed (Android 12 and later; older phones open campaigns in the browser). The admin panel's `/admin` is one-word too, so a tapped link to it opens the
-app's "Not found"; typed into Chrome, it stays there. Android trusts the claim only once
+path as it's typed (Android 12 and later; older phones open campaigns in the browser). Not the admin panel's
+`/admin`, which is one-word too but the app has no page for: `WEB_ONLY` in `mobile/links.js` lists such
+addresses, and the campaigns' patterns are spelled out around them (Android's can't say "but not"); a new one
+needs a new app build. Android trusts the claim only once
 `https://stann.in/.well-known/assetlinks.json` names the package and the SHA-256 fingerprint of the
 certificate that signed the installed app: on the server, `SPORTS_FOLLOW_ANDROID_PACKAGE=io.slam.app` and
 `SPORTS_FOLLOW_ANDROID_CERT_SHA256` with the upload key's and Play App Signing's fingerprints, comma
@@ -1255,7 +1268,8 @@ the app draws itself (designs: https://claude.ai/artifact/6YxZ16GcGD4zSMNaJLpwX9
 - **A live card** for each game the fan follows while it's on (`sports_follow/livecards.py`): its board, how far
   along it is and the fan's own players in it, sent after a poll that changed it (at once for the score, else at
   most every 20 s, and again every 10 minutes when nothing has, as the phone takes down a card nothing has come
-  for in 20), ongoing and silent, and taken down at the end. Cards aren't collapsible FCM messages: FCM lets a
+  for in 20), ongoing and silent, and taken down at the end, and overnight (a Test at stumps: `Sport.paused`) till play
+  resumes. Cards aren't collapsible FCM messages: FCM lets a
   phone have a burst of 20 of those, then one every 3 minutes, and a moment would wait behind them. On an Android 16 phone that allows it, a live
   card is a Live Update instead: first on the lock screen, with the score in the status bar. Alerts' Settings has
   a switch for them (Live scores), and each card a Stop button; the phone tells the server either, which then

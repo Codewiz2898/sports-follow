@@ -362,7 +362,7 @@ export interface PhotoCredit { name: string; credit: string; page: string; autho
 export interface Credits { data: Credit[]; also: Credit[]; photos?: PhotoCredit[]; software: Credit[]; notices: string[] }
 
 /** Who this device is signed in as (GET /api/me/account; sports_follow/accounts.py). */
-export interface Account { signed_in: true; email: string; google: boolean; created_at: string; players_added?: number }
+export interface Account { signed_in: true; email: string; google: boolean; created_at: string; players_added?: number; teams_dropped?: number }
 export type Me = Account | { signed_in: false; reason?: 'signed_out' }
 /** What this server offers (GET /api/config). */
 // research: false when the server runs without the research agent: pages come from live sources alone.

@@ -36,8 +36,8 @@ running sport lists it.
 Its reads are the first when it was found, then a re-read every few hours while it's under two days old, then the
 weekly check: how fast it's watched lately (between the last two) says whether an older one is evergreen. A channel's trust is high when a running sport lists it, lower for one no sport lists any more,
 or what the admin panel sets for it (controls.channel_trust: 0 hides it). Signed-in fans reporting its
-videos, or saying they aren't about the player, lower a default trust, down to half of it at most; an
-admin's setting stands as it is.
+videos, or saying they aren't about the player, lower a default trust (each fan once, however many of its videos they
+reported), down to half of it at most; an admin's setting stands as it is.
 
 `python -m sports_follow.curator rescore [--rejudge]` works every score out again from what's stored, and
 with --rejudge asks the judge again first: tune the weights or the prompt without fetching anything.
@@ -89,10 +89,11 @@ MENTION = 0.6  # a share that only mentions the player, served only when an admi
 TEAM = 0.8  # a share about the player's team (found as their team's: candidates.py) is worth this much of one about them
 LISTED, UNLISTED = 1.0, 0.5  # a channel's trust: a running sport lists it, or none does now
 PIN = 10.0  # added to a pinned row's score: ahead of everything the numbers rank
-# Signed-in fans' feedback on a channel's items lowers its default trust: each report counts this much, each "not
-# about the player" half that ("not interested" is taste, not the channel's fault). The trust is divided by 1 + their
-# sum / FEEDBACK_SCALE, and never below FEEDBACK_FLOOR of it: four reports halve it, and more can't sink a channel
-# by themselves (the admin panel can). Anonymous fans' words hide items from them alone: a new cookie is free.
+# Signed-in fans' feedback on a channel's items lowers its default trust: a fan's report counts this much, their "not
+# about the player" half that ("not interested" is taste, not the channel's fault), and each fan once a channel, by the
+# strongest they said of any of its items: one fan reporting every video of it is one report. The trust is divided by
+# 1 + their sum / FEEDBACK_SCALE, and never below FEEDBACK_FLOOR of it: four fans' reports halve it, and more can't
+# sink a channel by themselves (the admin panel can). Anonymous fans' words hide items from them alone: a new cookie is free.
 FEEDBACK = {"report": 1.0, "not_about_player": 0.5}
 FEEDBACK_SCALE = 4.0
 FEEDBACK_FLOOR = 0.5
@@ -263,13 +264,18 @@ def listed_channels() -> set[str]:
     return {c for sport in sports.ENABLED for c in (*sport.video_channels, *sport.news_feeds)}
 
 
-def feedback_weight(rows: Iterable[tuple[str, str]], channel_of: dict[str, str]) -> dict[str, float]:
-    """Each channel's fans' feedback, weighed (FEEDBACK), from (item id, verdict) rows and which channel each item is from."""
-    out: dict[str, float] = {}
-    for item, verdict in rows:
+def feedback_weight(rows: Iterable[tuple[str, str, str]], channel_of: dict[str, str]) -> dict[str, float]:
+    """Each channel's fans' feedback, weighed (FEEDBACK), from (fan, item id, verdict) rows and which channel each item
+    is from: each fan once a channel, by the strongest word they said of any of its items (a video they reported under
+    two players, or three of its videos, is one report)."""
+    strongest: dict[tuple[str, str], float] = {}
+    for fan, item, verdict in rows:
         channel = channel_of.get(item)
         if channel:
-            out[channel] = out.get(channel, 0.0) + FEEDBACK.get(verdict, 0.0)
+            strongest[(fan, channel)] = max(strongest.get((fan, channel), 0.0), FEEDBACK.get(verdict, 0.0))
+    out: dict[str, float] = {}
+    for (_, channel), weight in strongest.items():
+        out[channel] = out.get(channel, 0.0) + weight
     return out
 
 
@@ -287,12 +293,12 @@ def channel_feedback(session: Session) -> dict[str, float]:
     few rows a fan), matched to the channels of the candidates' addresses."""
     from .feed import item_id  # feed.py reads this module's helpers; this one of its, here only
 
-    said = session.execute(select(FeedFeedback.item_id, FeedFeedback.verdict)
+    said = session.execute(select(FeedFeedback.fan_id, FeedFeedback.item_id, FeedFeedback.verdict)
                            .where(FeedFeedback.fan_id.startswith(FAN_PREFIX), FeedFeedback.verdict.in_(FEEDBACK))).all()  # fmt: skip
     if not said:
         return {}
     channel_of = {item_id(url): str(cid or "") for url, cid in session.execute(select(FeedCandidate.url, FeedCandidate.candidate["channel_id"].astext))}
-    return feedback_weight(((i, v) for i, v in said), channel_of)
+    return feedback_weight(((f, i, v) for f, i, v in said), channel_of)
 
 
 # ---------------------------------------------------------------- moments

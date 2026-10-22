@@ -18,7 +18,7 @@ import re
 import secrets
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, MutableMapping
+from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -41,7 +41,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
+from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, controls, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, API_DOCS, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_LOOKUPS_PER_ADDRESS, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE
@@ -76,6 +76,9 @@ streaming: Counter[str] = Counter()  # this process's open streams: by "fan:<id>
 async def lifespan(app: FastAPI):
     cookie_key()  # a server without its cookie key stops here, not on a fan's first request
     metrics.seed()
+    # The admin panel's switches, read once before any request: a route asking for them first (sports.on) would wait
+    # on the database on the event loop, holding every other request meanwhile.
+    await asyncio.to_thread(controls.current)
     state["arq"] = await create_pool(RedisSettings.from_dsn(REDIS_URL))
     state["redis"] = aredis.Redis.from_pool(aredis.BlockingConnectionPool.from_url(REDIS_URL, decode_responses=True, max_connections=REDIS_CONNECTIONS, timeout=10))
     state["streams"] = aredis.Redis.from_url(REDIS_URL, decode_responses=True, max_connections=STREAMS_PER_PROCESS)  # each stream's pubsub
@@ -130,6 +133,65 @@ class SameOriginWrites:
         await self.app(scope, receive, send)
 
 
+NUL_REFUSED = "That has a character in it (NUL) that can't be kept."
+
+
+def _holds_nul(value: Any) -> bool:
+    """Is there a NUL in any string of a JSON value, a key or a value, however deep?"""
+    left = [value]
+    while left:
+        item = left.pop()
+        if isinstance(item, str):
+            if "\x00" in item:
+                return True
+        elif isinstance(item, dict):
+            left.extend(item.keys())
+            left.extend(item.values())
+        elif isinstance(item, list):
+            left.extend(item)
+    return False
+
+
+class NoNul:
+    """A NUL character in a request's text (%00 in any path or query, \\u0000 in an API write's JSON body) is refused
+    with a 400 before any route sees it. Postgres can't keep one, so a sign-in address, a clip's address or a league member's
+    name with one in it failed in the query, a server error anyone could raise at will (BUG-096). A write's body is
+    read whole here (the API's are small JSON) and handed on as it came."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        refused = JSONResponse({"detail": NUL_REFUSED}, status_code=400)
+        # Any address's path or query, the app's pages too: a page's file is looked up by its address (spa).
+        if "\x00" in scope["path"] or b"%00" in scope["query_string"]:
+            return await refused(scope, receive, send)
+        if not scope["path"].startswith("/api/") or scope["method"] not in UNSAFE:
+            return await self.app(scope, receive, send)
+        came: list[MutableMapping[str, Any]] = []
+        while True:
+            message = await receive()
+            came.append(message)
+            if message["type"] != "http.request" or not message.get("more_body"):
+                break
+        body = b"".join(m.get("body", b"") for m in came if m["type"] == "http.request")
+        if b"\\u0000" in body:  # the only way JSON carries a NUL; the body may still spell one out as text ("\\u0000")
+            try:
+                held = _holds_nul(json.loads(body))
+            except (ValueError, RecursionError):
+                held = False  # not JSON: the route says so
+            if held:
+                return await refused(scope, receive, send)
+
+        async def again() -> MutableMapping[str, Any]:
+            return came.pop(0) if came else await receive()
+
+        await self.app(scope, again, send)
+
+
+app.add_middleware(NoNul)
 app.add_middleware(SameOriginWrites)
 
 
@@ -384,6 +446,21 @@ def fan_id(request: Request, response: Response, signed_in: accounts.Signed | No
     return fan
 
 
+async def _tell_devices(fan: str = Depends(fan_id)) -> AsyncIterator[None]:
+    """For a route that changes what the fan follows, or a level (TellsDevices): once it has saved the change, say
+    so on the fan's own channel, and each of their open streams sends their list again (my_stream), so a follow made
+    on their phone reaches the app open on their laptop (BUG-165). A change refused (an error) says nothing; a change
+    saved stands if Redis can't say so: other devices catch up when their streams connect again."""
+    yield
+    try:
+        await state["redis"].publish(bus.follows_channel(fan), "{}")
+    except Exception as exc:  # noqa: BLE001 — telling the other devices is a courtesy
+        log.warning("follows: couldn't tell the fan's other devices: %s", exc)
+
+
+TellsDevices = [Depends(_tell_devices, scope="function")]  # its word goes once the route's work is done, before the answer
+
+
 def _fan(request: Request, response: Response, signed_in: accounts.Signed | None, make: bool | None = None) -> str:
     """The fan, as fan_id says. A device without a fan of its own keeps a new one (its cookie) only from a request
     that `make`s one: by default a write, not a read. A read is answered as a new fan who owns nothing, for that
@@ -557,12 +634,15 @@ async def app_picture() -> Response:
 
 
 async def _following(fan: str) -> list[dict[str, Any]]:
-    """The fan's players as the app lists them: each card's summary and the fan's alert level."""
+    """The fan's players as the app lists them: each card's summary and the fan's alert level. Not a turned-off
+    sport's: the follow stays, out of sight, for when it's back (as teams.mine). Their hot copies are read in one
+    request (each stream's opening, and its every reconnect, reads them all: BUG-269)."""
     rows = await in_db(lambda db: db.execute(select(Follow.player_id, Follow.alert_rules).where(Follow.fan_id == fan).order_by(Follow.created_at)).all())
+    raws = await state["redis"].mget([bus.card_key(player_id) for player_id, _ in rows]) if rows else []
     out = []
-    for player_id, rules in rows:
-        card = await read_card(player_id)
-        if card:
+    for (player_id, rules), raw in zip(rows, raws):
+        card = json.loads(raw) if raw else await read_card(player_id)  # one Redis lost: from Postgres
+        if card and sports.on((card.get("player") or {}).get("sport")):
             out.append({**_summary(card), "alerts": (rules or {}).get("level", moments.DEFAULT_LEVEL)})
     return out
 
@@ -638,7 +718,7 @@ async def match_page(system: str, game: str, fan: str = Depends(fan_id)) -> dict
     return {**page, "refreshing": ask}  # a read is on its way, or was asked for within the minute
 
 
-@app.put("/api/match/{system}/{game}/follow")
+@app.put("/api/match/{system}/{game}/follow", dependencies=TellsDevices)
 def follow_match(system: str, game: str, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Follow a game by itself (matches.py): its key moments, from both sides, reach this fan until it ends.
     A game no source has named here is a 404, so a made-up address makes no follow and no poll; one that's
@@ -652,7 +732,7 @@ def follow_match(system: str, game: str, fan: str = Depends(fan_id), db: Session
     return {"following": True, "event_id": event_id}
 
 
-@app.delete("/api/match/{system}/{game}/follow")
+@app.delete("/api/match/{system}/{game}/follow", dependencies=TellsDevices)
 def unfollow_match(system: str, game: str, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Stop following a game by itself: nothing more of it is sent to this fan (their players in it still are)."""
     if system in KNOWN:
@@ -668,7 +748,7 @@ def my_matches(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dic
     return {"matches": matches.mine(db, fan)}
 
 
-@app.delete("/api/me/matches/{event_id}")
+@app.delete("/api/me/matches/{event_id}", dependencies=TellsDevices)
 def unfollow_match_event(event_id: RowId, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Stop following a game by the event the follow is on (the match page's follow state, or /api/me/matches):
     whichever of a game's addresses the follow was made at, or has moved to (a chess board's)."""
@@ -677,7 +757,7 @@ def unfollow_match_event(event_id: RowId, fan: str = Depends(fan_id), db: Sessio
     return {"event_id": event_id, "following": False}
 
 
-@app.put("/api/me/matches/{event_id}/alerts")
+@app.put("/api/me/matches/{event_id}/alerts", dependencies=TellsDevices)
 def set_match_alerts(event_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Which of a followed game's own moments the fan is told about: everything, key, results or off, as for a player."""
     level = body.get("level")
@@ -696,8 +776,11 @@ def set_match_alerts(event_id: RowId, body: dict = Body(...), fan: str = Depends
 LeagueCode = Annotated[str, InPath(min_length=4, max_length=16, pattern=r"^[A-Za-z0-9]+$")]
 LEAGUES_MADE_PER_HOUR = 5  # leagues one fan makes in an hour
 INVITES_PER_HOUR = 60  # invite pages one fan opens, and leagues they join, in an hour: a code can't be guessed by trying them all
-PICKS_PER_ADDRESS = 300  # picks from one client address in an hour: new fans from one place can't stuff a split
+INVITES_PER_ADDRESS = 300  # invite pages opened from one client address in an hour: a request with no cookie is a new fan each time
+INVITES_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
+PICKS_PER_ADDRESS = 300  # picks from one client address in an hour, by fans without an account: new fans from one place can't stuff a split
 PICKS_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
+PICKS_PER_ACCOUNT = 300  # a signed-in fan's in an hour, wherever from: fans behind one carrier address don't use up each other's
 # Fans without an account whose picks on one question count (Pick.counted), from one client address: any device gets
 # a fan cookie (spa), so a split is stuffed only from as many addresses as the picks it would add. A home or a phone
 # network sharing one address has this many fans' calls in a game's split; the rest are theirs, and scored.
@@ -715,7 +798,8 @@ async def make_pick(request: Request, question_id: RowId, body: dict = Body(...)
                     signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
     """Call a game (or a map): this fan's answer to one of its questions, or a new one in place of theirs, while
     it's open. No account needed. Answers with the question as the app shows it, how fans split now included.
-    A question closed is a 409, an answer it doesn't offer a 400; PICKS_PER_ADDRESS an hour from one address.
+    A question closed is a 409, an answer it doesn't offer a 400; PICKS_PER_ADDRESS an hour from one address, or for
+    a signed-in fan PICKS_PER_ACCOUNT an hour of their own (a phone network may put many fans behind one address).
     It counts in the split and in what right picks score from an account, or a fan whose cookie came with it, up to
     COUNTED_PER_ADDRESS of those on a question from one address (_counted_here): a fan this request made up (no
     cookie), or past that, has their pick, but it moves nobody else's numbers (predictions.pick)."""
@@ -723,8 +807,12 @@ async def make_pick(request: Request, question_id: RowId, body: dict = Body(...)
     if not isinstance(option, str) or not 0 < len(option) <= 64:
         raise HTTPException(400, "option is one of the question's answers")
     address = client_address(request)
-    await _take(f"picks:{address or 'unknown'}:{int(time.time() // 3600)}", PICKS_PER_ADDRESS if address else PICKS_UNKNOWN_ADDRESS, 7200,
-                "That's a lot of picks from your network. Try again in a while.")
+    hour = int(time.time() // 3600)
+    if signed is not None:
+        await _take(f"picks:fan:{fan}:{hour}", PICKS_PER_ACCOUNT, 7200, "That's a lot of picks for one hour. Try again in a while.")
+    else:
+        await _take(f"picks:{address or 'unknown'}:{hour}", PICKS_PER_ADDRESS if address else PICKS_UNKNOWN_ADDRESS, 7200,
+                    "That's a lot of picks from your network. Try again in a while.")
 
     counted = signed is not None or (_cookie_fan(request) == fan and await _counted_here(question_id, address, fan))
 
@@ -808,14 +896,20 @@ def league_page(code: LeagueCode, fan: str = Depends(fan_id), db: Session = Depe
 
 
 @app.get("/api/leagues/{code}/invite")
-async def league_invite(code: LeagueCode, fan: str = Depends(fan_id)) -> dict[str, Any]:
+async def league_invite(request: Request, code: LeagueCode, fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
     """What an invite link shows anyone: the league's name, how many are in it, who made it, and whether this fan's
-    in it already. INVITES_PER_HOUR a fan an hour."""
-    await _take(f"leagues:invites:{fan}:{int(time.time() // 3600)}", INVITES_PER_HOUR, 7200, "That's a lot of invites for one hour. Try again later.")
+    in it already. INVITES_PER_HOUR a fan an hour, and INVITES_PER_ADDRESS from one address (a request with no cookie
+    is a new fan each time). Counted as opened only for an account, or a fan whose cookie came with it."""
+    hour = int(time.time() // 3600)
+    address = client_address(request)
+    await _take(f"leagues:invites:{fan}:{hour}", INVITES_PER_HOUR, 7200, "That's a lot of invites for one hour. Try again later.")
+    await _take(f"leagues:invites-from:{address or 'unknown'}:{hour}", INVITES_PER_ADDRESS if address else INVITES_UNKNOWN_ADDRESS, 7200,
+                "That's a lot of invites from your network. Try again later.")
+    counted = signed is not None or _cookie_fan(request) == fan
 
     def look(db: Session) -> dict[str, Any]:
         try:
-            return predictions.invite(db, code, fan)
+            return predictions.invite(db, code, fan, counted)
         except predictions.Refused as refused:
             raise _refused(db, refused)
 
@@ -875,7 +969,10 @@ async def team_page(team_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any
     shown, asking = await in_db(view)
     if shown is None:
         raise HTTPException(404, "No such team.")
-    return {**shown, "refreshing": asking is not None and await _read_team(asking, team_id)}
+    refreshing = asking is not None and await _read_team(asking, team_id)
+    if asking is not None and not refreshing:
+        await asyncio.to_thread(teams.look_later, team_id)  # no room this minute: the next look asks again
+    return {**shown, "refreshing": refreshing}
 
 
 async def _read_team(system: str, team_id: int) -> bool:
@@ -893,7 +990,7 @@ async def _read_team(system: str, team_id: int) -> bool:
         return False
 
 
-@app.put("/api/teams/{team_id}/follow")
+@app.put("/api/teams/{team_id}/follow", dependencies=TellsDevices)
 async def follow_team(team_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any]:
     """Follow a team (teams.py): each of its games' moments, from both sides, reach this fan by their level, and
     its results from its side. No such team, or one of a sport turned off, is a 404; one whose source isn't
@@ -913,7 +1010,7 @@ async def follow_team(team_id: RowId, fan: str = Depends(fan_id)) -> dict[str, A
     return {"team_id": team_id, "following": True}
 
 
-@app.delete("/api/teams/{team_id}/follow")
+@app.delete("/api/teams/{team_id}/follow", dependencies=TellsDevices)
 def unfollow_team(team_id: RowId, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Stop following a team: nothing more of its games is sent to this fan (their players in them still are, and
     a game they follow by itself)."""
@@ -922,7 +1019,7 @@ def unfollow_team(team_id: RowId, fan: str = Depends(fan_id), db: Session = Depe
     return {"team_id": team_id, "following": False}
 
 
-@app.put("/api/teams/{team_id}/alerts")
+@app.put("/api/teams/{team_id}/alerts", dependencies=TellsDevices)
 def set_team_alerts(team_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Which of a followed team's games' moments the fan is told about: everything, key, results or off, as for a player."""
     level = body.get("level")
@@ -1026,7 +1123,7 @@ async def _follow_row(row: dict[str, Any], fan: str, address: str | None, turns:
         return None
 
 
-@app.post("/api/campaigns/{slug}/follow")
+@app.post("/api/campaigns/{slug}/follow", dependencies=TellsDevices)
 async def campaign_follow(request: Request, slug: str, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
     """Follow a whole team in one tap ({"team": its id}: every player on its roster), or all of the campaign's
     own players ({"players": true}). Each is an ordinary follow with key alerts, of a player a running source
@@ -1061,21 +1158,43 @@ async def campaign_picture(slug: str) -> Response:
 
 # ---------------------------------------------------------------- where fans come from
 
-TAG = re.compile(r"[A-Za-z0-9._~-]{1,60}")  # s=share, utm_source=whatsapp: a link's tags, as a post writes them
+TAG_MOST = 60  # a link's tag, in characters (FanSource's columns)
+SOURCES_PER_ADDRESS = 100  # visits kept a UTC day from one client address: a script can't fill a campaign's numbers
+SOURCES_UNKNOWN_ADDRESS = 1000  # a day, from every client without a public address together
+
+
+def _tag(value: Any) -> str | None:
+    """A link's tag as a post writes it (s=share, utm_source=whatsapp, utm_campaign=Gukesh v Sindarov): any printable
+    text, its spaces trimmed and made single, up to TAG_MOST characters; None for anything else."""
+    tag = " ".join(value.split()) if isinstance(value, str) else ""
+    return tag if 0 < len(tag) <= TAG_MOST and tag.isprintable() else None
 
 
 @app.post("/api/me/source")
-def visit_source(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
+async def visit_source(request: Request, body: dict = Body(...), fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of)) -> dict[str, bool]:
     """Where this fan came from: the tags on the first link they opened (s=, utm_source, utm_medium,
     utm_campaign) and its page, kept once (FanSource); a later link's are not. A tag in any other shape is
-    left out, and a visit with none isn't kept."""
-    tags = {key: value for key in ("s", "utm_source", "utm_medium", "utm_campaign") if isinstance(value := body.get(key), str) and TAG.fullmatch(value)}
+    left out (_tag), and a visit with none isn't kept. Nor is one from a fan the request itself made up (no
+    cookie: the app's page, and the Android app's first request, make the device's fan before it tells this),
+    nor past SOURCES_PER_ADDRESS a day from one address: a script can't fill the launch numbers."""
+    tags = {key: tag for key in ("s", "utm_source", "utm_medium", "utm_campaign") if (tag := _tag(body.get(key)))}
     landing = body.get("path")
     if not tags or not isinstance(landing, str) or not landing.startswith("/") or len(landing) > 200 or not landing.isprintable():
         return {"ok": True}
+    if signed is None and _cookie_fan(request) != fan:
+        return {"ok": True}
+    address = client_address(request)
+    key = f"sources:{address or 'unknown'}:{int(time.time() // DAY)}"
+    used = await state["redis"].incr(key)
+    await state["redis"].expire(key, 2 * DAY)
+    if used > (SOURCES_PER_ADDRESS if address else SOURCES_UNKNOWN_ADDRESS):
+        return {"ok": True}
     row = {"fan_id": fan, "tag": tags.get("s"), "utm_source": tags.get("utm_source"), "utm_medium": tags.get("utm_medium"), "utm_campaign": tags.get("utm_campaign"), "landing": landing}
-    db.execute(insert(FanSource).values(**row).on_conflict_do_nothing(index_elements=["fan_id"]))
-    db.commit()
+
+    def keep(db: Session) -> None:
+        db.execute(insert(FanSource).values(**row).on_conflict_do_nothing(index_elements=["fan_id"]))
+
+    await in_db(keep)
     return {"ok": True}
 
 
@@ -1164,7 +1283,8 @@ def _registry_athlete(db: Session, body: dict) -> registry.Person | None:
     qid, sport = str(body.get("qid") or ""), str(body.get("sport") or "").lower()
     if not re.fullmatch(r"Q[0-9]{1,12}", qid) or len(sport) > 60 or not sport.isprintable() or not sports.on(sport):
         return None
-    athlete = registry.get(db, qid, sport or None)
+    # Of the sports that run: with no sport given, a row of a turned-off one isn't taken for them.
+    athlete = registry.get(db, qid, sport or None, only_running=True)
     return registry.Person.of(athlete) if athlete else None
 
 
@@ -1252,6 +1372,8 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
                 adapter, ref = found
                 if await in_db(registry.removed, structured.sport_name(adapter, ref), ref):
                     raise HTTPException(404, f"That athlete isn't on {APP_NAME}.")  # another registry row of someone removed
+                if not sports.on(structured.sport_name(adapter, ref)):
+                    raise HTTPException(404, "No such athlete.")  # an esports pro's game turned off, though their source runs
                 player_id, created = await asyncio.to_thread(pipeline.start_from_pick, adapter, ref)
     else:
         system = str(body.get("system") or "")
@@ -1273,6 +1395,9 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
         if await in_db(registry.removed, structured.sport_name(adapter, ref), ref):
             # Removed, in a source that had no id for them then: their name and birth date say who they are.
             raise HTTPException(404, f"That athlete isn't on {APP_NAME}.")
+        if not sports.on(structured.sport_name(adapter, ref)):
+            # A source of several games runs while any of them does: a pro of one turned off isn't followed.
+            raise HTTPException(404, "No such athlete.")
         player_id, created = await asyncio.to_thread(pipeline.start_from_pick, adapter, ref)
 
     def save(db: Session) -> None:
@@ -1295,7 +1420,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
     return player_id
 
 
-@app.post("/api/follows")
+@app.post("/api/follows", dependencies=TellsDevices)
 async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
     from .config import RESEARCH
 
@@ -1309,7 +1434,7 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
         if not isinstance(wanted, int) or isinstance(wanted, bool):
             raise HTTPException(400, "player_id must be a whole number.")
         player = await in_db(lambda db: db.get(Player, wanted)) if 1 <= wanted <= MAX_ID else None
-        if player is None:
+        if player is None or not sports.on(player.sport):  # a turned-off sport's isn't offered, by id or otherwise
             raise HTTPException(404, "No such player.")
         known = await in_db(lambda db: db.get(PlayerCard, player.id))
         query = None
@@ -1371,7 +1496,7 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
     return {"player_id": player_id, "card": card}
 
 
-@app.put("/api/follows/{player_id}/alerts")
+@app.put("/api/follows/{player_id}/alerts", dependencies=TellsDevices)
 def set_alerts(player_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Which of this player's moments the fan is told about: everything, key, results or off."""
     level = body.get("level")
@@ -1440,7 +1565,8 @@ async def _forget_sessions(token_hashes: list[str]) -> None:
 
 async def _sign_in(request: Request, response: Response, account_id: int, signed: accounts.Signed | None) -> dict[str, Any]:
     """Sign this device in to the account, bringing what its anonymous fan had (accounts.adopt). A
-    session this device already had (signing in again, or as someone else) ends."""
+    session this device already had (signing in again, or as someone else) ends. The answer says how many
+    players came, and how many of the device's teams didn't fit in the account (teams.MAX), so the fan is told."""
     anon = await asyncio.to_thread(_cookie_fan, request)
     done = await in_db(accounts.sign_in, account_id, anon, signed.session_id if signed else None)
     if signed:
@@ -1457,7 +1583,7 @@ async def _sign_in(request: Request, response: Response, account_id: int, signed
         await enqueue("adopt_stragglers", anon, account_id, done.session_id, _defer_by=60)
     _set_session(request, response, done.token)
     response.delete_cookie(FAN_COOKIE, httponly=True, samesite="lax", secure=_secure(request))
-    return {**(await in_db(accounts.describe, account_id) or {}), "players_added": done.players}
+    return {**(await in_db(accounts.describe, account_id) or {}), "players_added": done.players, "teams_dropped": done.teams_dropped}
 
 
 @app.get("/api/me/account")
@@ -1525,10 +1651,8 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
         # No code went out: asking again within the minute mustn't answer "the code sent then is the one".
         await state["redis"].delete(f"auth-wait:{who}")
         raise
-    # After the limits, so a loop of addresses can't learn quickly which accounts are blocked.
-    if await in_db(accounts.blocked, email):
-        await state["redis"].delete(f"auth-wait:{who}")
-        raise HTTPException(403, BLOCKED)
+    # A blocked account's address is answered as any other, so asking says nothing of whether one is (BUG-102): its code
+    # goes out, and only whoever holds the inbox hears it's blocked, when the code signs nobody in (email_verify).
     code = f"{secrets.randbelow(10**6):06d}"
     # A new code: its tries are counted afresh, and the network that asked for it keeps its own (_code_tries).
     await state["redis"].set(f"auth-code:{who}", mac("code", f"{email}:{code}"), ex=CODE_LIFE)
@@ -1564,7 +1688,10 @@ async def email_verify(request: Request, response: Response, body: dict = Body(.
         await state["redis"].incr(fails)
         await state["redis"].expire(fails, 2 * DAY)
         raise HTTPException(400, "That code isn't right. Check the email and try again.")
-    await state["redis"].delete(f"auth-code:{who}", f"auth-asked:{who}", f"auth-wait:{who}", tries, f"{tries}:{network}")
+    # Used up as it's checked: of requests that bring it at once (a double tap), one signs in (BUG-095).
+    if not await state["redis"].delete(f"auth-code:{who}"):
+        raise HTTPException(400, "That code has run out. Ask for a new one.")
+    await state["redis"].delete(f"auth-asked:{who}", f"auth-wait:{who}", tries, f"{tries}:{network}")
     if await in_db(accounts.blocked, email):
         raise HTTPException(403, BLOCKED)
     account_id = await in_db(accounts.find_or_create, email)
@@ -1623,7 +1750,8 @@ async def google_callback(request: Request, state: str = "", code: str = "", err
         return back("/account?error=blocked")
     response = back("/account")
     done = await _sign_in(request, response, account_id, signed)
-    response.headers["location"] = f"/account?welcome={done['players_added']}"
+    dropped = f"&teams_dropped={done['teams_dropped']}" if done["teams_dropped"] else ""
+    response.headers["location"] = f"/account?welcome={done['players_added']}{dropped}"
     return response
 
 
@@ -1787,9 +1915,14 @@ def admin_clips(status: str | None = None, db: Session = Depends(get_db)) -> dic
 
 @app.post("/api/admin/clips/{slug}", dependencies=AdminOnly)
 def admin_clip(slug: str, body: dict[str, Any] = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Hide a clip ({"hidden": true}), or put a hidden one back ({"hidden": false}; its reports start again)."""
+    """Hide a clip ({"hidden": true}: off the app, and its files off their public address), or put a hidden one back
+    ({"hidden": false}; its reports start again)."""
     hidden = _switch(body, "hidden")
-    clip = clips.set_hidden(db, slug, hidden)
+    try:
+        clip = clips.set_hidden(db, slug, hidden)
+    except clips.Refused as refused:
+        db.rollback()
+        raise HTTPException(refused.status, refused.message) from None
     if clip is None:
         raise HTTPException(404, "No live or hidden clip by that id.")
     db.commit()
@@ -1820,11 +1953,20 @@ def admin_new_clip_key(body: dict[str, Any] = Body(...), db: Session = Depends(g
 
 
 @app.delete("/api/admin/clip-keys/{key_id}", status_code=204, dependencies=AdminOnly)
-def admin_revoke_clip_key(key_id: int, db: Session = Depends(get_db)) -> None:
+def admin_revoke_clip_key(key_id: RowId, hide: bool = False, db: Session = Depends(get_db)) -> None:
+    """Revoke a publishing key: it stops at once. ?hide=true hides its live clips too (a key that leaked)."""
     if not clips.revoke(db, key_id):
         raise HTTPException(404, "No such key, or revoked already.")
     db.commit()
     admin_log.info("admin: publishing key %s revoked", key_id)
+    if hide:
+        try:
+            hidden = clips.hide_from(db, key_id)
+        except clips.Refused as refused:
+            db.commit()  # the clips hidden before the bucket failed stay hidden
+            raise HTTPException(refused.status, f"Revoked, but not all its clips are hidden: {refused.message}") from None
+        db.commit()
+        admin_log.info("admin: publishing key %s's %d clips hidden", key_id, hidden)
 
 
 def _switch(body: dict, field: str) -> bool:
@@ -1928,13 +2070,16 @@ def admin_set_source(system: str, body: dict = Body(...)) -> dict[str, Any]:
 @app.put("/api/admin/budgets/{name}", dependencies=AdminOnly)
 def admin_set_budget(name: str, body: dict = Body(...)) -> dict[str, Any]:
     """What a source may spend (admin.checked_limits): its allowance a minute, an hour or a day, the
-    margin never spent, the reserve kept for live games and fans, the fans' share, the pause after a 429."""
+    margin never spent, the reserve kept for live games and fans, the fans' share, the pause after a 429. One
+    changed since the view this change was made from ("based_on") is a 409: the panel shows the newer one."""
     try:
         admin.set_limits(name, body)
     except LookupError:
         raise HTTPException(404, "There's no such allowance.") from None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
+    except admin.Stale:
+        raise HTTPException(409, "These limits were changed since you opened them (in another tab?): here they are now. Change them again if you still want to.") from None
     admin_log.info("admin panel: allowance %s set to %s", name, json.dumps(body, sort_keys=True))
     return admin.sources_view()
 
@@ -1978,6 +2123,20 @@ def admin_feed_layout(body: dict = Body(...)) -> dict[str, Any]:
     return {"layout": admin.layout_view()}
 
 
+@app.put("/api/admin/feed/channels", dependencies=AdminOnly)
+def admin_channel_trust(body: dict = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """How far the Feed trusts a video channel or a publisher's news feed ({"channel": its id or the feed's address,
+    "trust": 1 | 0.7 | 0.4 | 0 | null}); 0 hides its items. In the body, as an address doesn't fit in a path; and before
+    /api/admin/feed/{row_id}, which would take "channels" for a row."""
+    channel = body.get("channel")
+    try:
+        admin.set_channel_trust(channel, body.get("trust"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    admin_log.info("admin panel: feed channel %s trust %s", channel, body.get("trust"))
+    return {"channels": admin.channels_view(db)}
+
+
 @app.put("/api/admin/feed/{row_id}", dependencies=AdminOnly)
 def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[str, Any]:
     """An admin's word on a candidate ({"review": "approved" | "hidden" | "pinned" | null}), over the judge's."""
@@ -1991,16 +2150,6 @@ def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[str, A
     admin_log.info("admin panel: feed candidate %s %s", row_id, said or "review taken back")
     return found
 
-
-@app.put("/api/admin/feed/channels/{channel}", dependencies=AdminOnly)
-def admin_channel_trust(channel: str, body: dict = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
-    """How far the Feed trusts a video channel ({"trust": 1 | 0.7 | 0.4 | 0 | null}); 0 hides its videos."""
-    try:
-        admin.set_channel_trust(channel, body.get("trust"))
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from None
-    admin_log.info("admin panel: feed channel %s trust %s", channel, body.get("trust"))
-    return {"channels": admin.channels_view(db)}
 
 
 @app.get("/api/admin/users", dependencies=AdminOnly)
@@ -2211,7 +2360,9 @@ def register_fcm(body: dict = Body(...), fan: str = Depends(fan_id), signed: acc
 
     The token is the device's alone (no other app, page or person is shown it, and this server never logs
     it), so presenting it is the proof a Web Push subscription's keys are: the app sends it again under
-    whoever it is now, after a sign-in or a lost cookie, and the device moves with it."""
+    whoever it is now, after a lost cookie, and the device moves with it. Not a device signed in to an account,
+    though, which moves into it as it signs in (accounts.adopt) and goes with its session: no other fan takes it,
+    nor does an account take an anonymous fan's device, which then couldn't take it back (BUG-103)."""
     if not fcm.enabled():
         raise HTTPException(503, "Notifications aren't set up on this server yet.")
     token = body.get("token")
@@ -2238,10 +2389,12 @@ def register_fcm(body: dict = Body(...), fan: str = Depends(fan_id), signed: acc
     stmt = stmt.on_conflict_do_update(
         index_elements=["endpoint"],
         set_={"fan_id": fan, "timezone": tz, "quiet_start": start, "quiet_end": end, "failures": 0, "session_id": session_id, **({} if live is None else {"live_cards": live})},
-        where=PushSubscription.transport == "fcm",
+        where=(PushSubscription.transport == "fcm")
+        & ((PushSubscription.fan_id == fan) | (PushSubscription.session_id.is_(None) & stmt.excluded.session_id.is_(None))),
     )
     if db.execute(stmt.returning(PushSubscription.id)).first() is None:
-        raise HTTPException(409, "That device's notifications belong to someone else.")  # a Web Push endpoint by that name: never a token
+        # Another fan's signed-in device, an anonymous fan's for an account, or a Web Push endpoint by that name.
+        raise HTTPException(409, "That device's notifications belong to someone else.")
     notify.trim_devices(db, fan, PushSubscription.endpoint == token, notify.MAX_DEVICES - 1)
     db.commit()
     return {"ok": True, "timezone": tz, "quiet_start": start, "quiet_end": end}
@@ -2522,7 +2675,7 @@ def my_feed_items(
     return found
 
 
-@app.delete("/api/follows/{player_id}")
+@app.delete("/api/follows/{player_id}", dependencies=TellsDevices)
 def unfollow(player_id: RowId, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
     pipeline.unfollow(db, fan, player_id)
     db.commit()  # or a follow sent straight after could find this one still there, and then lose it
@@ -2611,6 +2764,9 @@ async def refresh(player_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any
         raise HTTPException(403, "Follow this player to refresh them.")
     if row.status != "ready":
         return {"queued": False, "reason": "The player's first card is still being built."}
+    if not sports.on(((row.card or {}).get("player") or {}).get("sport")):
+        # Turned off in the admin panel: its source isn't read for it, though it may run for another sport (BUG-176).
+        return {"queued": False, "reason": "This sport is turned off for now, so its players aren't read again."}
     if await in_db(structured.binding, player_id) is not None:
         # A bound player's live score is already polled; a refresh re-reads fixtures and stats.
         if bus.is_locked(f"structured:{player_id}"):
@@ -2740,11 +2896,11 @@ async def athlete_preview(request: Request, system: str, athlete_id: str, league
 # ---------------------------------------------------------------- realtime
 
 
-async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[str, Any]]]], request: Request):
+async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[str, Any]]]], request: Request, again: str | None = None):
     """Every message on the channels, after `first()`: what they cover as it is now, read once
     subscribed so nothing published in between is missed. Each reconnect starts here, so it is how an
-    app catches up. Holds no database connection, and one Redis connection, from the streams' own pool;
-    its route takes its places first (_hold_streams)."""
+    app catches up; a word on the channel `again` sends `first()` again. Holds no database connection, and
+    one Redis connection, from the streams' own pool; its route takes its places first (_hold_streams)."""
     pubsub = state["streams"].pubsub()
     await pubsub.subscribe(*channels)
     try:
@@ -2754,6 +2910,10 @@ async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[s
             msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=HEARTBEAT)
             if msg is None:
                 yield PING
+                continue
+            if again is not None and msg.get("channel") == again:
+                for event in await first():
+                    yield f"data: {json.dumps(event, default=str)}\n\n"
                 continue
             yield f"data: {msg['data']}\n\n"
     finally:
@@ -2819,26 +2979,20 @@ async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingRe
     It opens with what /api/me/following returns, and the games they follow by themselves (/api/me/matches),
     so an app that reconnects (a phone back from the lock screen, a restart) gets every score and result it
     missed; then each followed game's board as it's polled, and its own moments (bus.match_channel): of the games
-    they follow by themselves, and of their teams' games on now or soon (teams.event_ids), with their teams."""
+    they follow by themselves, and of their teams' games on now or soon (teams.event_ids), with their teams.
+    A follow, an unfollow or a level changed on another of their devices sends the list again (bus.follows_channel):
+    the app takes it as the list (BUG-165), and connects again for the players it then has. A fan with nothing else
+    to hear yet listens for that too; their list first, as on any stream, so an app whose fan was signed out
+    elsewhere (it reads as nobody now), or stopped following everyone there, drops what it shows (BUG-162)."""
     ids, games = await in_db(lambda db: (db.scalars(select(Follow.player_id).where(Follow.fan_id == fan)).all(),
                                          list(dict.fromkeys([*matches.event_ids(db, fan), *teams.event_ids(db, fan)]))))
 
     async def first() -> list[dict[str, Any]]:
         return [{"type": "following", "players": await _following(fan), "matches": await in_db(matches.mine, fan), "teams": await in_db(teams.mine, fan)}]
 
-    if not ids and not games:
-        async def idle():
-            # Nothing to hear yet, but the fan's list still comes first, as on any stream: an app whose fan was signed
-            # out elsewhere (it reads as nobody now), or stopped following everyone there, drops what it shows (BUG-162).
-            for event in await first():
-                yield f"data: {json.dumps(event, default=str)}\n\n"
-            while not await request.is_disconnected():
-                yield PING
-                await asyncio.sleep(HEARTBEAT)
-        return _sse(idle())
-
     places = _hold_streams(request, fan)
-    return _sse(_stream([*(bus.channel(i) for i in ids), *(bus.match_channel(e) for e in games)], first, request), places)
+    mine = bus.follows_channel(fan)
+    return _sse(_stream([*(bus.channel(i) for i in ids), *(bus.match_channel(e) for e in games), mine], first, request, again=mine), places)
 
 
 # ---------------------------------------------------------------- the Android app

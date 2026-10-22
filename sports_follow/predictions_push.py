@@ -87,14 +87,18 @@ def _muted(db: Session, fans: set[str], event_ids: list[int]) -> set[str]:
 
 
 def _places(db: Session, fans: set[str]) -> dict[str, tuple[int, str]]:
-    """Each fan's best place among their leagues, and that league's name; each league's table read once."""
+    """Each fan's best place among their leagues, and that league's name; each league's table read once. None while
+    they have no points there, or everyone in it is level (all "1st" in a new league, a wrong call or not)."""
     out: dict[str, tuple[int, str]] = {}
     member_of: dict[int, set[str]] = {}
     for league_id, fan in db.execute(select(LeagueMember.league_id, LeagueMember.fan_id).where(LeagueMember.fan_id.in_(fans))) if fans else []:
         member_of.setdefault(league_id, set()).add(fan)
     for league in db.scalars(select(League).where(League.id.in_(list(member_of)))) if member_of else []:
-        for row in predictions.table(db, league):
-            if row["fan"] in member_of[league.id] and (row["fan"] not in out or row["place"] < out[row["fan"]][0]):
+        rows = predictions.table(db, league)
+        if len({row["points"] for row in rows}) < 2:
+            continue  # everyone level: no place says anything
+        for row in rows:
+            if row["fan"] in member_of[league.id] and row["points"] > 0 and (row["fan"] not in out or row["place"] < out[row["fan"]][0]):
                 out[row["fan"]] = (row["place"], league.name)
     return out
 
@@ -103,18 +107,27 @@ def _places(db: Session, fans: set[str]) -> dict[str, tuple[int, str]]:
 
 
 def _until(locks_at: datetime, now: datetime) -> str:
+    """How long till picks close: "80 minutes", "1 hour 40 minutes", "2 hours"."""
     minutes = max(1, round((locks_at - now).total_seconds() / 60))
-    return f"{minutes} minutes" if minutes < 90 else f"{round(minutes / 60)} hours"
+    if minutes < 90:
+        return f"{minutes} minutes"
+    hours, rest = divmod(minutes, 60)
+    whole = f"{hours} hour{'s' if hours > 1 else ''}"
+    return f"{whole} {rest} minute{'s' if rest > 1 else ''}" if rest else whole
 
 
 def remind(now: datetime) -> list[tuple]:
     """The reminders due now, logged: one job per device (see _jobs). Each question due is marked as reminded,
-    whoever heard."""
+    whoever heard; but not one whose game is postponed (predictions.held), which waits: back on at its time, it's
+    reminded then, and its new date reminds again anyway (predictions.moved)."""
     jobs: list[tuple] = []
     with session() as db:
         due = list(db.scalars(select(Question).where(Question.status == predictions.OPEN, Question.reminded_at.is_(None), Question.locks_at > now + LAST,
                                                      Question.locks_at <= now + LEAD).with_for_update(skip_locked=True)))
+        on_hold = predictions.held(db, due)
         for q in due:
+            if q.id in on_hold:
+                continue
             q.reminded_at = now
             ids = _events(db, q)
             theirs = campaigns.player_ids(db, q.locks_at or now)

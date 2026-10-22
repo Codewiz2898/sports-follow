@@ -35,7 +35,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
-from sports_follow import alerts, bus, db as db_module, feed, league, live, logs, match, notify, pipeline, registry, server, starters, structured, web_errors
+from sports_follow import alerts, bus, db as db_module, feed, league, live, logs, match, notify, pipeline, registry, server, sports, starters, structured, web_errors
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef, Snapshot
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -89,6 +89,9 @@ class Redis:
 
     async def get(self, key):
         return self.data.get(key)
+
+    async def mget(self, keys):
+        return [self.data.get(k) for k in keys]
 
     async def set(self, key, value, nx=False, ex=None):
         if nx and key in self.data:
@@ -196,7 +199,7 @@ class Db:
         if model is PlayerCard and key == 1:
             return SimpleNamespace(player_id=1, status="ready", card={})
         if model is Player and key == 1:
-            return SimpleNamespace(id=1, name="Player One")
+            return SimpleNamespace(id=1, name="Player One", sport="Football")
         return SimpleNamespace(id=key) if model is Event and key == 5 else None
 
     def scalar(self, stmt):
@@ -358,7 +361,7 @@ def test_asking_again_for_a_name_no_one_followed_here_has_costs_no_research_that
 
     def get(self, model, key):
         if key == 2:
-            return failed if model is PlayerCard else SimpleNamespace(id=2, name="Caitlyn Clark") if model is Player else None
+            return failed if model is PlayerCard else SimpleNamespace(id=2, name="Caitlyn Clark", sport="Basketball") if model is Player else None
         return plain_get(self, model, key)
 
     def scalar(self, stmt):  # the card that holds a typed name's alias
@@ -520,6 +523,27 @@ def test_a_fan_follows_at_most_so_many_players(api, a_source, monkeypatch):
     assert not [s for s in api.statements if isinstance(s, Insert) and s.table.name == "follow" and _param(s, "fan_id") == "fan" and _param(s, "player_id") != 1]
 
 
+def test_a_turned_off_games_pro_isnt_previewed_or_followed_by_their_source_id(api, monkeypatch):
+    # BUG-097: a source of several games runs while any of them does, so a pro of a game turned off could still be
+    # previewed and followed by their id there, and their page made and polled.
+    adapter = KNOWN["pandascore_esports"]
+    monkeypatch.setitem(ADAPTERS, adapter.system, adapter)
+    monkeypatch.setattr(adapter, "player", lambda athlete_id, league=None: PlayerRef(adapter.system, athlete_id, "s1mple", [], [], league="cs-go"))
+    monkeypatch.setattr(adapter, "preview_fixtures", False)
+    monkeypatch.setattr(adapter, "stats", lambda ref, recent: ([], ""))
+    monkeypatch.setattr(server.player_search, "_previews", {})
+    made = []
+    monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: made.append(ref.athlete_id) or (100, True))
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "cs2"))
+    body = {"system": adapter.system, "athlete_id": "7398"}
+    assert api.call("GET", f"/api/athletes/{adapter.system}/7398", fan="fan").status_code == 404
+    assert api.call("POST", "/api/follows", fan="fan", body=body).status_code == 404
+    assert made == []
+    monkeypatch.setattr(sports, "ENABLED", sports.ALL)
+    assert api.call("GET", f"/api/athletes/{adapter.system}/7398", fan="fan").json()["sport"] == "CS2"
+    assert api.call("POST", "/api/follows", fan="fan", body=body).status_code == 200 and made == ["7398"]
+
+
 def test_limits_count_the_public_address_a_client_comes_from():
     def address(host):
         return server.client_address(SimpleNamespace(client=SimpleNamespace(host=host) if host else None))
@@ -575,6 +599,57 @@ def test_only_a_follower_can_refresh_and_only_once_a_minute_per_player(api, monk
     del api.redis.data["refresh:1"]  # a minute later
     assert refresh("fan-b").json() == {"queued": True}
     assert len(api.queue.jobs) == 2
+
+
+def test_a_fans_players_are_read_in_one_go_on_every_stream_they_open(api, monkeypatch):
+    # BUG-269: a fan's list (the opening of each stream they open, every reconnect, and /api/me/following) read each
+    # followed player's card from Redis one request at a time: 18 players, 18 round trips.
+    follows = [(i, {"level": "key"}) for i in range(1, 19)]
+    for player_id, _ in follows[1:]:
+        api.redis.data[bus.card_key(player_id)] = json.dumps({"player_id": player_id, "status": "ready", "version": 1})
+    asked: list[str] = []
+
+    def counted(name: str):
+        call = getattr(api.redis, name)
+        return lambda *a, **k: asked.append(name) or call(*a, **k)
+
+    for name in ("get", "mget"):
+        monkeypatch.setattr(api.redis, name, counted(name))
+    rebuilt: list[int] = []
+
+    async def from_postgres(player_id):  # its hot copy gone (Redis flushed): read_card makes it again
+        rebuilt.append(player_id)
+        return {"player_id": player_id, "status": "ready", "version": 1}
+
+    async def rows(fn, *args):
+        return follows
+
+    monkeypatch.setattr(server, "in_db", rows)
+    monkeypatch.setattr(server, "read_card", from_postgres)
+    listed = asyncio.run(server._following("fan"))
+    assert [p["player_id"] for p in listed] == list(range(1, 19)) and {p["alerts"] for p in listed} == {"key"}
+    assert asked == ["mget"] and rebuilt == [1]
+
+
+def test_a_player_of_a_sport_turned_off_isnt_refreshed(api, monkeypatch, admin_controls):
+    # BUG-176: the Refresh button queued a read of a CS2 player's source while CS2 was turned off in the admin panel
+    # (PandaScore still runs for the other games, on a paid allowance).
+    from sports_follow import controls
+
+    monkeypatch.setattr(structured, "binding", lambda db, player_id: object())
+    monkeypatch.setattr(bus, "is_locked", lambda name: False)
+    shown = Db.get
+    monkeypatch.setattr(Db, "get", lambda self, model, key: SimpleNamespace(player_id=1, status="ready", card={"player": {"sport": "CS2"}})
+                        if model is PlayerCard and key == 1 else shown(self, model, key))
+    api.follows.add(("fan-a", 1))
+    admin_controls.rows[controls.SPORTS_OFF] = ["cs2"]
+    controls.load()
+    answer = api.call("POST", "/api/players/1/refresh", fan="fan-a")
+    assert answer.status_code == 200 and answer.json()["queued"] is False and "turned off" in answer.json()["reason"]
+    assert api.queue.jobs == [] and "refresh:1" not in api.redis.data  # nothing asked of the source, and nothing counted
+    admin_controls.rows[controls.SPORTS_OFF] = []
+    controls.load()
+    assert api.call("POST", "/api/players/1/refresh", fan="fan-a").json() == {"queued": True}
 
 
 # ---------------------------------------------------------------- the request log (BHA-192)
@@ -742,6 +817,20 @@ def test_the_web_app_sends_only_so_many_errors_an_hour(api, monkeypatch, caplog)
     assert send("third", "81.2.69.143") == 204  # another address isn't held up
     assert len(_web_lines(caplog)) == 4
     assert api.call("POST", "/api/errors", fan="fan", body={"kind": "nonsense", "page": "/"}).status_code == 422
+
+
+def test_a_web_report_is_one_line_of_the_log_whatever_its_text(api, caplog):
+    """BUG-104: a report's name and message are whatever the app (or anyone) sent, and both are in the line's
+    message: a line break or another control character in them made a line of its own in the text log, which
+    could pass for the server's. Each run of them is a space."""
+    caplog.set_level(logging.INFO, "sports_follow")
+    made_up = "\n12:00:00 WARNING sports_follow.admin: admin panel: account 1 deleted"
+    assert api.call("POST", "/api/errors", fan="fan", address=PUBLIC, body={
+        "kind": "error", "name": "TypeError\r\nX", "message": f"boom{made_up} \x1b[31m", "page": "/"}).status_code == 204
+    [line] = _web_lines(caplog)
+    text = logs.TextFormatter().format(line)
+    assert not any(c in text for c in "\n\r\x1b ")
+    assert line.error == "TypeError X" and "boom 12:00:00 WARNING sports_follow.admin" in line.getMessage()
 
 
 # ---------------------------------------------------------------- writes (BUG-029)
@@ -1378,7 +1467,7 @@ def previews(api, monkeypatch):
 @pytest.mark.parametrize("path, status, asked", [
     ("/api/athletes/espn_soccer/231388", 200, ["231388"]),
     ("/api/athletes/espn_soccer/999999999", 404, ["999999999"]),  # a stale id: the source has none, it isn't down
-    ("/api/athletes/espn_soccer/%00", 404, []),
+    ("/api/athletes/espn_soccer/%00", 400, []),  # a NUL: refused before any route (BUG-096)
     ("/api/athletes/espn_soccer/231388%3Fx%3D1", 404, []),  # was read as 231388, with ?x=1 on the source's URL
     ("/api/athletes/espn_soccer/231388?league=nba%2Fathletes%2F1", 404, []),
 ])
@@ -1804,13 +1893,66 @@ def test_a_fans_first_links_tags_are_kept_once_and_only_in_their_shape(api):
     def kept() -> list[dict]:
         return [{k: _param(s, k) for k in ("fan_id", "tag", "utm_source", "utm_medium", "utm_campaign", "landing")} for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source"]
 
-    assert api.call("POST", "/api/me/source", fan="fan", body={"utm_source": "whatsapp", "utm_campaign": "gukesh-launch", "s": "<b>", "path": "/gukesh"}).json() == {"ok": True}
+    assert api.call("POST", "/api/me/source", fan="fan", body={"utm_source": "whatsapp", "utm_campaign": "gukesh-launch", "s": "\x07", "path": "/gukesh"}).json() == {"ok": True}
     assert kept() == [{"fan_id": "fan", "tag": None, "utm_source": "whatsapp", "utm_medium": None, "utm_campaign": "gukesh-launch", "landing": "/gukesh"}]
     insert_ = next(s for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source")
     assert "ON CONFLICT (fan_id) DO NOTHING" in str(insert_.compile(dialect=postgresql.dialect()))  # the first link's, never a later one's
     for body in ({"path": "/gukesh"}, {"s": "x" * 61, "path": "/"}, {"s": "share", "path": "gukesh"}, {"s": "share", "path": "/" + "x" * 200}, {"s": "share"}):
         assert api.call("POST", "/api/me/source", fan="fan", body=body).json() == {"ok": True}
     assert len(kept()) == 1
+
+
+def _sources(api: Api) -> list[dict]:
+    """The rows /api/me/source wrote: who, and where from."""
+    return [{k: _param(s, k) for k in ("fan_id", "tag", "utm_source", "utm_medium", "utm_campaign", "landing")} for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source"]
+
+
+def test_where_fans_came_from_is_kept_for_fans_with_their_cookie_so_many_a_day_from_one_address(api, monkeypatch):
+    """BUG-149: a script with no cookie wrote a row each request (each one a new fan), inflating any campaign's launch
+    numbers without end. A visit is kept now only for a fan whose cookie came with it (the app's page makes one before
+    the app tells where it came from), and so many a day from one address."""
+    monkeypatch.setattr(server, "SOURCES_PER_ADDRESS", 3, raising=False)
+    body = {"utm_source": "h1probe", "path": "/gukesh"}
+    for _ in range(3):
+        assert api.call("POST", "/api/me/source", address=PUBLIC, body=body).json() == {"ok": True}
+    assert _sources(api) == []
+    for i in range(4):
+        api.call("POST", "/api/me/source", fan=f"fan-{i}", address=PUBLIC, body=body)
+    api.call("POST", "/api/me/source", fan="fan-9", address="81.2.69.143", body=body)  # another address isn't held up
+    assert [row["fan_id"] for row in _sources(api)] == ["fan-0", "fan-1", "fan-2", "fan-9"]
+
+
+def test_a_links_tags_are_kept_as_typed_spaces_and_all(api):
+    """BUG-194: a tag with a space or a "|" ("Gukesh v Sindarov", "wcc|day1") was dropped, and a visit tagged only so
+    wasn't kept at all. Any printable text is a tag now, its spaces trimmed and made single, up to 60 characters."""
+    api.call("POST", "/api/me/source", fan="fan-1", body={"utm_source": "instagram", "utm_campaign": "Gukesh  v Sindarov", "path": "/h13-wcc"})
+    api.call("POST", "/api/me/source", fan="fan-2", body={"utm_campaign": " wcc|day1 ", "path": "/"})
+    api.call("POST", "/api/me/source", fan="fan-3", body={"utm_campaign": "a\u202eb", "utm_medium": "x" * 61, "path": "/"})  # nothing in a tag's shape
+    assert _sources(api) == [{"fan_id": "fan-1", "tag": None, "utm_source": "instagram", "utm_medium": None, "utm_campaign": "Gukesh v Sindarov", "landing": "/h13-wcc"},
+                             {"fan_id": "fan-2", "tag": None, "utm_source": None, "utm_medium": None, "utm_campaign": "wcc|day1", "landing": "/"}]
+
+
+def test_league_invites_are_looked_up_so_many_times_an_address_and_opened_only_by_a_fan_with_their_cookie(api, monkeypatch):
+    """BUG-110: the invite page's limit was a fan's, and a request with no cookie is a new fan each time, so a script
+    could try code after code without end; and each of its requests counted as the invite opened. Now an address
+    looks up so many an hour, and a fan the request itself made up (no cookie) doesn't count as opening it."""
+    from sports_follow import predictions
+
+    opened: list[tuple[str, bool]] = []
+
+    def invite(db, code, fan, counted=True):
+        opened.append((code, counted))
+        if code != "38KWAS":
+            raise predictions.Refused(404, "No league has that invite: ask for a new link.")
+        return {"code": code, "name": "Derby", "members": 2, "by": "Asha", "member": False}
+
+    monkeypatch.setattr(predictions, "invite", invite)
+    monkeypatch.setattr(server, "INVITES_PER_ADDRESS", 5, raising=False)
+    tries = [api.call("GET", f"/api/leagues/ZZZZZ{i}/invite", address=PUBLIC).status_code for i in range(6)]
+    assert tries == [404] * 5 + [429]
+    assert api.call("GET", "/api/leagues/38KWAS/invite", address="81.2.69.143").status_code == 200  # another address isn't held up
+    assert api.call("GET", "/api/leagues/38KWAS/invite", fan="asha-phone", address="81.2.69.144").status_code == 200
+    assert opened[-2:] == [("38KWAS", False), ("38KWAS", True)]  # opened: by the fan who came with their cookie only
 
 
 def test_a_video_that_wont_play_inside_the_app_is_said_so_of_so_many_an_hour_and_odd_ones_are_refused_plainly(api, monkeypatch):

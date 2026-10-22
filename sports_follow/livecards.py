@@ -8,8 +8,10 @@ poll here once it's committed (structured.apply_poll). A live game's card goes o
 changed: at once when the score (its sides) has, else at most every THROTTLE seconds a game, so a clock that
 ticks every poll doesn't send a card each time; a change that waited goes with a later poll, as polls go on
 while the game does. A card that hasn't changed goes again every REFRESH seconds, as the phone takes down a card
-nothing has come for in a while (a chess player's long think, a cricket innings break). When a game whose card went out is over (a final poll, or the schedule closing it without
-one: structured.finish), its end goes, once. Redis keeps what each game's card last showed, and when.
+nothing has come for in a while (a chess player's long think, a cricket innings break); one stopped for the day (a Test
+at stumps: Sport.paused) is taken down instead, as at its end, and goes up afresh as play resumes. When a game whose
+card went out is over (a final poll, or the schedule closing it without one: structured.finish), its end goes, once.
+Redis keeps what each game's card last showed, and when.
 
 Who gets a game's card: the fans who'd hear its key moments (a level of key or everything, not results only or
 off) by a player in it they follow, by the game itself (matches.py, not lapsed) or by a team in it (teams.py),
@@ -185,7 +187,11 @@ def _key(event_id: int) -> str:
 
 def _live(event: Event, snap: Snapshot) -> None:
     """Send a live game's card if what it shows has changed since the last one: at once if its sides (the score)
-    have, else once THROTTLE seconds have passed since the last."""
+    have, else once THROTTLE seconds have passed since the last. One stopped for the day (Sport.paused: a Test at
+    stumps) has its card taken down instead, as at its end, and a fresh one goes up as play resumes (BUG-186)."""
+    if sport_of(event.sport, snap.state).paused(snap.state, snap.score_label, snap.clock_label):
+        ended([event.id])
+        return
     made = card(event, snap)
     shows = json.dumps([made[k] for k in ("sides", "status", "title", "progress", "marks")], ensure_ascii=False)
     redis = bus.sync_redis()

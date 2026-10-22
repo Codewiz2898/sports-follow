@@ -39,6 +39,7 @@ LIVE_RESERVE = int(os.environ.get("SPORTS_FOLLOW_SPORTMONKS_RESERVE", 1000))
 # the rest whatever fans do.
 FANS = 500
 CRICKET_MATCH = "Cricket fixtures/{id}"  # a cricket match's own endpoint: scorecards, and live matches livescores leaves out
+CRICKET_FIXTURES = "Cricket fixtures"  # lists of cricket matches: a team's (a player's refresh, a team read, older results), a schedule
 FIXTURES = "Fixture"  # the football entity live matches are polled on
 TEAMS = "Team"  # the football entity a season's teams, and who of theirs is out, are read under
 BUDGET = budget.Budget("sportmonks", windows=(budget.Window(3600, 2000),), reserve=LIVE_RESERVE, fan=FANS, urls=(BASE + "/",))
@@ -138,5 +139,6 @@ def _bucket(url: str) -> str:
 
 
 def spare(bucket: str) -> bool:
-    """Whether a background read of this entity or endpoint (FIXTURES, CRICKET_MATCH) leaves the live reserve intact."""
+    """Whether a background read of this entity or endpoint (FIXTURES, CRICKET_MATCH, CRICKET_FIXTURES) leaves the live
+    reserve intact."""
     return budget.spare(BUDGET, bucket)

@@ -30,6 +30,7 @@ PAGE = "https://commons.wikimedia.org/wiki/File:"
 # Public-domain photos standing in for players' thumbnails (tests/test_faces.py says whose).
 FAR_OFF = (Path(__file__).parent / "fixtures" / "photos" / "babe-ruth.jpg").read_bytes()
 CLOSE_UP = (Path(__file__).parent / "fixtures" / "photos" / "michael-jordan.jpg").read_bytes()
+DOWNLOAD = photos.download  # the real one: Commons (below) stands in for it in most tests
 
 
 def info(file: str, *, licence: str = "CC BY-SA 4.0", code: str | None = "cc-by-sa-4.0", artist: str | None = '<a href="//commons.wikimedia.org/wiki/User:Berlination" title="User:Berlination">Bryan Berlin</a>', sha1: str = "aa", **meta) -> dict:
@@ -481,6 +482,75 @@ def test_a_failed_download_is_tried_again_the_next_day(squad, commons, monkeypat
     assert _photo(db, SAKA).status == "failed"
     photos.refresh(now=datetime.now(timezone.utc) + timedelta(days=1, hours=1))
     assert _photo(db, SAKA).status == "ok"
+
+
+@needs_db
+@pytest.mark.parametrize("status", [403, 500, 502])
+def test_a_thumbnail_wikimedia_refuses_for_now_is_fetched_at_the_next_run(squad, commons, monkeypatch, status):
+    # BUG-180: a 403 or a 5xx from Wikimedia's thumbnail host (pushing back, or busy) marked the photo failed, and the
+    # player went without it for a day.
+    db = squad
+    refusing = {"now": True}
+
+    def get(url):
+        request = httpx.Request("GET", url)
+        if refusing["now"]:
+            return httpx.Response(status, request=request, text="Please slow down")
+        data, media = commons.download(url)
+        return httpx.Response(200, request=request, headers={"content-type": media}, content=data)
+
+    monkeypatch.setattr(photos, "download", DOWNLOAD)
+    monkeypatch.setattr(photos._client, "get", get)
+    now = datetime.now(timezone.utc)
+    photos.refresh(now=now)
+    tried = [p for p in (_photo(db, SAKA), _photo(db, BUMRAH)) if p and p.status != "unfree"]
+    assert [(p.status, p.reason) for p in tried] == [("failed", f"thumbnail: {status}")]  # and the rest of the run waited
+    refusing["now"] = False
+    photos.refresh(now=now + timedelta(minutes=15))  # the next run, not a day later
+    assert [p.status for p in (_photo(db, SAKA), _photo(db, BUMRAH)) if p] == ["ok", "ok"]
+    db.expire_all()
+    assert db.get(PlayerCard, 1).card["player"]["photo"]["url"].startswith("/api/photos/")
+
+
+@needs_db
+def test_a_thumbnail_refused_every_time_never_holds_up_the_others(squad, commons, monkeypatch):
+    """A file Wikimedia keeps refusing (a thumbnail it can't make answers 5xx for good) waits behind the files that
+    have waited longer at each run, so it never stops every run before the others."""
+    db = squad
+    first = datetime.now(timezone.utc)
+
+    def broken(url):
+        if url.endswith(BUMRAH.replace(" ", "_")):
+            raise photos.Unavailable("thumbnail: 500")
+        return commons.download(url)
+
+    monkeypatch.setattr(photos, "download", broken)
+    photos.refresh(now=first)
+    photos.refresh(now=first + timedelta(minutes=15))
+    assert _photo(db, SAKA).status == "ok" and _photo(db, BUMRAH).status == "failed"
+    # Both asked about again: Saka's a new upload, waiting since the first run; Bumrah's broken one refused every run.
+    commons.files[SAKA] = info(SAKA, sha1="saka2")
+    db.execute(text("UPDATE photo SET fetched_at = fetched_at - interval '100 days' WHERE status = 'ok'"))
+    db.commit()
+    for minutes in (30, 45):
+        photos.refresh(now=first + timedelta(minutes=minutes))
+    assert _photo(db, SAKA).source_sha1 == "saka2" and _photo(db, BUMRAH).status == "failed"
+
+
+@needs_db
+def test_a_stopping_worker_downloads_no_more_photos(squad, commons, monkeypatch, stopping):
+    # BUG-177: the photos job went on downloading after the worker began stopping, and the worker said every job had ended.
+    fetch = commons.download
+
+    def download_then_stop(url):
+        stopping.set()  # a deploy, while the first thumbnail comes in
+        return fetch(url)
+
+    monkeypatch.setattr(photos, "download", download_then_stop)
+    assert photos.refresh()["asked"] == 1 and len(commons.downloads) == 1
+    stopping.clear()
+    monkeypatch.setattr(photos, "download", fetch)
+    assert photos.refresh()["asked"] == 2  # the next worker's run does the rest
 
 
 @needs_db

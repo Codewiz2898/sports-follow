@@ -15,7 +15,7 @@ import { useFollowToggle } from '../components/Starters'
 import { Watch } from '../components/Watch'
 import { dateTime, relative } from '../format'
 import { useFollowing } from '../following'
-import { boardOf, EVERY, followedOf, followHead, keyEvents, nextLook, startsIn, watchable } from '../match'
+import { boardOf, EVERY, followedOf, followHead, keyEvents, nextLook, ownResult, pageResult, startsIn, watchable } from '../match'
 import { AlertLevels, gameLevelText } from '../notifications'
 import { sportDrawn, sportKey, sportName, viewOf } from '../sports'
 
@@ -245,8 +245,8 @@ export function MatchPage() {
             </ErrorBoundary>
           </div>
         )}
-        {/* Over: who won, big, as its sport says it. */}
-        {match.status === 'final' && match.verdict && <p className="dsp match-verdict">{match.verdict}</p>}
+        {/* Over: who won, big, as its sport says it, unless the board's line under the score says it already. */}
+        {pageResult(match) && <p className="dsp match-verdict">{pageResult(match)}</p>}
         {board?.as_of && <span className="tiny soft">Updated {relative(board.as_of, now)}{board.source ? ` · ${board.source}` : ''}</span>}
       </header>
       {watch.error && <div className="error-box" role="alert">{watch.error}</div>}
@@ -283,7 +283,7 @@ export function MatchPage() {
                 <Link to={`/player/${p.player_id}`} className="stack" style={{ gap: 6 }}>
                   <span className="row">
                     <span className="title">{p.name}</span>
-                    {p.result && <span className="small" style={{ fontWeight: 800 }}>{p.result}</span>}
+                    {ownResult(p.result, match) && <span className="small" style={{ fontWeight: 800 }}>{ownResult(p.result, match)}</span>}
                   </span>
                   {p.headline && <span className="small" style={{ fontWeight: 800 }}>{p.headline}</span>}
                   {p.stats.length > 0 && <StatGrid stats={p.stats} />}

@@ -2,7 +2,7 @@
 // under a result, and what the research agent's allowance says. Shared by the web app (components/Search.tsx)
 // and the Android app (mobile/), so it touches nothing of a browser's.
 
-import { ahead, relative } from './format'
+import { ahead, plainLetters, relative } from './format'
 import type { AthletePreview, Research, SearchResponse, SearchResult, SportInfo, StarterSport, TeamSummary } from './types'
 
 export interface Section { key: string; title: string; items: SearchResult[] }
@@ -24,8 +24,9 @@ export function sections(data: SearchResponse, app: string): Section[] {
   ].filter((s) => s.items.length)
 }
 
-// Accents and apostrophes dropped, as the server compares names: "aja" is the start of A'ja.
-export const fold = (s: string) => s.normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/['’`]/g, '').toLowerCase()
+// Accents and apostrophes dropped, and letters Unicode doesn't take apart written plainly, as the server compares
+// names: "aja" is the start of A'ja, "ode" of Ødegaard.
+export const fold = (s: string) => plainLetters(s).normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/['’`]/g, '').toLowerCase()
 
 /** The name in parts, the typed start of each word bold: "Caitl" in Caitlin Clark. */
 export function highlightParts(name: string, query: string): { text: string; bold: boolean }[] {

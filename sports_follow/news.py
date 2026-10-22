@@ -10,15 +10,20 @@ story known by its address written one way (NewsSource articles' url), so two fe
 - their full name (in any of its spellings, or as a hashtag) names them as it does in a video (candidates.phrases);
   so does their own one-word name or handle that no other followed player of the sport shares, but only written
   as they write it, capitalised or not ("Less" the pro; not "less accurate"), and not as part of another name
-  ("Mortal Kombat");
-- their surname alone, or a one-word name fans found them by, names them only when nothing else does: a surname
-  no other followed player of the sport has, and fewer than COMMON athletes of the sport in the registry ("Bumrah";
+  ("Mortal Kombat"); and a nickname of two words or more, one that has none of their own name's words ("The
+  Wall"), only written capitalised, outside a headline In Title Case, and not as part of another name ("The Wall
+  Street Journal"): "backs to the wall" is nobody. A registry's note in brackets ("(football player)") isn't a name;
+- their surname alone (the last word of their own name), or a one-word name fans found them by, names them only
+  when nothing else does: a surname no other followed player of the sport has, and fewer than COMMON athletes of the sport in the registry ("Bumrah";
   not "Smith" or "Sharma"); else only when the story also names one of their sides (a team, their country), and
   no other player whose name it is (two Sharmas followed: the story about Mumbai Indians is Rohit's). Only
   capitalised ("head coach" isn't Travis Head), and never next to another capitalised name, which makes it someone
   else's ("Deepti Sharma" isn't Rohit, "Rahul Dravid" isn't KL Rahul), so a word inside a full name already found
   ("Rohit Sharma") names nobody else either. In a headline Written In Title Case, where every word is capitalised,
-  only the name before it counts.
+  only the name before it counts;
+- in a feed several sports read (every esports game reads HLTV's), a one-word name or handle that two or more of
+  the registry's athletes of the sport go by (a League of Legends "Zeus" and a Counter-Strike one) names a player
+  only when the story also names one of their sides or their sport ("League of Legends").
 
 A story is never kept whole: its headline, its link, when it was published and the feed's own short description,
 which the Feed shows as they are, crediting the publisher; as the publisher changes them at the same address (a
@@ -52,9 +57,11 @@ from .models import Athlete, FeedCandidate
 log = logging.getLogger("sports_follow.news")
 
 KEEP_FOR = timedelta(days=3)  # a story published longer ago than this isn't kept: a feed's archive isn't news
+AHEAD = timedelta(hours=1)  # nor one dated further ahead than this (a feed's clock or time zone a little off)
 PRUNE_AFTER = timedelta(days=30)  # stories older than this go, weekly, but an admin's evergreen ones
 EVERGREEN = ("approved", "pinned")  # an admin's word that keeps a story past PRUNE_AFTER (rank.REVIEWS)
 COMMON = 3  # a surname this many of the sport's athletes in the registry share names a player only with their side
+HANDLES = 2  # and a handle this many go by, in a feed several sports read (two games' "Zeus")
 # Two stories about one player are one story when published within CLUSTER_WITHIN of each other and they say the
 # same (same_story), in their words (headline and description) less the player's names and words every story has:
 # the same figure ("179") with FIGURE_AND more words (one more for a figure under 100, not all of them usual); or
@@ -92,11 +99,13 @@ years your
 @dataclass
 class Listed:
     """A feed a running sport lists: the publisher's name for it, the sports whose players its stories are looked at
-    for (with their groups'), and which sport's count it goes in (a group's, for an esports game's)."""
+    for (with their groups'), which sport's count it goes in (a group's, for an esports game's), and whether more
+    than one sport lists it (shared: a name there may be another sport's player's)."""
 
     outlet: str
     sports: set[str] = field(default_factory=set)
     counted: str = ""
+    shared: bool = False
 
 
 def feeds(source: NewsSource) -> dict[str, Listed]:
@@ -106,6 +115,7 @@ def feeds(source: NewsSource) -> dict[str, Listed]:
         for url, outlet in sport.news_feeds.items():
             if source.feed_pattern.fullmatch(url):
                 listed = out.setdefault(url, Listed(outlet, counted=sport.group or sport.key))
+                listed.shared = listed.shared or bool(listed.sports - {sport.key, sport.group})
                 listed.sports.update({sport.key, *([sport.group] if sport.group else [])})
     return out
 
@@ -122,6 +132,15 @@ class Names:
     single: dict[str, bool]
     sides: list[tuple[str, ...]]
     own: dict[str, bool] = field(default_factory=dict)  # their own one-word name, in full: whether they capitalise it
+    nick: set[tuple[str, ...]] = field(default_factory=set)  # of the full names, their nicknames ("the wall"): _written
+
+
+_BRACKETS = re.compile(r"\s*\([^()]*\)")  # a registry's note on a name: "Mikhail Vorobyov (football player)"
+
+
+def _bare(name: str) -> str:
+    """A name without a registry's notes in brackets."""
+    return _BRACKETS.sub("", name).strip()
 
 
 def names(players: Sequence[Followed]) -> dict[int, Names]:
@@ -129,7 +148,7 @@ def names(players: Sequence[Followed]) -> dict[int, Names]:
     owners: dict[str, set[int]] = {}
     for p in players:
         for name in (p.name, *p.aliases):
-            for spelling in naming.spellings(name):
+            for spelling in naming.spellings(_bare(name)):
                 for word in spelling:
                     owners.setdefault(word, set()).add(p.player_id)
     out = {}
@@ -137,42 +156,60 @@ def names(players: Sequence[Followed]) -> dict[int, Names]:
         full: set[tuple[str, ...]] = set()
         single: dict[str, bool] = {}
         own: dict[str, bool] = {}
+        nick: set[tuple[str, ...]] = set()
+        theirs = [[w for w in spelling if len(w) > 1] for spelling in naming.spellings(_bare(p.name))]  # their own name's words, no initials
+        for spelt in theirs:
+            if len(spelt) >= 2 or (spelt and len(spelt) < len(naming.words(p.name))):  # "Gukesh D": Gukesh
+                if len(spelt[-1]) >= SHORT_NAME:
+                    single[spelt[-1]] = True  # their surname: only ever their own name's
+        mine = {w for spelt in theirs for w in spelt}
         for name in (p.name, *p.aliases):
+            name = _bare(name)
             for spelling in naming.spellings(name):
                 if len(spelling) >= 2:
-                    full.add(tuple(spelling))
-                    if len(spelling) <= 3:
-                        full.add(("".join(spelling),))  # a hashtag of it
-                    if len(spelling[-1]) >= SHORT_NAME:
-                        single[spelling[-1]] = True
-                elif spelling and name == p.name and len(spelling[0]) >= 3 and owners.get(spelling[0]) == {p.player_id}:
+                    found = {tuple(spelling), *([("".join(spelling),)] if len(spelling) <= 3 else [])}  # with a hashtag of it
+                    full |= found
+                    if not mine & set(spelling):
+                        nick |= found  # none of their own name's words: a nickname ("The Wall")
+                elif spelling and name == _bare(p.name) and len(spelling[0]) >= 3 and owners.get(spelling[0]) == {p.player_id}:
                     full.add(tuple(spelling))  # their own one-word name or handle, no one else's
                     own[spelling[0]] = p.name.strip()[:1].isupper()
                 elif spelling and len(spelling[0]) >= SHORT_NAME:
                     single.setdefault(spelling[0], False)
+        nick -= {phrase for spelling in naming.spellings(_bare(p.name)) for phrase in (tuple(spelling), ("".join(spelling),))}
         sides = [tuple(w) for side in p.teams if (w := naming.words(side))]
-        out[p.player_id] = Names(_longest_first(full), {w: s for w, s in single.items() if (w,) not in full}, sides, own)
+        out[p.player_id] = Names(_longest_first(full), {w: s for w, s in single.items() if (w,) not in full}, sides, own, nick)
     return out
 
 
 def common(session: Session, players: Sequence[Followed], found: dict[int, Names]) -> set[tuple[str, str]]:
     """The (sport, surname) pairs of these players' surnames that COMMON or more of the sport's athletes in the
-    registry share: one query a sport, over the registry's names."""
+    registry share, however their names are accented ("Giménez" and "Gimenez" are one); and of their own one-word
+    names or handles (Names.own) that HANDLES or more go by, as their name or another of theirs (two games' "Zeus").
+    One query a sport, over the registry's names as search reads them (Athlete.search_text, plain words)."""
     wanted: dict[str, set[str]] = {}
+    handles: dict[str, set[str]] = {}
     for p in players:
         registry = sports.of(p.sport).group or p.sport
         wanted.setdefault(registry, set()).update(w for w, surname in found[p.player_id].single.items() if surname)
+        handles.setdefault(registry, set()).update(found[p.player_id].own)
     out: set[tuple[str, str]] = set()
     for registry, words in wanted.items():
-        if not words:
+        mine = handles.get(registry, set())
+        if not words and not mine:
             continue
-        counts: dict[str, int] = {}
-        rows = session.scalars(select(Athlete.name).where(Athlete.sport == registry, or_(*(Athlete.name.ilike(f"% {w}") for w in sorted(words)))))
-        for name in rows:
+        surnames: dict[str, int] = {}
+        goes_by: dict[str, int] = {}
+        # A name ending in the surname; a whole name or another of theirs that's the handle (registry.search_text).
+        either = [*(Athlete.search_text.like(f"% {w} |%") for w in sorted(words)),
+                  *(Athlete.search_text.like(f"{at} {w} |%") for w in sorted(mine) for at in ("", "%|"))]  # fmt: skip
+        for name, text in session.execute(select(Athlete.name, Athlete.search_text).where(Athlete.sport == registry, or_(*either))):
             last = naming.words(name)[-1:]
             if last and last[0] in words:
-                counts[last[0]] = counts.get(last[0], 0) + 1
-        out |= {(registry, w) for w, n in counts.items() if n >= COMMON}
+                surnames[last[0]] = surnames.get(last[0], 0) + 1
+            for w in mine & {n.strip() for n in (text or "").split("|")}:
+                goes_by[w] = goes_by.get(w, 0) + 1
+        out |= {(registry, w) for w, n in surnames.items() if n >= COMMON} | {(registry, w) for w, n in goes_by.items() if n >= HANDLES}
     return {(p.sport, w) for p in players for registry, w in out if registry == (sports.of(p.sport).group or p.sport)}
 
 
@@ -224,15 +261,41 @@ def _named(text: str, word: str, names: Names, capital: bool | None = None) -> b
     return False
 
 
+def _written(text: str, phrase: tuple[str, ...], names: Names) -> bool:
+    """Whether the text has this nickname (Names.nick) as the player's: its words capitalised but the small ones a name
+    may start with (BEFORE_A_NAME: "the Joker", "The Wall"), in a text not In Title Case, where capitals say nothing,
+    and not next to another capitalised word that isn't theirs, which would make it part of another name ("The Wall
+    Street Journal")."""
+    found = list(_TOKEN.finditer(text))
+    words = [(w, i) for i, m in enumerate(found) for w in naming.words(_POSSESSIVE.sub("", m[0]))]
+    up = [m[0][:1].isupper() for m in found]
+    lettered = [u for m, u in zip(found, up) if m[0][:1].isalpha()]
+    if len(lettered) >= 4 and sum(lettered) >= TITLE_CASE * len(lettered):
+        return False
+    mine = {w for p in names.full for w in p} | {w for side in names.sides for w in side} | set(names.single) | BEFORE_A_NAME
+    plain = [w for w, _ in words]
+    for at in _find(plain, phrase):
+        first, last = words[at][1], words[at + len(phrase) - 1][1]
+        if not all(up[words[at + k][1]] or w in BEFORE_A_NAME for k, w in enumerate(phrase)):
+            continue
+        if any(0 <= j < len(found) and up[j] and not text[found[min(i, j)].end():found[max(i, j)].start()].strip()
+               and "".join(naming.words(found[j][0])) not in mine for i, j in ((first, first - 1), (last, last + 1))):  # fmt: skip
+            continue
+        return True
+    return False
+
+
 def _find(words: list[str], phrase: tuple[str, ...]) -> list[int]:
     n = len(phrase)
     return [i for i, w in enumerate(words) if w == phrase[0] and tuple(words[i:i + n]) == phrase]
 
 
-def link(articles: Iterable[Article], players: Sequence[Followed], found: dict[int, Names], usual: set[tuple[str, str]]) -> list[Linked]:
+def link(articles: Iterable[Article], players: Sequence[Followed], found: dict[int, Names], usual: set[tuple[str, str]],
+         shared: bool = False) -> list[Linked]:
     """Each story, once for each of these players it names (the module's docstring says how). found: names(players);
-    usual: common()."""
+    usual: common(); shared: the feed is one several sports read (Listed.shared)."""
     by_id = {p.player_id: p for p in players}
+    sport_names = {p.sport: [w for name in (sports.of(p.sport).label, *sports.of(p.sport).names) if (w := tuple(naming.words(name)))] for p in players}
     owners: dict[str, list[int]] = {}
     for pid, n in found.items():
         for word in n.single:
@@ -251,6 +314,11 @@ def link(articles: Iterable[Article], players: Sequence[Followed], found: dict[i
                     at = _find(words, phrase)
                     if at and len(phrase) == 1 and phrase[0] in n.own and not _named(raw[where], phrase[0], n, n.own[phrase[0]]):
                         continue
+                    if at and phrase in n.nick and not _written(raw[where], phrase, n):
+                        continue
+                    if at and shared and len(phrase) == 1 and phrase[0] in n.own and (by_id[pid].sport, phrase[0]) in usual \
+                            and not any(_holds(every, side) for side in (*n.sides, *sport_names[by_id[pid].sport])):
+                        continue  # another sport's athlete goes by it too: theirs only with their side or sport
                     if at:
                         hits.setdefault(pid, (" ".join(phrase), where))
                         covered |= {i + k for i in at for k in range(len(phrase))}
@@ -370,9 +438,9 @@ def poll(now: datetime | None = None) -> dict[str, dict[str, int]]:
                 log.info("feed: %s feed %s not read: %s", source.system, url, exc)
                 continue
             counts["feeds"] += 1
-            fresh = [a for a in stories if a.published is not None and now - KEEP_FOR <= a.published <= now + timedelta(hours=1)]
+            fresh = [a for a in stories if a.published is not None and now - KEEP_FOR <= a.published <= now + AHEAD]
             counts["read"] += len(fresh)
-            found = link(fresh, *by_sports[frozenset(listed.sports)])
+            found = link(fresh, *by_sports[frozenset(listed.sports)], shared=listed.shared)
             counts["matched"] += len(found)
             counts["kept"] += keep(source, found, now)
     metrics.feed("kept", sum(c["kept"] for c in done.values()))

@@ -23,7 +23,7 @@ import pywebpush
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from sports_follow import moments, notify, server
+from sports_follow import moments, notify, server, sports
 from sports_follow.sports import chess
 from sports_follow.moments import Seen, detect
 
@@ -122,6 +122,17 @@ def test_basketball_points_and_doubles():
     assert [f.level for f in found] == ["key", "minor", "key"]
 
 
+def test_a_triple_hundred_and_a_70_point_game_are_told():
+    # BUG-244: the marks stopped at 200 runs and 60 points, so a Test 250 or 300, or an NBA 70-point game, went untold.
+    before = Seen("live", line=line("246* (380)", Runs="246*", Balls="380"), score="IND 520/4")
+    now = Seen("live", line=line("302* (455)", Runs="302*", Balls="455"), score="IND 640/5")
+    found = detect("Cricket", "Karun Nair", "398439", before, now)
+    assert [(f.kind, f.title, f.priority) for f in found] == [("hundred", "Karun Nair reaches 250", 95), ("hundred", "Karun Nair reaches 300", 95)]
+    assert sports.of("cricket").high(found[1], "v England").word == "Triple hundred"  # type: ignore[union-attr]
+    points = detect("Basketball", "Devin Booker", "6580", Seen("live", line=line("66 PTS · 4 REB · 6 AST")), Seen("live", line=line("70 PTS · 8 REB · 6 AST")))
+    assert [(f.kind, f.title, f.level) for f in points] == [("points", "Devin Booker: 70 points", "key")]
+
+
 def test_tennis_sets_and_an_upset():
     before = Seen("live", line=line("Level in sets", Sets="1–1"))
     now = Seen("live", line=line("Leads 2–1 in sets", Sets="2–1"), score="6-4 3-6 6-2")
@@ -144,6 +155,17 @@ def test_no_upset_for_a_walkover_or_a_retirement():
     assert kinds(detect("Tennis", "Qualifier Q", "77", Seen("live"), played)) == [("final", ""), ("upset", "")]
 
 
+def test_an_upset_is_a_win_over_a_much_better_seed():
+    # BUG-240: any win over a lower seed number was a loud upset: [2] Rybakina beating [1] Sabalenka in a final.
+    def upset(mine: int | None, theirs: int) -> bool:
+        players = [{"id": "1", "name": "A", "winner": True, "seed": mine}, {"id": "2", "name": "B", "winner": False, "seed": theirs}]
+        final = Seen("final", state={"kind": "tennis", "players": players, "ending": None}, line=line("Won in 2 sets", Sets="2–0"))
+        return [f.kind for f in detect("Tennis", "A", "1", Seen("live"), final)] == ["final", "upset"]
+
+    assert [upset(2, 1), upset(4, 1), upset(12, 9), upset(1, 2)] == [False] * 4
+    assert [upset(5, 1), upset(20, 3), upset(None, 32)] == [True] * 3  # unseeded beating any seed is one
+
+
 def test_chess_game_start_and_result():
     start = detect("Chess", "Magnus Carlsen", "1503014", Seen("scheduled"), Seen("live", state={"round": "Round 5"}, line=line("Playing White vs Gukesh D", Opponent="Gukesh D")))
     assert [(f.kind, f.title, f.body) for f in start] == [("start", "Magnus Carlsen is playing", "Round 5 · vs Gukesh D")]
@@ -157,6 +179,16 @@ def test_chess_bands_need_a_margin_to_change():
     assert chess.band({"cp": 290}, current=2) == 2
     assert chess.band({"cp": 250}, current=2) == 1
     assert chess.band({"cp": -20, "mate": 4}) == 2 and chess.band({"mate": -2}) == -2
+
+
+def test_mate_on_the_board_is_the_mating_sides():
+    # BUG-217: Stockfish scores a position whose side to move is checkmated "mate 0", whoever mated: it was banded -2
+    # (Black winning) either way, and its swing read "facing mate in 0". The side to move is the one mated.
+    white_mated = "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3"
+    black_mated = "R5k1/5ppp/8/8/8/8/8/6K1 b - - 1 40"
+    mated = lambda fen: chess.settle(None, {"cp": None, "mate": 0, "look": {"cp": None, "mate": 0, "depth": 0}, "at": 1, "fen": fen})["band"]  # noqa: E731
+    assert (mated(white_mated), mated(black_mated)) == (-2, 2)
+    assert (chess._score({"mate": 0}, 1), chess._score({"mate": 0}, -1)) == ("checkmate", "checkmate")
 
 
 def look(cp: int, at: int, fen: str) -> dict:
@@ -475,7 +507,12 @@ def test_a_long_push_is_cut_to_fit_and_written_as_utf8(monkeypatch):
 
 def test_a_push_too_big_for_the_service_isnt_the_devices_fault():
     device = SimpleNamespace(failures=0)
-    db = SimpleNamespace(get=lambda model, key: device, delete=lambda row: None, execute=lambda statement: None)
+
+    def failed(statement) -> int:  # the failure added to the count, in the database
+        device.failures += 1
+        return device.failures
+
+    db = SimpleNamespace(scalar=failed, execute=lambda statement: None)
     notify._health(db, 7, 413)
     assert device.failures == 0  # five of these deleted a healthy device
     notify._health(db, 7, 500)

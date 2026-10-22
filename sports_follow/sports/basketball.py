@@ -21,7 +21,7 @@ def counts(line: dict[str, Any] | None) -> dict[str, int]:
 
 
 TENS = ("PTS", "REB", "AST", "STL", "BLK")  # a double-double is two of these in double figures, a triple three
-MARKS = (20, 30, 40, 50, 60)  # the points told
+MARKS = (20, 30, 40, 50, 60, 70)  # the points told
 
 
 def _points(mark: int) -> int:
@@ -42,6 +42,7 @@ class Basketball(Sport):
     team = True
     follow_teams = True
     wikidata = {"espn_basketball": "P3685", "nba": "P3647", "wnba": "P3588", "bref_nba": "P2685", "bref_wnba": "P4561"}
+    wikidata_sport = ("Q5372",)
     honours = {"Q222047": "NBA Most Valuable Player", "Q1339172": "WNBA Most Valuable Player"}
     athletes = 9_612
     no_line = "Not on the game's roster"

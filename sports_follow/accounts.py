@@ -24,9 +24,11 @@ from sqlalchemy.orm import Session
 
 from . import clips, matches, notify, predictions, teams
 from .db import session
-from .models import Account, AccountSession, ClipReport, Event, FanSource, FeedFeedback, Follow, MatchFollow, Notification, NotificationMute, PushSubscription, TeamFollow
+from .models import Account, AccountSession, ClipReport, Event, FanSource, FeedFeedback, Follow, LeagueMember, MatchFollow, Notification, NotificationMute, Pick, PushSubscription, TeamFollow
 
 FAN_PREFIX = "acct-"  # an account's fan id: never taken from a fan cookie (server._unsigned_fan)
+# The rows kept under a fan id here; predictions.py keeps its own (picks, places in leagues: predictions.forget).
+FAN_ROWS = (Follow, MatchFollow, TeamFollow, NotificationMute, Notification, PushSubscription, FanSource, FeedFeedback, ClipReport)
 SESSION_COOKIE = "sf_session"
 SESSION_LIFE = timedelta(days=365)  # since the device last opened the app
 COOKIE_MAX_AGE = 400 * 24 * 3600  # browsers keep a cookie at most 400 days; the app renews it daily
@@ -53,9 +55,10 @@ def email_key(email: str) -> str:
 
 
 def normal_email(raw: object) -> str | None:
-    """The address as accounts are kept by (trimmed, lower case), or None if it isn't one."""
+    """The address as accounts are kept by (trimmed, lower case), or None if it isn't one: one with a control or
+    an invisible character in it isn't (BUG-096)."""
     email = str(raw or "").strip().lower()
-    return email if len(email) <= 254 and EMAIL.fullmatch(email) else None
+    return email if len(email) <= 254 and email.isprintable() and EMAIL.fullmatch(email) else None
 
 
 def find_or_create(db: Session, email: str) -> int:
@@ -132,6 +135,7 @@ class SignedIn:
     session_id: int
     fan_id: str
     players: int  # how many players this device's anonymous fan brought
+    teams_dropped: int = 0  # how many of its teams didn't fit in the account (teams.MAX), for the fan to be told
 
 
 def sign_in(db: Session, account_id: int, anon: str | None, ending: int | None = None) -> SignedIn:
@@ -145,8 +149,8 @@ def sign_in(db: Session, account_id: int, anon: str | None, ending: int | None =
     now = datetime.now(timezone.utc)
     session_id = db.scalar(insert(AccountSession).values(account_id=account_id, token_hash=token_hash(token), expires_at=now + SESSION_LIFE).returning(AccountSession.id))
     fan = db.scalar(update(Account).where(Account.id == account_id).values(last_sign_in_at=now).returning(Account.fan_id))
-    players = adopt(db, anon, account_id, session_id) if anon else 0
-    return SignedIn(token=token, session_id=session_id, fan_id=fan, players=players)
+    moved = adopt(db, anon, account_id, session_id) if anon else Moved(0, 0)
+    return SignedIn(token=token, session_id=session_id, fan_id=fan, players=moved.players, teams_dropped=moved.teams_dropped)
 
 
 def end_sessions(db: Session, account_id: int, session_id: int | None = None) -> list[str]:
@@ -164,8 +168,10 @@ def end_sessions(db: Session, account_id: int, session_id: int | None = None) ->
 
 
 def purge_expired() -> int:
-    """Sessions not used for SESSION_LIFE: their devices go too. Returns how many."""
+    """Sessions not used for SESSION_LIFE: their devices go too. Returns how many. And what's left under the fan ids
+    of accounts deleted since (forget_orphans)."""
     with session() as db:
+        forget_orphans(db)
         return len(list(db.scalars(delete(AccountSession).where(AccountSession.expires_at <= func.now()).returning(AccountSession.id))))
 
 
@@ -179,12 +185,23 @@ def _lock(db: Session, anon: str, account_id: int) -> str | None:
     return db.scalar(select(Account.fan_id).where(Account.id == account_id).with_for_update())
 
 
-def adopt(db: Session, anon: str, account_id: int, session_id: int) -> int:
+@dataclass(frozen=True)
+class Moved:
+    players: int  # how many players came over
+    teams_dropped: int  # how many of the device's teams didn't fit (teams.merge)
+
+
+def adopt(db: Session, anon: str, account_id: int, session_id: int | None) -> Moved:
     """Move everything kept under the anonymous fan id `anon` into the account, in this transaction.
-    Doing it again moves only what has appeared since. Returns how many players came over."""
+    Doing it again moves only what has appeared since. Its devices become the session's; with that session
+    ended (or none), they go instead: their alerts stopped with it. With the account gone, everything under
+    `anon` goes, as the account's did: no device holds that fan id now (BUG-099)."""
     fan = _lock(db, anon, account_id)
     if fan is None:
-        return 0
+        forget(db, anon)
+        return Moved(0, 0)
+    if session_id is not None and db.scalar(select(AccountSession.id).where(AccountSession.id == session_id).with_for_update(read=True)) is None:
+        session_id = None  # signed out since: held until this commits, so a sign-out under way takes what moved with it
     players = db.scalar(select(func.count()).select_from(Follow).where(Follow.fan_id == anon)) or 0
     # A player both follow keeps the account's alert level, and the earlier follow date: the activity
     # list shows moments since then.
@@ -196,9 +213,10 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int) -> int:
     db.execute(delete(Follow).where(Follow.fan_id == anon))
     # The games followed by themselves (matches.py), as players are: a game both follow keeps the account's
     # level and the earlier date, and stays followed if either still did. The account follows at most
-    # matches.MAX games at once: of this device's others, the soonest that fit come over, and every lapsed one.
-    have = set(db.scalars(select(MatchFollow.event_id).where(MatchFollow.fan_id == fan)))
-    room = matches.MAX - (db.scalar(select(func.count()).select_from(MatchFollow).where(MatchFollow.fan_id == fan, MatchFollow.until.is_(None))) or 0)
+    # matches.MAX games at once: of this device's others, the soonest that fit come over, and every lapsed one. A
+    # game the account let lapse but the device still follows is on again, so it needs room too (BUG-099).
+    have = set(db.scalars(select(MatchFollow.event_id).where(MatchFollow.fan_id == fan, MatchFollow.until.is_(None))))
+    room = matches.MAX - len(have)
     moving = []
     for follow_id, event_id, until in db.execute(select(MatchFollow.id, MatchFollow.event_id, MatchFollow.until).join(Event, Event.id == MatchFollow.event_id)
                                                  .where(MatchFollow.fan_id == anon).order_by(Event.start_utc.asc().nulls_last(), MatchFollow.id)):
@@ -215,7 +233,7 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int) -> int:
         "until": case((or_(MatchFollow.until.is_(None), games.excluded.until.is_(None)), None), else_=func.greatest(MatchFollow.until, games.excluded.until)),
     }))
     db.execute(delete(MatchFollow).where(MatchFollow.fan_id == anon))
-    teams.merge(db, anon, fan)  # the teams followed (teams.py), as players are, at most teams.MAX
+    teams_dropped = teams.merge(db, anon, fan)  # the teams followed (teams.py), as players are, at most teams.MAX
     predictions.merge(db, anon, fan)  # the games called (predictions.py): a question both picked keeps the account's pick
     clips.merge(db, anon, fan)  # clips reported (clips.py): one each
     muted = insert(NotificationMute).from_select(
@@ -241,18 +259,20 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int) -> int:
     # The push log the noise rules read (how often this phone buzzed, the game's story so far).
     db.execute(update(Notification).where(Notification.fan_id == anon).values(fan_id=fan))
     # This device's alerts: now the account's, and this session's. The account's oldest devices make room.
+    if session_id is None:
+        db.execute(delete(PushSubscription).where(PushSubscription.fan_id == anon))
+        return Moved(players, teams_dropped)
     devices = list(db.scalars(update(PushSubscription).where(PushSubscription.fan_id == anon).values(fan_id=fan, session_id=session_id).returning(PushSubscription.id)))
     if devices:
         notify.trim_devices(db, fan, PushSubscription.id.in_(devices), notify.MAX_DEVICES - len(devices))
-    return players
+    return Moved(players, teams_dropped)
 
 
 def adopt_later(anon: str, account_id: int, session_id: int) -> int:
-    """A minute after a sign-in: what a request already under way then wrote to the anonymous fan."""
+    """A minute after a sign-in: what a request already under way then wrote to the anonymous fan, which no device
+    holds now. It comes into the account even if the device signed out since (BUG-099). Returns how many players."""
     with session() as db:
-        if db.get(AccountSession, session_id) is None:
-            return 0  # signed out since
-        return adopt(db, anon, account_id, session_id)
+        return adopt(db, anon, account_id, session_id).players
 
 
 # ---------------------------------------------------------------- deleting an account
@@ -272,8 +292,25 @@ def delete_account(db: Session, account_id: int) -> Deleted | None:
     if account is None:
         return None
     hashes = list(db.scalars(select(AccountSession.token_hash).where(AccountSession.account_id == account_id)))
-    for model in (Follow, MatchFollow, TeamFollow, NotificationMute, Notification, PushSubscription, FanSource, FeedFeedback, ClipReport):
-        db.execute(delete(model).where(model.fan_id == account.fan_id))
-    predictions.forget(db, account.fan_id)  # picks and places in leagues; a league they made stays its other members'
+    forget(db, account.fan_id)
     db.execute(delete(Account).where(Account.id == account_id))  # its sessions go with it
     return Deleted(fan_id=account.fan_id, email=account.email, token_hashes=hashes)
+
+
+def forget(db: Session, fan: str) -> None:
+    """Every row kept under a fan id."""
+    for model in FAN_ROWS:
+        db.execute(delete(model).where(model.fan_id == fan))
+    predictions.forget(db, fan)  # picks and places in leagues; a league they made stays its other members'
+
+
+def forget_orphans(db: Session) -> int:
+    """What's kept under the fan id of an account that's gone: a write another of its devices had under way as it was
+    deleted, with the fan id it had read just before, lands after the deletion (BUG-223). Returns how many fan ids."""
+    gone = set()
+    for model in (*FAN_ROWS, Pick, LeagueMember):
+        gone.update(db.scalars(select(model.fan_id).distinct().where(model.fan_id.startswith(FAN_PREFIX, autoescape=True),
+                                                                     ~select(Account.id).where(Account.fan_id == model.fan_id).exists())))
+    for fan in gone:
+        forget(db, fan)
+    return len(gone)

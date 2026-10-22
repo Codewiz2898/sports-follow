@@ -464,9 +464,11 @@ class SportmonksCricket(Adapter):
         self._thin_told = False
 
     def spare(self) -> bool:
-        """Whether history.py may read now: its scorecards come from the match endpoint, where the live
-        lane reads the matches livescores leaves out, and those need the hour's last LIVE_RESERVE of it."""
-        return sportmonks.spare(sportmonks.CRICKET_MATCH)
+        """Whether a background read may start now (a refresh, a team read, history.py): each reads lists of a team's
+        matches, and older results their scorecards from the match endpoint, where the live lane reads the matches
+        livescores leaves out, and those need the hour's last LIVE_RESERVE of it. With either spent for the hour, a
+        read started would only be refused."""
+        return sportmonks.spare(sportmonks.CRICKET_MATCH) and sportmonks.spare(sportmonks.CRICKET_FIXTURES)
 
     def _seasons(self) -> dict[int, dict[str, Any]]:
         return {s["id"]: s for s in sportmonks.get_json(f"{API}/seasons", ttl=24 * 3600).get("data") or []}

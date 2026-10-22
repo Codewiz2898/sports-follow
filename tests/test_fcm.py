@@ -19,7 +19,7 @@ import pytest
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from sports_follow import fcm, notify
+from sports_follow import fcm, notify, server
 
 from .test_api import api  # noqa: F401  (the fixture)
 
@@ -240,7 +240,12 @@ def test_a_failed_sign_in_pauses_android_pushes_rather_than_each_asking_again(fa
 
 def test_a_failed_sign_in_or_revoked_key_isnt_counted_against_the_device():
     device = SimpleNamespace(failures=0)
-    db = SimpleNamespace(get=lambda model, key: device, delete=lambda row: None, execute=lambda statement: None)
+
+    def failed(statement) -> int:  # the failure added to the count, in the database
+        device.failures += 1
+        return device.failures
+
+    db = SimpleNamespace(scalar=failed, execute=lambda statement: None)
     notify._health(db, 7, fcm.OURS)
     assert device.failures == 0  # five of these would remove every Android device
     notify._health(db, 7, 500)
@@ -296,10 +301,14 @@ def test_with_a_key_the_api_says_so(fake_fcm, api):  # noqa: F811
     ("POST", {"token": "short"}),
     ("POST", {"token": ["x"]}),
     ("POST", {"token": "https://evil.example/" + "a" * 40}),
-    ("POST", {"token": TOKEN + "\x00"}),
     ("DELETE", {"token": None}),
     ("DELETE", {"token": "a/b" * 20}),
 ])
 def test_a_malformed_token_is_refused_plainly(fake_fcm, api, method, body):  # noqa: F811
     answer = api.call(method, "/api/push/fcm", fan="fan", body=body)
     assert answer.status_code == 400 and answer.json()["detail"] == "That isn't an FCM token."
+
+
+def test_a_token_with_a_nul_in_it_is_refused_before_the_route(fake_fcm, api):  # noqa: F811
+    answer = api.call("POST", "/api/push/fcm", fan="fan", body={"token": TOKEN + "\x00"})
+    assert answer.status_code == 400 and answer.json()["detail"] == server.NUL_REFUSED  # BUG-096

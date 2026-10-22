@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import DRAW, Ask, Fired, Found, Glance, Line, Played, Poster, Seen, Sport, stat, words
+from .base import DRAW, Ask, Fired, Found, Glance, Line, Played, Poster, Seen, Sport, outcome, stat, words
 
 if TYPE_CHECKING:
     from ..models import Athlete
@@ -35,8 +35,11 @@ def _level(cp: int) -> int:
     return 2 if cp >= WINNING else 1 if cp >= BETTER else -2 if cp <= -WINNING else -1 if cp <= -BETTER else 0
 
 
-def band(ev: dict[str, Any], current: int = 0) -> int:
+def band(ev: dict[str, Any], current: int = 0, fen: str | None = None) -> int:
     if ev.get("mate") is not None:
+        if ev["mate"] == 0:  # mate on the board ("mate 0"): the side to move in its position (fen) is the one mated
+            fields = (fen or "").split()
+            return {"w": -2, "b": 2}.get(fields[1] if len(fields) > 1 else "", 0)
         return 2 if ev["mate"] > 0 else -2
     cp = ev.get("cp") or 0
     new = _level(cp)
@@ -75,7 +78,7 @@ def settle(before: dict[str, Any] | None, ev: dict[str, Any]) -> dict[str, Any]:
         return {**ev, "move": held.get("move", move), "raw": held.get("raw"), "band": held.get("band", 0), "told": held.get("told", 0),
                 "since": held.get("since"), "since_look": held.get("since_look"), "prev": prev}
     settled = prev["band"]
-    raw = band(ev["look"], settled)
+    raw = band(ev["look"], settled, ev.get("fen"))
     moved = before is None or raw == before.get("raw")
     new = raw if moved else settled
     told = prev["told"]
@@ -95,12 +98,12 @@ def _fullmove(fen: str | None) -> int | None:
 
 def _score(ev: dict[str, Any], side: int) -> str:
     """An evaluation from the player's side: "+3.6", "0.0", "+12" (past ten pawns, whole ones), "mate in 4",
-    "facing mate in 4". Halves round away from zero, counted in whole centipawns as the app's evaluation bar
+    "facing mate in 4", "checkmate" (mate on the board, whichever side; its band says whose). Halves round away from zero, counted in whole centipawns as the app's evaluation bar
     counts them (evalScore in web/src/sports/facts/chess.ts), so the two agree: a float's own rounding made
     -1.35 "-1.4" but 1.25 "+1.2"."""
     if ev.get("mate") is not None:
         mate = ev["mate"] * side
-        return f"mate in {mate}" if mate > 0 else f"facing mate in {-mate}"
+        return "checkmate" if not mate else f"mate in {mate}" if mate > 0 else f"facing mate in {-mate}"
     cp = int(ev.get("cp") or 0) * side
     tenths = (abs(cp) + 5) // 10
     if not tenths:
@@ -110,12 +113,18 @@ def _score(ev: dict[str, Any], side: int) -> str:
 
 
 def _points(result: str) -> tuple[float, float] | None:
-    """ "Won 3½–2½" -> (3.5, 2.5)."""
+    """ "Won 3½–2½" -> (3.5, 2.5): the player's points and their opponent's. A match's result is put from the player's
+    side, but one game's is the board's, White's first ("Won 0–1", a win with Black: lichess_chess.result_label), so
+    a game's point is its word's."""
     match = re.search(r"(\d*½?)–(\d*½?)", result or "")
     if not match:
         return None
     value = lambda s: (int(s.rstrip("½")) if s.rstrip("½") else 0) + (0.5 if s.endswith("½") else 0)  # noqa: E731
-    return value(match.group(1)), value(match.group(2))
+    mine, theirs = value(match.group(1)), value(match.group(2))
+    if mine + theirs == 1:
+        mine = {"W": 1.0, "D": 0.5, "L": 0.0}.get(outcome(result) or "", mine)
+        theirs = 1 - mine
+    return mine, theirs
 
 
 def _sides(now: Seen) -> tuple[str, str, str]:
@@ -142,6 +151,7 @@ class Chess(Sport):
     label = "Chess"
     kinds = ("chess",)
     wikidata = {"lichess_chess": "P1440"}
+    wikidata_sport = ("Q718",)
     athletes = 24_247
     wikidata_title = "P2962"
     profile_role = ("P2962",)  # their title: "Grandmaster"
@@ -383,6 +393,11 @@ class Chess(Sport):
         mine, games = sum(p for p, _ in scored), sum(p + q for p, q in scored)
         fmt = lambda x: (str(int(x)) if x == int(x) else f"{int(x)}½" if x > 1 else "½")  # noqa: E731
         return [{"label": "Score", "value": f"{fmt(mine)}/{fmt(games)}"}, {"label": "Score %", "value": f"{100 * mine / games:.0f}%"}]
+
+    def form_games(self, items: list[dict[str, Any]]) -> tuple[str, str]:
+        """Games, unless one of the results is a knockout's mini-match (several games, "Won 3½–2½"): then rounds, as the
+        record counts it once and the score each of its games ("W–D–L 9–6–2 · Score 22½/32 · Last 17 rounds")."""
+        return ("round", "rounds") if any(sum(p) > 1 for p in (_points(r.get("result", "")) for r in items) if p) else self.games
 
     # ---- the Feed's content judge (curate.py)
 

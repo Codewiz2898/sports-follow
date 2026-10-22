@@ -17,9 +17,10 @@ HOOKS = Path(__file__).parent.parent / ".claude" / "hooks"
 PYTHON = os.environ.get("HOOK_PYTHON", sys.executable)
 
 
-def run(hook: str, command: str, cwd: Path | str = "/") -> int:
+def run(hook: str, command: str, cwd: Path | str = "/", home: Path | None = None) -> int:
     call = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd)}
-    return subprocess.run([PYTHON, str(HOOKS / hook)], input=json.dumps(call), capture_output=True, text=True).returncode
+    env = {**os.environ, "HOME": str(home)} if home is not None else None
+    return subprocess.run([PYTHON, str(HOOKS / hook)], input=json.dumps(call), capture_output=True, text=True, env=env).returncode
 
 
 @pytest.mark.parametrize("path", sorted(HOOKS.glob("*.py")), ids=lambda p: p.name)
@@ -277,6 +278,44 @@ def test_approving_a_production_deploy_is_bharaths(tmp_path):
     assert run("deploy_gate.py", f"cd {tmp_path} && gh api graphql -F query=@viewer.graphql", "/") == 0
 
 
+def test_productions_reviewers_and_the_deploy_keys_command_stay_bharaths_however_asked(tmp_path):
+    # BUG-221: GraphQL's environment mutations (its reviewers cleared, or it deleted) and ssh's RemoteCommand option
+    # went past the gate; with no reviewer left, a Deploy run started by hand would have gone live unseen.
+    clear = 'mutation { updateEnvironment(input: {environmentId: "EN_x", reviewers: []}) { environment { name } } }'
+    (tmp_path / "clear.graphql").write_text(clear)
+    (tmp_path / "reviewers.graphql").write_text('query { repository(owner: "o", name: "r") { environment(name: "production") { protectionRules(first: 5) { nodes { type } } } } }')
+    (tmp_path / "ssh_config").write_text("Host stann\n  HostName 203.0.113.7\n  User deploy\n  RemoteCommand deploy\n")
+    (tmp_path / "ssh_config_plain").write_text("Host stann\n  HostName 203.0.113.7\n  User deploy\n")
+    passes = [
+        "gh api graphql -F query=@reviewers.graphql",
+        'gh api graphql -f query=\'query { repository(owner: "o", name: "r") { environments(first: 5) { nodes { name } } } }\'',
+        "ssh -o BatchMode=yes deploy@203.0.113.7 /opt/sports-follow/deploy/deploy.sh status",
+        "ssh -o RemoteCommand=uptime deploy@203.0.113.7",
+        "ssh -F ssh_config_plain deploy@stann 'cd /opt/sports-follow && deploy/deploy.sh status'",
+        "gh api repositories/1/environments/production --jq .protection_rules",
+        "ssh deploy@203.0.113.7 -i deploy_key /opt/sports-follow/deploy/deploy.sh status",
+    ]
+    stops = [
+        f"gh api graphql -f query='{clear}'",
+        "gh api graphql -f query='mutation { deleteEnvironment(input: {id: \"EN_x\"}) { clientMutationId } }'",
+        "gh api graphql -f query='mutation { createEnvironment(input: {repositoryId: \"R_x\", name: \"production\"}) { environment { id } } }'",
+        "gh api graphql -F query=@clear.graphql",
+        "ssh -i ~/.ssh/k -o RemoteCommand='deploy abc1234' deploy@16.178.106.36",
+        "ssh -oRemoteCommand=rollback deploy@203.0.113.7",
+        "ssh -o 'RemoteCommand deploy' deploy@203.0.113.7",
+        "ssh -o remotecommand=deploy -i deploy_key deploy@203.0.113.7",
+        "ssh -o RemoteCommand='/opt/sports-follow/deploy/deploy.sh deploy' deploy@203.0.113.7",
+        "ssh -F ssh_config deploy@stann",
+        "ssh -Fssh_config deploy@stann",
+        "ssh deploy@203.0.113.7 -i deploy_key deploy",  # OpenSSH reads options after the host too
+        "ssh deploy@203.0.113.7 -o RemoteCommand=deploy",
+        "gh api -X PUT repositories/1/environments/production -F wait_timer=0",
+        "gh api --method DELETE repositories/1/environments/production",
+    ]
+    assert [c for c in passes if run("deploy_gate.py", c, tmp_path) != 0] == []
+    assert [c for c in stops if run("deploy_gate.py", c, tmp_path) != 2] == []
+
+
 @pytest.mark.parametrize("command, blocked", [
     ("curl -s localhost:18421/api/health", False),
     ("docker exec sports-follow-postgres psql -U sports -d sports_follow_r2 -c 'select 1'", False),
@@ -289,3 +328,14 @@ def test_approving_a_production_deploy_is_bharaths(tmp_path):
 ])
 def test_a_hunter_runs_its_repros_but_never_changes_git(command, blocked):
     assert run("hunter_guard.py", command) == (2 if blocked else 0)
+
+
+def test_a_deploy_set_as_the_remote_command_of_the_users_own_ssh_config_is_stopped_too(tmp_path):
+    """BUG-221's review: OpenSSH reads ~/.ssh/config when no -F is named, so a RemoteCommand there (written by another
+    tool than this hook sees) would run deploy.sh from a plain `ssh stann`."""
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "config").write_text("Host stann\n  HostName 203.0.113.7\n  User deploy\n  RemoteCommand deploy\n")
+    assert run("deploy_gate.py", "ssh stann", tmp_path, home=home) == 2
+    (home / ".ssh" / "config").write_text("Host stann\n  HostName 203.0.113.7\n  User deploy\n")
+    assert run("deploy_gate.py", "ssh stann 'cd /opt/sports-follow && deploy/deploy.sh status'", tmp_path, home=home) == 0

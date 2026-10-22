@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import re
 from importlib.metadata import metadata
 from pathlib import Path
 
-from sports_follow import credits
+from sports_follow import controls, credits
+from sports_follow.adapters import ALL, KNOWN, NEWS, VIDEOS
 from sports_follow.sports import chess, football
 
 
@@ -76,6 +78,60 @@ def test_a_build_without_the_agent_credits_no_model_and_no_news():
     # SPORTS_FOLLOW_AGENT=0 (no OpenRouter key): pages come from the sources alone.
     page = credits.credits({"sportmonks_football": 1, "pandascore_esports": 1, "pubg_esports": 1}, stockfish=False, agent=False)
     assert "PandaScore" in _names(page["data"]) and "AI" not in _names(page["also"]) and "News publishers" not in _names(page["also"])
+
+
+def test_a_sport_or_source_turned_off_keeps_its_credit():
+    # Turning chess, or Lichess, off in the admin panel stops it being read, but the players' pages, results and boards
+    # built from Lichess's broadcasts stay up: Lichess's CC BY-SA credit and its licence link stay with them, and so do
+    # FIDE's ratings and the engine under the boards. A source this build can't run (no token) is still never credited.
+    lichess = KNOWN["lichess_chess"].provider
+    for turn in (lambda on: controls.turn_sport("chess", on), lambda on: controls.turn_source("lichess_chess", on)):
+        turn(False)
+        page = credits.credits(stockfish=False, agent=False)
+        entry = next((c for c in page["data"] if c["name"] == lichess.name), None)
+        assert entry and (entry["licence"], entry["licence_url"]) == (lichess.licence, lichess.licence_url)
+        assert {"FIDE", "Stockfish.js"} <= set(_names(page["also"]))
+        turn(True)
+    can = {a.provider.name for a in ALL}
+    assert set(_names(credits.credits(stockfish=False, agent=False)["data"])) <= can
+
+
+def test_the_feeds_sources_are_credited():
+    # The Feed shows videos and publishers' headlines with or without the research agent: each of its sources is
+    # credited for what it gives, a news source with the publishers whose feeds the sports read.
+    feeds = [*VIDEOS.values(), *NEWS.values()]
+    page = credits.credits({s.system: s for s in feeds}, stockfish=False, agent=False, on=(football.SPORT, chess.SPORT))
+    also = {c["name"]: c for c in page["also"]}
+    for source in feeds:
+        entry = also.get(source.provider.name)
+        assert entry and entry["url"] == source.provider.url and source.provider.what in entry["what"], source.system
+    for source in NEWS.values():
+        read = [outlet for s in (football.SPORT, chess.SPORT) for feed, outlet in s.news_feeds.items() if source.feed_pattern.fullmatch(feed)]
+        assert read and all(outlet in also[source.provider.name]["what"] for outlet in read)
+    # By default, those this build can run (a video source with no key isn't), whether the admin panel has them on now.
+    for source in feeds:
+        controls.turn_source(source.system, False)
+    named = _names(credits.credits(stockfish=False, agent=False)["also"])
+    assert [s.provider.name in named for s in feeds] == [s.available() for s in feeds]
+
+
+ROOT_WEB = ROOT / "web"
+# A package the web app ships that is part of another's project, credited as that one.
+PART_OF = {"react-dom": "react"}
+
+
+def test_every_package_the_web_app_ships_is_credited():
+    # What web/package.json puts in the bundle (its dependencies, not the tools that build it) is under Built with,
+    # with the licence its package gives where it's installed; the page itself shows only the name, link and licence.
+    shipped = json.loads((ROOT_WEB / "package.json").read_text())["dependencies"]
+    listed = {item["npm"]: item for item in credits.SOFTWARE if "npm" in item}
+    missing = [name for name in shipped if PART_OF.get(name, name) not in listed]
+    assert not missing, f"shipped but not credited: {missing}"
+    for name, item in listed.items():
+        installed = ROOT_WEB / "node_modules" / name / "package.json"
+        if installed.is_file():
+            assert item["licence"] == json.loads(installed.read_text())["license"], name
+    assert all(set(s) <= {"name", "url", "licence"} for s in credits.credits({}, stockfish=False)["software"])
 
 
 def test_listed_python_licences_match_the_installed_packages():

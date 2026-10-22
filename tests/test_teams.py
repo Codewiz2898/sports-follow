@@ -25,8 +25,8 @@ from sports_follow import accounts, bus, notify, pipeline, server, sports, struc
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, Fixture, Line, PlayerRef, Provider, Snapshot, SourceTeam, budget, espn_basketball, espn_cricket
 from sports_follow.adapters.base import DIGITS
 from sports_follow.alerts import Item, Watch, plan
-from sports_follow.models import (Account, Event, EventPlayer, EventState, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerIdentity,
-                                  PushSubscription, Team, TeamFollow, TeamOverride)
+from sports_follow.models import (Account, Event, EventPlayer, EventState, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerCard,
+                                  PlayerIdentity, PushSubscription, Team, TeamFollow, TeamOverride)
 from sports_follow.sports.football import result_label
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
@@ -437,11 +437,11 @@ def test_the_fan_stream_carries_a_teams_games_from_a_day_and_a_half_before_they_
 
     # And the stream subscribes to those games' channels, with the fan's teams in its first frame.
     subscribed: list[list[str]] = []
-    monkeypatch.setattr(server, "_stream", lambda channels, first, request: subscribed.append(channels) or "stream")
+    monkeypatch.setattr(server, "_stream", lambda channels, first, request, again=None: subscribed.append(channels) or "stream")
     monkeypatch.setattr(server, "_sse", lambda body, places=None: body)
     monkeypatch.setattr(server, "streaming", server.Counter())  # the stream's places, given back by its answer
     assert asyncio.run(server.my_stream(SimpleNamespace(client=None), fan="gooner")) == "stream"
-    assert subscribed == [[f"match:{key['pitch:100']}"]]
+    assert subscribed == [[f"match:{key['pitch:100']}", "follows:gooner"]]  # and the fan's own channel (BUG-165)
 
 
 @needs_db
@@ -800,3 +800,138 @@ def test_a_fan_of_both_sides_gets_full_pages_of_their_game(db, redis, source):
         got = pages(db, fan, 10)
         assert [len(p) for p in got] == [10, 10, 1]
         assert [t for p in got for t in p] == want
+
+
+@needs_db
+def test_a_sport_turned_off_is_out_of_reach_and_its_hidden_follows_take_no_room(db, redis, source, monkeypatch):
+    # BUG-097: a turned-off sport's player could still be followed by their id here, stayed on the fan's Following,
+    # and its teams, hidden from the fan, still counted toward the teams they may follow.
+    class Cards(dict):
+        async def get(self, key: str):
+            return super().get(key)
+
+        async def mget(self, keys: list[str]) -> list:
+            return [super().get(key) for key in keys]
+
+        async def set(self, key: str, value: str, **kwargs) -> bool:
+            self[key] = value
+            return True
+
+    monkeypatch.setitem(server.state, "redis", Cards())
+    teams.import_teams(source.fake, NOW)
+    lakers = Team(name="Los Angeles Lakers", sport="basketball", system="pitch", external_id="50", search_text=teams.search_text("Los Angeles Lakers", "LAL"))
+    carlsen = Player(slug="magnus-carlsen", name="Magnus Carlsen", sport="Chess")
+    db.add_all([lakers, carlsen])
+    db.flush()
+    db.add(PlayerCard(player_id=carlsen.id, status="ready", card={"player_id": carlsen.id, "player": {"name": "Magnus Carlsen", "sport": "Chess"}}))
+    db.add_all([TeamFollow(fan_id="fan", team_id=team(db, ARS).id, alert_rules={}), TeamFollow(fan_id="fan", team_id=lakers.id, alert_rules={}),
+                Follow(fan_id="fan", player_id=carlsen.id, alert_rules={}),
+                TeamFollow(fan_id="account", team_id=team(db, ARS).id, alert_rules={}), TeamFollow(fan_id="account", team_id=lakers.id, alert_rules={}),
+                TeamFollow(fan_id="phone", team_id=team(db, CHE).id, alert_rules={})])
+    db.commit()
+    monkeypatch.setattr(teams, "MAX", 2)
+    monkeypatch.setattr(sports, "ENABLED", [s for s in sports.ALL if s.key not in ("basketball", "chess")])
+    # The Lakers and Carlsen are out of sight, so they take none of the fan's room: a second football team is theirs to follow.
+    teams.follow(db, "fan", team(db, CHE).id)
+    db.commit()
+    teams.merge(db, "phone", "account")
+    db.commit()
+    assert set(db.scalars(select(TeamFollow.team_id).where(TeamFollow.fan_id == "account"))) == {team(db, ARS).id, team(db, CHE).id, lakers.id}
+    shown = asyncio.run(server.following("fan"))
+    assert shown["players"] == [] and [t["name"] for t in shown["teams"]] == ["Arsenal", "Chelsea"]
+    # A turned-off sport's player isn't followed by their id here either.
+    with pytest.raises(server.HTTPException) as off:
+        asyncio.run(server.follow(None, {"player_id": carlsen.id}, "other"))  # pyright: ignore[reportArgumentType]: the request isn't read for a player here
+    assert off.value.status_code == 404 and db.scalar(select(func.count()).select_from(Follow).where(Follow.fan_id == "other")) == 0
+    # Back on, all of it is back.
+    monkeypatch.setattr(sports, "ENABLED", sports.ALL)
+    assert [p["player"]["name"] for p in asyncio.run(server.following("fan"))["players"]] == ["Magnus Carlsen"]
+    assert asyncio.run(server.follow(None, {"player_id": carlsen.id}, "other"))["player_id"] == carlsen.id  # pyright: ignore[reportArgumentType]
+
+
+@needs_db
+def test_a_followed_team_with_no_game_soon_is_read_again_less_often(db, redis, source, monkeypatch):
+    # BUG-227: every followed team was read again every half hour, game or not, and once most teams have a follower
+    # that's the source's background allowance: a team with nothing in the next two days is read every few hours.
+    monkeypatch.setattr(teams, "_now", lambda: NOW)
+    monkeypatch.setattr(structured, "_now", lambda: NOW)
+    teams.import_teams(source.fake, NOW)
+    arsenal, chelsea = team(db, ARS), team(db, CHE)
+    source.fixtures[ARS] = [fixture("100", NOW + timedelta(days=5))]
+    source.fixtures[CHE] = [fixture("101", NOW + timedelta(hours=30), home=CHE, away=TOT)]
+    for t in (arsenal, chelsea):
+        teams.follow(db, "fan", t.id)
+    db.commit()
+    for t in (arsenal, chelsea):
+        teams.refresh(t.id)
+    db.expire_all()
+    assert pipeline.due_work(NOW + timedelta(hours=1)).teams == [chelsea.id]  # a game tomorrow: every half hour
+    assert sorted(pipeline.due_work(NOW + teams.QUIET + timedelta(minutes=1)).teams) == sorted([arsenal.id, chelsea.id])
+    assert not teams.stale(team(db, ARS), NOW + timedelta(hours=1)) and teams.stale(team(db, CHE), NOW + timedelta(hours=1))
+
+
+@needs_db
+def test_a_team_page_the_minutes_reads_had_no_room_for_asks_again_at_the_next_look(db, redis, source, monkeypatch):
+    # BUG-231: a page took its team's ten-minute wait before the minute's reads were counted, so in a burst of pages
+    # (a crawler's) every team past the sixth was left unread, and its page empty, for ten minutes.
+    queued: list[int] = []
+
+    async def enqueue(function: str, team_id: int, **options) -> None:
+        queued.append(team_id)
+
+    class Counts(dict):
+        async def incr(self, key: str) -> int:
+            self[key] = self.get(key, 0) + 1
+            return self[key]
+
+        async def expire(self, key: str, seconds: int, nx: bool = False) -> bool:
+            return True
+
+    counts = Counts()
+    monkeypatch.setattr(server, "enqueue", enqueue)
+    monkeypatch.setitem(server.state, "redis", counts)
+    monkeypatch.setattr(teams, "READS", 1)
+    teams.import_teams(source.fake, NOW)
+    arsenal, chelsea = team(db, ARS).id, team(db, CHE).id
+    assert asyncio.run(server.team_page(arsenal, "crawler"))["refreshing"] is True
+    assert asyncio.run(server.team_page(chelsea, "crawler"))["refreshing"] is False  # the minute's read is spent
+    counts.clear()  # the next minute
+    assert asyncio.run(server.team_page(chelsea, "fan"))["refreshing"] is True and queued == [arsenal, chelsea]
+    assert asyncio.run(server.team_page(arsenal, "fan"))["refreshing"] is False  # asked a moment ago
+
+
+@needs_db
+def test_search_lists_every_team_with_the_name_typed_and_a_sport_typed_with_it_narrows_it(db, redis, source):
+    # BUG-233: search listed six teams at most, so Team Liquid in eight titles couldn't all be reached; and a sport's
+    # name typed with the team's ("india cricket") found none.
+    games = ["valorant", "cs2", "lol", "dota2", "r6siege", "overwatch", "rocketleague", "mlbb"]
+    db.add_all([Team(name="Team Liquid", sport=game, system="pitch", external_id=f"tl-{game}", search_text=teams.search_text("Team Liquid", "TL")) for game in games])
+    db.add_all([Team(name="Team Liquid Academy", sport="valorant", system="pitch", external_id="tla", search_text=teams.search_text("Team Liquid Academy", "TLA")),
+                Team(name="India", sport="cricket", system="pitch", external_id="ind", search_text=teams.search_text("India", "IND")),
+                Team(name="India", sport="football", system="pitch", external_id="ind-fc", search_text=teams.search_text("India", "IND"))])
+    db.commit()
+    found = teams.find(db, "team liquid")
+    assert sorted(t["sport"] for t in found if t["name"] == "Team Liquid") == sorted(games)  # every title's
+    assert len(teams.find(db, "team liq")) == teams.LIMIT  # none typed whole: the first few, as before
+    assert [(t["name"], t["sport"]) for t in teams.find(db, "liquid valorant")] == [("Team Liquid", "valorant"), ("Team Liquid Academy", "valorant")]
+    assert [(t["name"], t["sport"]) for t in teams.find(db, "india cricket")] == [("India", "cricket")]
+    assert [(t["name"], t["sport"]) for t in teams.find(db, "cricket india")] == [("India", "cricket")]
+    assert teams.find(db, "india cricket", sport="football") == [] and teams.find(db, "cricket") == []
+
+
+@needs_db
+def test_a_devices_teams_of_a_sport_turned_off_come_into_the_account_without_taking_its_room(db, source, monkeypatch):
+    """BUG-097's review: signing in brings the device's teams of a sport that's off as the account's own (hidden till
+    it's back) without counting them against MAX, so a team the fan can see isn't dropped for one they can't."""
+    teams.import_teams(source.fake, NOW)
+    lakers = Team(name="Los Angeles Lakers", sport="basketball", system="pitch", external_id="50", search_text=teams.search_text("Los Angeles Lakers", "LAL"))
+    db.add(lakers)
+    db.flush()
+    db.add_all([TeamFollow(fan_id="account", team_id=team(db, ARS).id, alert_rules={}),
+                TeamFollow(fan_id="phone", team_id=lakers.id, alert_rules={}), TeamFollow(fan_id="phone", team_id=team(db, CHE).id, alert_rules={})])
+    db.commit()
+    monkeypatch.setattr(teams, "MAX", 2)
+    monkeypatch.setattr(sports, "ENABLED", [s for s in sports.ALL if s.key != "basketball"])
+    assert teams.merge(db, "phone", "account") == 0
+    db.commit()
+    assert set(db.scalars(select(TeamFollow.team_id).where(TeamFollow.fan_id == "account"))) == {team(db, ARS).id, team(db, CHE).id, lakers.id}

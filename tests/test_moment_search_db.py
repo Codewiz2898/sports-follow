@@ -106,6 +106,22 @@ def test_a_moment_search_asks_for_the_player_by_the_name_fans_write(world):
     assert queued() == [(bumrah, mid, "jasprit bumrah 5 wickets Lord's", 95, None, None)]
 
 
+def test_a_tennis_win_is_searched_for_by_its_round_not_its_tournaments_name(world):
+    # BUG-239: a Grand Slam final won had no search (the round was read from the game's title, "A vs B"), while every
+    # round-robin win at the ATP Finals searched for "wins final" (from the tournament's name).
+    sabalenka, sinner = player("Aryna Sabalenka", sport="tennis"), player("Jannik Sinner", sport="tennis")
+    with db_module.session() as s:
+        final = Event(key="usopen-final", sport="tennis", title="Aryna Sabalenka vs Jessica Pegula", notes="Final", competition="US Open", status="final")
+        group = Event(key="atp-finals-rr", sport="tennis", title="Jannik Sinner vs Ben Shelton", notes="Round Robin", competition="Nitto ATP Finals", status="final")
+        s.add_all([final, group])
+        s.flush()
+        games = final.id, group.id
+    mid = fire(sabalenka, games[0], Found("final", "key", "Aryna Sabalenka: Won in 2 sets", "A. Sabalenka 6-3 7-6(4) J. Pegula", priority=80))
+    fire(sinner, games[1], Found("final", "key", "Jannik Sinner: Won in 2 sets", "J. Sinner 6-4 6-4 B. Shelton", priority=80))
+    searches.queue(NOW + timedelta(minutes=5))
+    assert queued() == [(sabalenka, mid, "Aryna Sabalenka wins final US Open", 80, None, None)]
+
+
 def test_a_later_moment_in_the_game_takes_its_search_over_until_its_last_run(world):
     salah = player("Mohamed Salah", sport="football")
     derby = game("Liverpool vs Everton", sport="football")
@@ -228,6 +244,37 @@ def test_a_moment_taken_back_after_its_search_was_queued_takes_the_search_back_t
     assert searches.queue(NOW + timedelta(minutes=35)) == {"queued": 1, "taken over": 0, "taken back": 1}
     [(_, moment, query, _, _, _)] = queued()
     assert (moment, query) == (first, "Mohamed Salah goal Liverpool vs Everton")
+
+
+def test_a_moment_taken_back_after_its_search_ran_keeps_that_run_counted_and_what_stands_takes_the_search_over(world):
+    # BUG-124: the search was deleted with its taken-back moment, its run no longer counted against the day's cap, and
+    # the game's goal that stood was searched for again from the start.
+    salah = player("Mohamed Salah", sport="football")
+    derby = game("Liverpool vs Everton", sport="football")
+    first = fire(salah, derby, Found("goal", "key", "Goal: Mohamed Salah", "", "goal@101", 85))
+    fire(salah, derby, Found("goal", "key", "Goal: Mohamed Salah (2)", "", "goal@140", 90), at=NOW + timedelta(minutes=20))
+    searches.queue(NOW + timedelta(minutes=25))
+    assert searches.run(FIRST)["searched"] == 1 and searches.spent(NOW) == 1
+    fire(salah, derby, Found("correction", "key", "Goal ruled out", "", "goal:goal@140", 85), at=FIRST + timedelta(hours=1))
+    assert searches.queue(FIRST + timedelta(hours=1, minutes=5)) == {"queued": 0, "taken over": 1, "taken back": 0}
+    assert searches.spent(NOW) == 1  # the run it had still counts
+    [(_, moment, query, priority, first_at, second_at)] = queued()
+    assert (moment, query, priority, first_at, second_at) == (first, "Mohamed Salah goal Liverpool vs Everton", 85, FIRST, None)
+    assert searches.run(FIRST + timedelta(hours=2))["searched"] == 0  # its first run is done: only its last is to come
+    assert searches.run(SECOND)["searched"] == 1 and searches.spent(NOW) == 2
+
+
+def test_a_search_whose_only_moment_is_taken_back_after_it_ran_runs_no_more_and_still_counts(world):
+    salah = player("Mohamed Salah", sport="football")
+    derby = game("Liverpool vs Everton", sport="football")
+    fire(salah, derby, Found("goal", "key", "Goal: Mohamed Salah", "", "goal@101", 85))
+    searches.queue(NOW + timedelta(minutes=5))
+    assert searches.run(FIRST)["searched"] == 1
+    fire(salah, derby, Found("correction", "key", "Goal ruled out", "", "goal:goal@101", 85), at=FIRST + timedelta(hours=1))
+    assert searches.queue(FIRST + timedelta(hours=1, minutes=5)) == {"queued": 0, "taken over": 0, "taken back": 0}
+    assert searches.spent(NOW) == 1
+    assert searches.run(SECOND)["searched"] == 0 and world.api_calls("/search") == 1  # nothing stands to search for
+    assert searches.run(FIRST + searches.DAY + timedelta(hours=25))["dropped"] == 1 and queued() == []  # gone once its run no longer counts
 
 
 def test_the_ranking_keeps_the_moment_a_search_found_a_video_for(world, monkeypatch):

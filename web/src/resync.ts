@@ -32,3 +32,13 @@ export function listed(players: Card[], shown: Card[], changing: (playerId: numb
     return { ...(p.version >= c.version ? { ...c, ...p } : c), alerts: changing(p.player_id) ? c.alerts : p.alerts }
   })
 }
+
+/**
+ * The fan's players with a player's card as a follow answered it (POST /api/follows): in place of the one shown, at
+ * the level the fan chose for them, which that answer doesn't carry (BUG-170: Retry on a failed page, which follows
+ * again, showed "Key moments" and let toasts through at key); else added.
+ */
+export function withFollowed(shown: Card[], card: Card): Card[] {
+  if (!shown.some((c) => c.player_id === card.player_id)) return [...shown, card]
+  return shown.map((c) => (c.player_id === card.player_id ? { ...card, alerts: card.alerts ?? c.alerts } : c))
+}

@@ -150,11 +150,11 @@ def test_a_football_match_called_off_is_voided_and_one_put_back_waits():
     put_back = sm.parse_match(football_match("POSTPONED", 0, 0))
     assert (put_back.status, put_back.state["cancelled"]) == ("postponed", False)
     assert FOOTBALL.answer("result", put_back.status, put_back.state) is None  # its new date, or the sweep, settles it
-    # ESPN calls an abandoned match over ("post"), with the score it stopped at: that's no result.
+    # ESPN calls an abandoned match over ("post"), with the score it stopped at: that's no result (off, BUG-137).
     data = load("espn/soccer-summary-final")
     data["header"]["competitions"][0]["status"]["type"] = {"name": "STATUS_ABANDONED", "state": "post", "description": "Abandoned"}
     abandoned = espn_soccer.parse_summary(data, "uefa.nations")
-    assert abandoned.status == "final" and FOOTBALL.answer("result", abandoned.status, abandoned.state) == sports.VOID
+    assert abandoned.status == "postponed" and FOOTBALL.answer("result", abandoned.status, abandoned.state) == sports.VOID
 
 
 # ---------------------------------------------------------------- cricket: who wins a limited-overs match
@@ -194,6 +194,21 @@ def test_cricket_closes_at_the_first_ball_and_settles_from_the_winner():
     # Recorded: India won by 8 wkts.
     final = espn_cricket.parse_summary(load("espn/cricket-summary-final"))
     assert CRICKET.answer("result", final.status, final.state) == "6"
+
+
+def test_a_cricket_result_whose_note_garbles_the_winners_name_still_settles():
+    """BUG-188: with no winner marked, a note Sportmonks garbled ("Royal Challengers won by 6Bengaluru wickets") named
+    no side by its whole name, so the call waited unanswered and the sweep voided it: right calls scored nothing. A
+    name that's the start of exactly one side's is that side now; one that's the start of both, or of neither, waits."""
+    rcb = {"id": "8", "name": "Royal Challengers Bengaluru", "abbr": "RCB", "winner": None}
+    pbks = {"id": "9", "name": "Punjab Kings", "abbr": "PBKS", "winner": None}
+    garbled = {"teams": [rcb, pbks], "summary": "Royal Challengers won by 6Bengaluru  wickets (with 12 balls remaining)"}
+    assert CRICKET.answer("result", "final", garbled) == "8"
+    level = {"teams": [{"id": "1", "name": "India A"}, {"id": "2", "name": "India Women"}], "summary": "India won by 5 runs"}
+    nobody = [{**garbled, "summary": f"{said} won by 6 wickets"} for said in ("Roy", "Challengers")]  # not the start of a name, in whole words
+    assert [CRICKET.answer("result", "final", s) for s in (level, *nobody)] == [None, None, None]
+    exact = {"teams": [{"id": "1", "name": "India A"}, {"id": "2", "name": "India"}], "summary": "India won by 5 runs"}
+    assert CRICKET.answer("result", "final", exact) == "2"  # a whole name still comes first
 
 
 def test_a_cricket_tie_no_result_or_washout_is_voided_and_one_put_back_waits():

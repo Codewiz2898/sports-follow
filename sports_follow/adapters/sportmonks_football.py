@@ -66,6 +66,8 @@ _SEASON_STATS = [("APPEARANCES", "Apps"), ("GOALS", "Goals"), ("ASSISTS", "Assis
 _STARTER, _BENCH = 11, 12  # lineup type ids
 _LINEUP_CONFIRMED = 572  # metadata type: {"confirmed": true} once the clubs have published their team sheets
 _GOALS = {"GOAL", "OWNGOAL", "PENALTY"}
+# What only a player on the pitch does (a card can be shown on the bench): a substitute with any of these has come on.
+_ON_THE_PITCH = ("GOALS", "ASSISTS", "SHOTS_TOTAL", "SHOTS_ON_TARGET", "FOULS", "OFFSIDES")
 
 
 def _status(state: dict[str, Any] | None, start: datetime | None = None, now: datetime | None = None) -> str:
@@ -190,9 +192,12 @@ def _values(row: dict[str, Any]) -> dict[str, Any]:
 def parse_lines(x: dict[str, Any], status: str) -> dict[str, Line]:
     """Each squad player's line, keyed by Sportmonks player id. Before kick-off there are none: a
     published team sheet isn't a line yet. Nor are Sportmonks' predicted line-ups, if the clubs' sheets
-    are still unconfirmed at kick-off: a guessed starter would be told as one."""
+    are still unconfirmed at kick-off: a guessed starter would be told as one. A substitute has come on once
+    they've minutes, a substitution brought them on, or they've done something only a player on the pitch does
+    (a goal, a shot): a stoppage-time sub's minutes read 0 for a while, and their goal mustn't wait for them."""
     if status == "scheduled" or _predicted(x):
         return {}
+    brought_on = {str(e.get("player_id")) for e in x.get("events") or [] if (e.get("type") or {}).get("developer_name") == "SUBSTITUTION" and e.get("player_id")}
     lines: dict[str, Line] = {}
     for row in x.get("lineups") or []:
         pid = row.get("player_id")
@@ -204,7 +209,7 @@ def parse_lines(x: dict[str, Any], status: str) -> dict[str, Line]:
         stats = [{"label": label, "value": str(red if key == "REDCARDS" else values[key])} for key, label in _LINE_STATS if (red if key == "REDCARDS" else values.get(key)) not in (None, "", 0)]
         if row.get("type_id") == _STARTER:
             role = "Started"
-        elif minutes > 0:
+        elif minutes > 0 or str(pid) in brought_on or any(values.get(key) for key in _ON_THE_PITCH):
             role = "Came on"
         else:
             lines[str(pid)] = Line(headline="On the bench", stats=[])

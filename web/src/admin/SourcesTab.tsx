@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { ApiError } from '../api'
 import { admin, type AdminSource, type Allowance, type Limits, type SourcesView } from './api'
 import { LinearCard } from './LinearCard'
 import { Note, breakable, count, useFailure } from './shared'
@@ -6,7 +7,7 @@ import { Note, breakable, count, useFailure } from './shared'
 const REFRESH_MS = 30_000
 // Each window, as "a minute", "an hour", "a day".
 const SPANS: [seconds: number, per: string][] = [[60, 'a minute'], [3600, 'an hour'], [86400, 'a day']]
-const LANES: Record<string, string> = { live: 'Live games', fan: 'Fans', refresh: 'Refreshes', history: 'Older results', import: 'Registry import' }
+const LANES: Record<string, string> = { live: 'Live games', fan: 'Fans', refresh: 'Refreshes', history: 'Older results', import: 'Registry import', feed: 'Feed' }
 
 /** Every source with a switch, then every allowance its sources spend: where it stands, what each lane spent, and its limits to change. */
 export function SourcesTab() {
@@ -77,7 +78,7 @@ export function SourcesTab() {
           Linear's issues against its plan's limit: past it, Linear takes no new ones.
         </Note>
         <div className="admin-allowances">
-          {view.budgets.map((b) => <AllowanceCard key={b.name} allowance={b} onSaved={setView} />)}
+          {view.budgets.map((b) => <AllowanceCard key={b.name} allowance={b} onSaved={setView} onStale={() => void load()} />)}
           <LinearCard />
         </div>
       </section>
@@ -110,8 +111,10 @@ function summary(limits: Limits): string {
   return `${windows}${reserve}${fans} · a ${limits.pause} s pause after a 429`
 }
 
-function AllowanceCard({ allowance: b, onSaved }: { allowance: Allowance; onSaved: (view: SourcesView) => void }) {
+function AllowanceCard({ allowance: b, onSaved, onStale }: { allowance: Allowance; onSaved: (view: SourcesView) => void; onStale: () => void }) {
   const failed = useFailure()
+  // The day its source counts from (YouTube's starts at midnight Pacific): the usage table's Today is that day.
+  const dayZone = b.limits.windows.find((w) => w.seconds === 86400 && w.zone)?.zone
   const [editing, setEditing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -163,6 +166,7 @@ function AllowanceCard({ allowance: b, onSaved }: { allowance: Allowance; onSave
       {b.changed && <span className="tiny muted">Declared: {summary(b.declared)}</span>}
       {b.usage.length > 0 && (
         <table className="usage">
+          {dayZone && <caption className="tiny muted">Today is from midnight {zoneName(dayZone)} time, as its source counts its day.</caption>}
           <thead><tr><th scope="col">Lane</th><th scope="col">Sent this hour</th><th scope="col">Today</th><th scope="col">Refused this hour</th><th scope="col">Today</th></tr></thead>
           <tbody>
             {b.usage.map((u) => (
@@ -172,9 +176,14 @@ function AllowanceCard({ allowance: b, onSaved }: { allowance: Allowance; onSave
         </table>
       )}
       {error && <div className="error-box" role="alert">{error}</div>}
-      {editing ? <LimitsForm allowance={b} onSaved={(view) => { onSaved(view); setEditing(false) }} onCancel={() => setEditing(false)} /> : (
+      {editing ? (
+        <LimitsForm
+          allowance={b} onSaved={(view) => { onSaved(view); setEditing(false) }} onCancel={() => setEditing(false)}
+          onStale={(message) => { setEditing(false); setError(message); onStale() }}
+        />
+      ) : (
         <div className="row" style={{ justifyContent: 'flex-start' }}>
-          <button type="button" className="btn small" onClick={() => setEditing(true)}>Change limits</button>
+          <button type="button" className="btn small" onClick={() => { setError(null); setEditing(true) }}>Change limits</button>
           {b.changed && <button type="button" className="btn small" disabled={busy} onClick={() => void reset()}>Back to declared</button>}
         </div>
       )}
@@ -196,9 +205,14 @@ function draftOf(limits: Limits): Draft {
 /** A whole number as typed, or NaN, which goes as null: the server says what's wrong with it. */
 const whole = (text: string) => (/^\d+$/.test(text.trim()) ? Number(text.trim()) : NaN)
 
-function LimitsForm({ allowance: b, onSaved, onCancel }: { allowance: Allowance; onSaved: (view: SourcesView) => void; onCancel: () => void }) {
+function LimitsForm({ allowance: b, onSaved, onCancel, onStale }: {
+  allowance: Allowance; onSaved: (view: SourcesView) => void; onCancel: () => void; onStale: (message: string) => void
+}) {
   const failed = useFailure()
   const [draft, setDraft] = useState(() => draftOf(b.limits))
+  // What was saved when the draft was made: the tab's 30 s refresh may bring a newer one meanwhile, which a save from
+  // this draft would undo. The server refuses it (409) if it's changed since, and the card shows the newer one.
+  const [basedOn] = useState(() => b.saved)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const declared = (seconds: number) => b.declared.windows.find((w) => w.seconds === seconds)
@@ -218,8 +232,12 @@ function LimitsForm({ allowance: b, onSaved, onCancel }: { allowance: Allowance;
       pause: whole(draft.pause),
     }
     try {
-      onSaved(await admin.setLimits(b.name, limits))
+      onSaved(await admin.setLimits(b.name, limits, basedOn))
     } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        onStale(failed(err))
+        return
+      }
       setError(failed(err))
       setBusy(false)
     }

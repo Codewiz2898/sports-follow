@@ -4,10 +4,11 @@ named by the side that won, and form over a run of matches."""
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from ..naming import team_key
-from .base import ORDINAL, VOID, Ask, Fired, Found, Glance, Line, Notable, Poster, Seen, Sport, crossed, ground, joined, number, short, spaced, stage, stat, undecided, values, words
+from .base import ORDINAL, VOID, Ask, Fired, Found, Glance, Line, Notable, Poster, Seen, Sport, crossed, ground, joined, number, outcome, short, spaced, stage, stat, undecided, values, words
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture
@@ -90,9 +91,9 @@ def batting_bowling(lines: list[dict[str, Any]]) -> list[dict[str, str]]:
 # ---------------------------------------------------------------- the sport
 
 # A poster's word for a batting milestone (any other mark is its number: "150") and a wicket haul's count.
-_RUNS = {50: "Fifty", 100: "Hundred", 200: "Double hundred"}
+_RUNS = {50: "Fifty", 100: "Hundred", 200: "Double hundred", 300: "Triple hundred"}
 _HAUL = {3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten"}
-MARKS = (50, 100, 150, 200)  # the batting milestones told
+MARKS = (50, 100, 150, 200, 250, 300)  # the batting milestones told
 # Their moments' priorities: a fifty's and a hundred's are their kinds' (moments.PRIORITY), 150 on above both.
 _RUNS_PRIORITY = {50: 70, 100: 90}
 
@@ -182,6 +183,7 @@ class Cricket(Sport):
     team = True
     follow_teams = True
     wikidata = {"espn_cricket": "P2697"}
+    wikidata_sport = ("Q5375",)
     honours = {
         "Q7526820": "ICC Cricketer of the Year", "Q8027398": "Wisden Leading Cricketer in the World",
         "Q26910896": "Wisden Leading Woman Cricketer in the World", "Q3569447": "Wisden Cricketer of the Year",
@@ -228,6 +230,15 @@ class Cricket(Sport):
         """The source's summary, which says who won ("India won by 57 runs"), can come a poll or two after it says the
         match is over ("Result")."""
         return not self.verdict(state, score, clock)
+
+    def over_by(self, start: datetime | None, state: dict[str, Any]) -> datetime | None:
+        """A limited-overs match, its reserve day too, within two days of its start; a Test or a first-class match (or
+        one no word says the length of) within six, as the tick closes any source's game (pipeline.due_work)."""
+        return start + timedelta(days=2 if overs_a_side(state.get("format")) else 6) if start is not None else None
+
+    def paused(self, state: dict[str, Any], score: str, clock: str) -> bool:
+        """Stumps: the day's play is over, and the match goes on tomorrow ("Stump Day 2", "Day 3 · Stumps")."""
+        return bool(re.search(r"\bstumps?\b", clock, re.I))
 
     def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
         """A scorecard: each side, in the order they batted, with who batted for it (runs, balls, fours, sixes,
@@ -370,7 +381,9 @@ class Cricket(Sport):
 
     def answer(self, ask: str, status: str | None, state: dict[str, Any]) -> str | None:
         """The side the board marks the winner, else the one its summary says won: a tie a Super Over settles is its
-        winner's, as the result says ("Match tied (India won the Super Over)"). VOID for a tie nothing settled, no
+        winner's, as the result says ("Match tied (India won the Super Over)"). The side it names by its whole name
+        or abbreviation, else the one side whose name starts with the words it names: a note the source garbled
+        ("Royal Challengers won by 6Bengaluru wickets") is still Bengaluru's. VOID for a tie nothing settled, no
         result, or a match cancelled or washed out (the board's cancelled); None while its result is still to come."""
         if state.get("cancelled"):
             return VOID
@@ -382,7 +395,10 @@ class Cricket(Sport):
             return str(marked[0]["id"])
         summary = str(state.get("summary") or "")
         if won := _WON.search(summary):
-            named = [t for t in teams if team_key(won[1]) in {team_key(str(t.get(k) or "")) for k in ("name", "abbr")} - {""}]
+            said = team_key(won[1])
+            named = [t for t in teams if said in {team_key(str(t.get(k) or "")) for k in ("name", "abbr")} - {""}]
+            if not named and said:
+                named = [t for t in teams if team_key(str(t.get("name") or "")).startswith(f"{said} ")]
             return str(named[0]["id"]) if len(named) == 1 else None
         return VOID if _NO_WINNER.search(summary) else None
 
@@ -390,7 +406,9 @@ class Cricket(Sport):
         """Won or lost by the side the player played for, as the board marks the winner: a summary the source garbled
         ("Royal Challengers won by 6Bengaluru wickets") is still Bengaluru's win. Their side is the one `side` names,
         else the one of the board's that's one of their teams by name. With no side marked (a tie, no result, a source
-        that doesn't say), the summary's words decide (winner_outcome), read for that side, else for their teams."""
+        that doesn't say), the summary's words decide (winner_outcome), read for that side, else for their teams; a
+        result put from their side already ("Won by 57 runs": a team's, read from its last board) says it itself, as
+        the app reads it."""
         pair = [t for t in (board or {}).get("teams") or [] if isinstance(t, dict)]
         ours = next((t for t in pair if side and str(t.get("id") or "") == side), None)
         if ours is None:
@@ -399,6 +417,8 @@ class Cricket(Sport):
             ours = named[0] if len(named) == 1 else None
         if ours is not None and any(t.get("winner") is True for t in pair):
             return "W" if ours.get("winner") is True else "L"
+        if said := outcome(result):
+            return said
         return winner_outcome(result, [str(ours.get("name") or "")] if ours else teams, [str(t.get("name") or "") for t in pair] or None)
 
     def notable(self, fixture: Fixture) -> Notable | None:
@@ -487,11 +507,11 @@ a board or outlet is news; "likely to be dropped" from fan pages is rumour."""
         return "cricket"
 
     def search_words(self, fired: Fired) -> str | None:
-        """A hundred (150 and 200 by their own names) or a five-for, and the ground: fans' edits are titled by the
+        """A hundred (150, 200 and 300 by their own names) or a five-for, and the ground: fans' edits are titled by the
         knock and where it was ("Kohli century Lord's")."""
         mark = number(fired.detail.rpartition(":")[2].lstrip("w"))
         if fired.kind == "hundred":
-            what = "double century" if mark >= 200 else "150" if mark >= 150 else "century"
+            what = "triple century" if mark >= 300 else "double century" if mark >= 200 else "150" if mark >= 150 else "century"
         elif fired.kind == "wickets" and mark >= 5:
             what = f"{mark} wickets"
         else:

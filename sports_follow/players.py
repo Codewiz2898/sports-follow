@@ -22,15 +22,16 @@ stale and unseen deletes), so it holds on a running server without a deploy and 
 undo it. Adding puts an athlete no source lists in the registry, keyed "op:…", or pins one an import would
 drop: search finds them, and following binds the source ids given. Removing deletes the player's page with
 everything that hangs off it (follows, moments, results, bindings: the database cascades) and its hot card
-in Redis, deletes their registry rows and blocks them: imports never write them again, and search and
-following leave out their ids in the sources, in every source of their sport (each one they have no id in
-is asked for them by name and birth date), and following refuses a pick with their name and birth date from
-a source that couldn't be asked. A name typed for research isn't blocked; the agent decides who that is.
+in Redis, deletes their registry rows and their photo (off the Credits page at once) and blocks them: imports
+never write them again, and search and following leave out their ids in the sources, in every source of their
+sport (each one they have no id in is asked for them by name and birth date), and following refuses a pick
+with their name and birth date from a source that couldn't be asked. A name typed for research isn't blocked; the agent decides who that is.
 Removing shows what it will delete and asks first, unless given --yes.
 
 Unmatching is for a pro matched to the wrong Wikidata person, and so shown with someone else's face
 (roster_wikidata.py): it takes the match and photo back at once, off every card showing it and the
-Credits page too, and kept in athlete_unmatch, no run matches them to that person again, or to anyone. It's apart from keeping and
+Credits page too, with what that person's Wikidata and Wikipedia said on the pro's page (About, birth date,
+honours), and kept in athlete_unmatch, no run matches them to that person again, or to anyone. It's apart from keeping and
 removing: a kept pro can be unmatched, and removing one leaves it, so restoring them doesn't bring the face
 back. Rematching takes it back; the next weekly run (or roster_wikidata by hand) may match them again.
 
@@ -52,14 +53,14 @@ import re
 import secrets
 import sys
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Sequence, get_args
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, campaigns, curate, logs, photos, registry, roster_wikidata, search, sports, starters
+from . import bus, campaigns, curate, logs, photos, pipeline, registry, roster_wikidata, search, sports, starters
 from .adapters import KNOWN, VIDEOS, AdapterError
 from .db import session
 from .models import Athlete, AthleteOverride, AthleteUnmatch, EventPlayer, Follow, Moment, Player, PlayerIdentity
@@ -135,9 +136,9 @@ def _decide(db: Session, qid: str, sport: str, action: str, name: str, ids: dict
 
 def remove(db: Session, found: Found, note: str | None = None) -> list[int]:
     """Take out what a reference found: delete the pages (the database cascades their follows, moments,
-    results and bindings) and the registry rows, and block each athlete: by their ids in every source of their
-    sport, which are asked for those it has no id in (registry.everywhere), and by name and birth date
-    (registry.removed). Returns the deleted pages' ids, whose hot cards the caller clears once this commits."""
+    results and bindings), the registry rows and their photos, and block each athlete: by their ids in every
+    source of their sport, which are asked for those it has no id in (registry.everywhere), and by name and birth
+    date (registry.removed). Returns the deleted pages' ids, whose hot cards the caller clears once this commits."""
     if not found.players and not found.athletes:
         raise Refused("nothing to remove: no page or registry athlete has that id")
     # Who goes, each with their ids in the sources, found before anything is written: no row is held while the
@@ -168,6 +169,8 @@ def remove(db: Session, found: Found, note: str | None = None) -> list[int]:
 
         clips.forget_players(db, gone)  # tags are ids in a list: no cascade takes them
         db.execute(delete(Player).where(Player.id.in_(gone)))
+    # Their photos off the Credits page, and no longer served, now: not when the photos job next forgets old ones.
+    photos.forget(db, [a.image for a in found.athletes if a.image])
     return gone
 
 
@@ -270,6 +273,19 @@ def rematch(db: Session, ref: str, sport: str | None = None, person: str | None 
 
 def unmatches(db: Session) -> list[AthleteUnmatch]:
     return list(db.scalars(select(AthleteUnmatch).order_by(AthleteUnmatch.created_at.desc())))
+
+
+def take_profiles_off(qids: list[str]) -> int:
+    """Take what Wikidata and Wikipedia said of the person a match was taken back from (unmatch) off the pages of
+    the players holding these registry athletes, now: their About, birth date, country, role and honours were that
+    person's, not the player's (pipeline.apply_profile with no profile). Returns how many pages."""
+    if not qids:
+        return 0
+    with session() as db:
+        held = select(PlayerIdentity.player_id).where(PlayerIdentity.system == "wikidata", PlayerIdentity.external_id.in_(qids))
+        ids = sorted({*db.scalars(held), *db.scalars(select(Player.id).where(Player.wikidata_qid.in_(qids)))})
+    now = datetime.now(timezone.utc)
+    return sum(pipeline.apply_profile(pid, None, now) is not None for pid in ids)
 
 
 def take_photos_off(files: list[str]) -> int:
@@ -456,6 +472,7 @@ def main(argv: list[str], ask: Any = input) -> int:
             with session() as db:
                 done = unmatch(db, find(db, args.ref, args.sport), args.person, args.note)
             cards = take_photos_off([image for _, _, image in done if image]) if any(now for _, now, _ in done) else 0
+            take_profiles_off([a.qid for a, now, _ in done if now])
             for a, now, _ in done:
                 print(f"{'Took back' if now else 'Nothing to take back now for'} {a.name} ({a.sport}, {a.qid}){f' (not matched to {args.person})' if args.person and not now else ''}; "
                       f"no run matches them to {args.person or 'anyone'} again.")

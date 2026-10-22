@@ -10,7 +10,7 @@ from sqlalchemy.dialects import postgresql
 
 from sports_follow import naming, pipeline, registry, search, sports
 from sports_follow.models import Athlete, PlayerCard, PlayerIdentity
-from sports_follow.adapters import KNOWN, LiveSearch, Provider, SearchResult, espn, lichess_chess
+from sports_follow.adapters import KNOWN, LiveSearch, Provider, SearchResult, cache, espn, lichess_chess
 
 from .test_new_adapters import load
 
@@ -217,7 +217,12 @@ def searching(monkeypatch, found=(), near=(), espn=(), ours=False):
     monkeypatch.setattr(search.registry, "find", lambda db, query, sport, limit: list(found))
     monkeypatch.setattr(search.registry, "blocked", lambda db: set())
     monkeypatch.setattr(search.registry, "near", lambda db, query, sport=None: list(near))
-    live = Provider(name="ESPN", url="", what="", search=LiveSearch(find=lambda query, sport, adapters: asked.append(query) or list(espn), by_word=True))
+    kept = cache.Cache("espn-test")
+
+    def find(query, sport, adapters):  # as ESPN's: read through its source's cache
+        return kept.read(f"search?query={query}", 3600, lambda: asked.append(query) or list(espn))
+
+    live = Provider(name="ESPN", url="", what="", search=LiveSearch(find=find, by_word=True))
     monkeypatch.setattr(search, "providers", lambda: [(live, ESPN)])
     return asked
 
@@ -270,6 +275,36 @@ def test_a_search_is_counted_once_and_only_when_it_asks_the_live_sources(monkeyp
     asked = searching(monkeypatch, found=[athlete("Q6167581", "Jasprit Bumrah", "cricket", sitelinks=40, ids={"espn_cricket": "625383"})])
     search.run(None, "bumrah", may_ask=may_ask)
     assert asked == [] and counted == []
+
+
+def test_a_search_the_source_cache_answers_isnt_counted_and_isnt_held_back(monkeypatch):
+    # BUG-148: the per-minute limit was counted before the source cache was looked at, so a fan typing the same name
+    # again over it was told ESPN didn't answer, though nothing would have been sent.
+    warne = SearchResult(key="espn_cricket:8166", name="Shane Warne", sport="Cricket", detail="Australia", system="espn_cricket", athlete_id="8166", live_scores=True, exact=True)
+    kept, sent = cache.Cache("search-test"), []
+
+    def find(query, sport, adapters):  # as ESPN's: one document, read through its source's cache
+        names = kept.read(f"search?query={query}", 3600, lambda: sent.append(query) or (["Shane Warne"] if query == "shane warne" else []))
+        return [warne] if "Shane Warne" in names else []
+
+    searching(monkeypatch)
+    live = Provider(name="ESPN", url="", what="", search=LiveSearch(find=find))
+    monkeypatch.setattr(search, "providers", lambda: [(live, ESPN)])
+    counted = []
+
+    def may_ask(allowed: bool):
+        def ask() -> bool:
+            counted.append(allowed)
+            return allowed
+        return ask
+
+    first = search.run(None, "shane warne", may_ask=may_ask(True))
+    assert sent == ["shane warne"] and counted == [True] and [r["name"] for r in first["results"]] == ["Shane Warne"]
+    # Over the limit now: what the cache has is answered, uncounted; a new name still waits.
+    again = search.run(None, "shane warne", may_ask=may_ask(False))
+    assert (again["partial"], [r["name"] for r in again["results"]], sent, counted) == ([], ["Shane Warne"], ["shane warne"], [True])
+    new = search.run(None, "glenn mcgrath", may_ask=may_ask(False))
+    assert (new["partial"], new["results"], sent, counted) == (["ESPN"], [], ["shane warne"], [True, False])
 
 
 def test_surely_the_name_meant():
