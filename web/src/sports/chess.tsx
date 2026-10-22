@@ -240,7 +240,7 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
   // live's small card: chess.css).
   const middle = (
     <span className="row">
-      <span className="num clock" style={{ fontSize: compact ? 24 : 30 }}>{phrases(chessMiddle(state, clock))}</span>
+      <span className="num clock" style={{ fontSize: compact ? 24 : 30 }}>{phrases(chessMiddle(state, clock, live.is_live))}</span>
       {ranks.length === 8 && (
         <button type="button" className="btn icon chess-turn over-link" aria-label="Switch sides" title="Switch sides" onClick={() => setSide(flip ? 'white' : 'black')}>
           <SwapIcon width={18} height={18} />
