@@ -260,7 +260,9 @@ class LiveSearch:
     """A provider's own player search, asked when the registry has few matches for what a fan typed.
 
     find(query, sport, adapters) returns results best first; sport is the fan's filter (None for every
-    sport), adapters are the provider's running ones. It's asked under a filter its adapters serve."""
+    sport), adapters are the provider's running ones. It's asked under a filter its adapters serve. It reads
+    through its source's Cache (cache.py): search asks it first for what's kept (cache.kept_only), so a search
+    the cache answers isn't counted against a client's limit."""
 
     find: Callable[[str, str | None, list["Adapter"]], list[SearchResult]]
     unfiltered: bool = True  # asked when the fan hasn't picked a sport, too
