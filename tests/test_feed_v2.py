@@ -33,6 +33,10 @@ SPORTS_YAARI = "UCjFw-0Vdfy2KW78NClGECXw"  # a small channel the list left out
     ("Gukesh 🇮🇳 beats Magnus!!! ⭐⭐ #chess #shorts", "Gukesh 🇮🇳 beats Magnus!!! ⭐⭐ #chess #shorts"),
     ("FODEN HAT-TRICK FOR CITY! | Man City 5-1 AEK Athens | Champions League", "FODEN HAT-TRICK FOR CITY! | Man City 5-1 AEK Athens | Champions League"),
     ("Kohli's 50 | Sky Sports", "Kohli's 50 | Sky Sports"),
+    # A shouted one isn't put in sentence case, so a side of more than one word keeps its capitals (BUG-289).
+    ("GUKESH VS DING LIREN | GAME 5 | WORLD CHAMPIONSHIP", "GUKESH VS DING LIREN | GAME 5 | WORLD CHAMPIONSHIP"),
+    ("MAGNUS CARLSEN V HIKARU NAKAMURA ARMAGEDDON", "MAGNUS CARLSEN V HIKARU NAKAMURA ARMAGEDDON"),
+    ("KOHLI'S CENTURY VS SA AT JOHANNESBURG", "KOHLI'S CENTURY VS SA AT JOHANNESBURG"),
     ("  Haaland and Anderson on City's 3-0 win  ", "Haaland and Anderson on City's 3-0 win"),  # but the spaces round it
     # HTML's escapes are how a search's titles were sent (stored so before BHA-358), not the title: read, however
     # many times over.
