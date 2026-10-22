@@ -226,6 +226,9 @@ def test_a_summary_of_another_article_than_the_players_is_no_about(wikimedia):
     assert wiki.read("Q2", "Cricket").summary == "Asha Rao is an Indian international cricketer who bats right-handed. She captains Mumbai Indians."
     wikimedia(entity=linked("Asha Rao (bowler)"), summary={**SUMMARY, "titles": {"canonical": "Asha_Rao_(bowler)"}})
     assert wiki.read("Q3", "Cricket").summary
+    # A person's item merged into another since: the article linked is still theirs by its title.
+    wikimedia(entity=linked("Asha Rao (opener)"), summary={**SUMMARY, "wikibase_item": "Q40", "titles": {"canonical": "Asha_Rao_(opener)"}})
+    assert wiki.read("Q4", "Cricket").summary
 
 
 def test_wikimedia_asking_us_to_wait_is_unavailable(wikimedia):

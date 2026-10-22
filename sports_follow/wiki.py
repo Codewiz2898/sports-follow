@@ -304,13 +304,12 @@ def article(sitelinks: dict[str, Any]) -> str | None:
 
 def of_article(found: dict[str, Any], qid: str, title: str) -> bool:
     """Whether Wikipedia's summary is of the person's own article, not of another one a link Wikidata didn't badge
-    led to: by the Wikidata item it names, else by its title (an article renamed since keeps its item)."""
+    led to: the Wikidata item it names is theirs, or its title is the one linked (an article renamed since keeps
+    its item; a person's item merged into another keeps its article's title). One that names neither is theirs."""
     item = found.get("wikibase_item")
-    if item:
-        return item == qid
     canonical = (found.get("titles") or {}).get("canonical") or found.get("title")
     plain = lambda t: " ".join(str(t).replace("_", " ").split())  # noqa: E731
-    return not canonical or plain(canonical) == plain(title)
+    return (not item and not canonical) or item == qid or (bool(canonical) and plain(canonical) == plain(title))
 
 
 def read(qid: str, sport: str | None, ttl: float = MAX_AGE) -> Profile | None:
