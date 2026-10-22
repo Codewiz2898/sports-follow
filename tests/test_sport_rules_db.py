@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import os
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 from dataclasses import asdict
 
@@ -18,12 +19,13 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import bus, notify, sports, structured, teams
-from sports_follow.adapters import PlayerRef, espn_cricket, sportmonks_cricket as sc, sportmonks_football as sm
-from sports_follow.models import Event, EventPlayer, EventTeam, Follow, MatchFollow, Player, PlayerCard, PlayerIdentity, PushSubscription, SourceBinding, Team, TeamFollow
+from sports_follow.adapters import PlayerRef, espn_cricket, lichess_chess, sportmonks_cricket as sc, sportmonks_football as sm
+from sports_follow.models import Event, EventPlayer, EventState, EventTeam, Follow, MatchFollow, Player, PlayerCard, PlayerIdentity, PlayerLine, PushSubscription, SourceBinding, Team, TeamFollow
 from sports_follow.sports.base import DRAW
 
 from .test_adapters import load
 from .test_match_follow import Store
+from .test_new_adapters import CARLSEN, LAZAVIK, tiebreak
 from .test_sportmonks_cricket import AFG, FIRST, IND, OPENER, SEAMER, SPINNER, _bat, _match, _picked, _row
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
@@ -376,3 +378,62 @@ def test_a_cup_tie_settled_on_penalties_says_who_won(db, pushed):
     poll(_shootout("FT_PEN", 4, 2, winner=True))
     assert heard(pushed) == {("game", "Arsenal v Chelsea: Arsenal won on penalties"), ("blue", "Chelsea lost 1–1 (2–4 pens) v Arsenal"),
                              ("saka", "Bukayo Saka: Arsenal 1 – 1 Chelsea (4–2 pens)")}
+
+
+# ---------------------------------------------------------------- a chess mini-match kept as one board, read as games (BHA-675)
+
+
+class ListedChess(lichess_chess.LichessChess):
+    """Lichess, its reads made up: the player's fixtures as listed, their boards from the round given, no form."""
+
+    def __init__(self, listed):
+        super().__init__()
+        self.listed = listed
+
+    def fixtures(self, ref):
+        return self.listed
+
+    def stats(self, ref, recent):
+        return [], ""
+
+
+def test_a_mini_match_kept_as_one_board_becomes_its_first_game_with_its_own_result_and_board(db, pushed, monkeypatch):
+    # Before each game of a mini-match was its own (BHA-675), Carlsen's fixture of a tiebreak round (its id now game 1's)
+    # kept the whole match: its final board the last game's, his line "Lost the match 1–2", his result a loss. Read as
+    # games, the next refresh makes it game 1's, a win with White, its board, line and result alike, though it's older
+    # than the newest results a refresh reads (RECENT_LIMIT); the games after it join his results; nothing is told.
+    monkeypatch.setattr(structured, "RECENT_LIMIT", 1)
+    data = tiebreak("1-0", "1-0", "0-1", finished=True)
+    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: data)
+    now = datetime.now(timezone.utc)
+    listed = lichess_chess.round_fixtures(data["tour"], data["round"], data, lichess_chess.games_of(data, CARLSEN), CARLSEN, now)
+    adapter = ListedChess(listed)
+    monkeypatch.setitem(structured.ADAPTERS, adapter.system, adapter)
+    player(db, 1, "Magnus Carlsen", adapter.system, CARLSEN, sport="Chess")
+    ref = PlayerRef(adapter.system, CARLSEN, "Magnus Carlsen", [CARLSEN], ["Magnus Carlsen"])
+    db.add(SourceBinding(player_id=1, purpose="fixtures", adapter=adapter.system, locator=asdict(ref), priority=10, health={}))
+    rnd = data["round"]["id"]
+    game(db, 1, f"lichess_chess:{rnd}-{CARLSEN}", {"adapter": adapter.system, "locator": {"round": rnd, "fide": CARLSEN}, "cadence": 15}, 1, sport="Chess", title="Magnus Carlsen vs Denis Lazavik")
+    db.get(Event, 1).status = "final"
+    match = {"kind": "chess", "round": "Tiebreaks", "tournament": data["tour"]["name"], "game_id": "mA0tQh8v", "result": "0-1",
+             "white": {"id": CARLSEN, "name": "Magnus Carlsen"}, "black": {"id": LAZAVIK, "name": "Denis Lazavik"},
+             "match": {"games": 3, "score": "1–2", "first": "mJnv1YBU", "ahead": LAZAVIK}}
+    db.add(EventState(event_id=1, as_of=now - timedelta(days=3), status="final", score_label="Magnus Carlsen 1–2 Denis Lazavik",
+                      clock_label="Denis Lazavik won the match (3 games)", state=match))
+    db.add(PlayerLine(event_id=1, player_id=1, as_of=now - timedelta(days=3), stats={"headline": "Lost the match 1–2 vs Denis Lazavik", "stats": []}))
+    db.get(EventPlayer, (1, 1)).result = {"title": "Magnus Carlsen vs Denis Lazavik · Tiebreaks", "result": "Lost 1–2", "outcome": "L", "event_id": 1,
+                                          "player_contribution": "Lost the match 1–2 vs Denis Lazavik", "game_key": "lichess_chess:mA0tQh8v", "scorecard": True}
+    db.add(PlayerCard(player_id=1, status="ready", card={"live": {"is_live": False, "player_stats": []}, "upcoming": [], "recent_results": []}))
+    db.execute(text("SELECT setval('event_id_seq', 100)"))  # past the event made by hand: the refresh makes the others
+    db.commit()
+    structured._refresh(1)
+    db.expire_all()
+    first = db.get(EventPlayer, (1, 1)).result
+    assert (first["result"], first["outcome"], first["player_contribution"], first["game_key"]) == ("Won 1–0", "W", "Won with White vs Denis Lazavik", "lichess_chess:mJnv1YBU")
+    board = db.scalar(select(EventState).where(EventState.event_id == 1, EventState.status == "final").order_by(EventState.as_of.desc()).limit(1))
+    assert (board.state["game_id"], board.clock_label, "match" in board.state) == ("mJnv1YBU", "Magnus Carlsen won", False)
+    line = db.scalar(select(PlayerLine).where(PlayerLine.event_id == 1).order_by(PlayerLine.as_of.desc()).limit(1))
+    assert line.stats["headline"] == "Won with White vs Denis Lazavik"
+    results = dict(db.execute(select(Event.key, EventPlayer.result).join(EventPlayer, EventPlayer.event_id == Event.id).where(EventPlayer.player_id == 1)).all())
+    assert {key.removeprefix(f"lichess_chess:{rnd}-{CARLSEN}"): r["result"] for key, r in results.items()} == {"": "Won 1–0", "-2": "Lost 1–0", "-3": "Lost 0–1"}
+    assert pushed == []

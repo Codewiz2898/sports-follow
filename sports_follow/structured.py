@@ -551,6 +551,12 @@ def _refresh(player_id: int) -> None:
             f.status = "final"
     finals_all = [f for f in fixtures if f.status == "final"]
     finals = finals_all[-RECENT_LIMIT:]  # scorecards read on every refresh; older ones by history.py
+    # An older one kept here with another game's board than its fixture says it is now (Fixture.board: a chess
+    # mini-match's first game, kept as its whole match before each game was its own) is read again too, a few a
+    # refresh, so its board, the player's line in it and their result become the game's own (_record_final).
+    with session() as db:
+        kept = kept_boards(db, [f"{adapter.system}:{f.source_id}" for f in finals_all if f.board])
+    again = [f for f in finals_all[:len(finals_all) - len(finals)] if f.board and kept.get(f"{adapter.system}:{f.source_id}", f.board) != f.board][:RECENT_LIMIT]
     ahead = upcoming(fixtures, now)
     # A game the schedule says is over but that is still armed or live here, the poller didn't see finish
     # (it was between sessions, or the source's live feed was failing): finish gives it a last poll.
@@ -568,9 +574,10 @@ def _refresh(player_id: int) -> None:
     # The scorecards are read side by side, in this refresh's lane: each is about a second from the server,
     # and a new follower's first card waits on them all.
     with ThreadPoolExecutor(max_workers=RECENT_LIMIT, thread_name_prefix="scorecard") as pool:
-        recent = list(pool.map(budget.carry(scorecard), finals))
+        read = list(pool.map(budget.carry(scorecard), [*finals, *again]))
+    recent, fixed = read[:len(finals)], read[len(finals):]
     stats, note = adapter.stats(ref, [(f, s) for f, s in recent if s])
-    snaps = {f.source_id: snap for f, snap in recent if snap}
+    snaps = {f.source_id: snap for f, snap in read if snap}
     finish({event_id: snaps.get(key.split(":", 1)[1]) for key, event_id in unfinished.items()})
 
     with session() as db:
@@ -583,7 +590,7 @@ def _refresh(player_id: int) -> None:
             player.sport = kind.label  # an esports pro's sport is their game (bound as "Esports", or changed games)
         events = {f.source_id: upsert_event(db, adapter, player, f) for f in [*finals_all, *ahead, *waiting(fixtures)]}
         dropped = unpicked(db, adapter, player_id, fixtures)
-        for f, snap in recent:
+        for f, snap in [*recent, *fixed]:
             if snap:
                 _record_final(db, events[f.source_id], player_id, snap, snap.lines.get(ref.athlete_id))
         over = found_over(db, [events[f.source_id].id for f in finals_all])
@@ -799,11 +806,26 @@ def reschedule(db: Session, event: Event, start: datetime | None, status: str, s
 
 
 def _record_final(db: Session, event: Event, player_id: int, snap: Snapshot, line: Line | None) -> None:
-    """Keep one final state per finished event and the player's line in it."""
-    if not db.scalar(select(EventState.id).where(EventState.event_id == event.id, EventState.status == "final").limit(1)):
+    """Keep one final state per finished event and the player's line in it. A read of another game than the board kept
+    (Sport.board: a chess mini-match's first game, kept as its whole match before each game was its own) replaces both,
+    as the newest."""
+    kept = db.scalar(select(EventState).where(EventState.event_id == event.id, EventState.status == "final").order_by(EventState.as_of.desc()).limit(1))
+    board = sports.of_state(snap.state).board(snap.state)
+    other = kept is not None and bool(board) and sports.of_state(kept.state or {}).board(kept.state or {}) not in ("", board)
+    if kept is None or other:
         db.add(EventState(event_id=event.id, as_of=_now(), status="final", score_label=snap.score_label, clock_label=snap.clock_label, state=snap.state, source_url=snap.source_url))
-    if line and not db.scalar(select(PlayerLine.id).where(PlayerLine.event_id == event.id, PlayerLine.player_id == player_id).limit(1)):
+    if line and (other or not db.scalar(select(PlayerLine.id).where(PlayerLine.event_id == event.id, PlayerLine.player_id == player_id).limit(1))):
         db.add(PlayerLine(event_id=event.id, player_id=player_id, as_of=_now(), stats={"headline": line.headline, "stats": line.stats}))
+
+
+def kept_boards(db: Session, keys: list[str]) -> dict[str, str]:
+    """The board (Sport.board) each of these finished games' final state kept here shows, by event key, where it shows
+    one."""
+    if not keys:
+        return {}
+    latest = (select(Event.key, EventState.state).join(EventState, EventState.event_id == Event.id).where(Event.key.in_(keys), EventState.status == "final")
+              .ext(distinct_on(Event.key)).order_by(Event.key, EventState.as_of.desc()))
+    return {key: board for key, state in db.execute(latest) if (board := sports.of_state(state or {}).board(state or {}))}
 
 
 def found_over(db: Session, event_ids: Iterable[int | None]) -> dict[int, datetime]:

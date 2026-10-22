@@ -594,6 +594,17 @@ def round_status(round_info: dict[str, Any], games: list[dict[str, Any]], now: d
     return "scheduled"  # a round on without a board of theirs (yet): their game hasn't started
 
 
+def game_status(round_info: dict[str, Any], game: dict[str, Any] | None, now: datetime) -> str:
+    """A player's game in a round (games_of's; None before they're paired) as round_status has it, but a mini-match's
+    game after the first that's under way in a round Lichess called finished less than GRACE ago is live: Lichess calls
+    the round finished once the game before it was decided, and on again only as this one's first moves reach it."""
+    status = round_status(round_info, [game] if game else [], now)
+    if status == "final" and game and game["n"] > 1 and not _result(game.get("status")) and not unstarted(game):
+        since = finished_for(round_info, now)
+        return "live" if since is not None and since < GRACE else status
+    return status
+
+
 def next_game(round_data: dict[str, Any], games: list[dict[str, Any]], now: datetime, waited: float | None = None) -> int | None:
     """The number of a player's game that may follow their last in a round (games_of's), while it may: their pairing's
     next may follow (may_follow), none of theirs is under way, and it's less than GRACE since the last one ended, by the
@@ -707,7 +718,7 @@ def parse_game(round_data: dict[str, Any], fide_id: str, system: str, now: datet
     return LiveGame(
         source_id=fixture_id(rnd["id"], fide_id, game),
         title=" v ".join(r.name for r in refs),
-        competition=" · ".join(x for x in (tour.get("name"), rnd.get("name")) if x),
+        competition=" · ".join(x for x in (tour.get("name"), rnd.get("name"), (snap.state.get("mini_match") or {}).get("label")) if x),
         start_utc=_dt(rnd.get("startsAt")),
         snapshot=snap,
         players=refs,
@@ -727,7 +738,7 @@ def parse_board(round_data: dict[str, Any], fide_id: str, now: datetime | None =
     if game > 1 and (g is None or unstarted(g)):
         status = to_follow(round_data, games, game, now, waited)
     else:
-        status = round_status(rnd, [g] if g else [], now)
+        status = game_status(rnd, g, now)
     if g is None:
         if game > 1:
             clock = f"Game {game}, if it's played"
@@ -807,7 +818,7 @@ def fixture_for(tour: dict[str, Any], rnd: dict[str, Any], game: dict[str, Any] 
     mini-match, game_label), or of the round itself before they're paired (None). `upnext`, a round with no start time
     of its own that's next (next_up); `meeting`, a round of a match between two players (a_match), whose board before its
     pairing's out is the round, the same under both players' fixtures, so Coming up shows it once."""
-    status = round_status(rnd, [game] if game else [], now)
+    status = game_status(rnd, game, now)
     n = game["n"] if game else 1
     title = f"{tour.get('name', '')} · {rnd.get('name', '')}"
     result = None

@@ -428,8 +428,15 @@ def test_a_tiebreaks_game_over_is_over_and_the_next_is_armed_unlisted_till_it_co
     assert (on.status, on.state["game_id"], on.lines[CARLSEN].headline) == ("live", round_now["games"][1]["id"], "Black vs Denis Lazavik")
     assert on.state["mini_match"] == {"game": 2, "label": "Game 2", "games": 1, "score": "1–0", "ahead": CARLSEN}
     assert chess.snapshot({"round": rnd, "fide": CARLSEN}).state["mini_match"]["label"] == "Game 1"
-    assert chess.match(f"{rnd}-{LAZAVIK}-2").snapshot.status == "live"  # type: ignore[union-attr]
+    page = chess.match(f"{rnd}-{LAZAVIK}-2")
+    assert page is not None and (page.snapshot.status, page.competition) == ("live", "FIDE World Championship 2026 · Tiebreaks · Game 2")  # a page read with no event of it says which game
     assert [(f.source_id, f.status, f.unlisted) for f in chess.fixtures(carlsen)] == [(f"{rnd}-{CARLSEN}", "final", False), (f"{rnd}-{CARLSEN}-2", "live", False)]
+    # Its first moves in while Lichess still calls the round finished from game 1 (it flips back as they reach it): on,
+    # not over without a result; GRACE after the round, over.
+    round_now.update(tiebreak("1-0", "*", finished=True, ago=5))
+    assert (chess.snapshot(game2.locator).status, [f.status for f in chess.fixtures(carlsen)]) == ("live", ["final", "live"])
+    round_now.update(tiebreak("1-0", "*", finished=True, ago=lichess_chess.GRACE))
+    assert chess.snapshot(game2.locator).status == "final"
     # Carlsen wins game 2 too, and no game 3 comes in GRACE: game 3's fixture is off, shown nowhere, and not listed again.
     round_now.update(tiebreak("1-0", "0-1"))
     game3 = chess.fixtures(carlsen)[-1]

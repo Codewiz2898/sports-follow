@@ -616,7 +616,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   armed but unlisted (`Fixture.unlisted`: polled, not in Coming up), so its start is seen within a poll or two; 30
   minutes on with none (`GRACE`), it's put off and shown nowhere. A board's big line is the game's own (its result,
   or the clock), with the match under it ("Game 2 · Caruana leads 1–0": `miniMatch` in
-  `web/src/sports/facts/chess.ts`).
+  `web/src/sports/facts/chess.ts`). A mini-match kept as one board before this (its fixture's id now game 1's) is
+  made game 1 by its player's next refresh, which reads it again where its kept board is another game's
+  (`structured.kept_boards`, `_record_final`): its board, line and result become game 1's, and the games after it
+  join the player's results, with nothing told.
 - **Play from here, on the fan's device.** A chess game's match page opens an analysis board over the page (a
   modal dialog, the board up to 720px; in the Android app a full-screen Modal, `mobile/src/sports/chessAnalysis.tsx`): the fan plays either side's legal moves from the game's position (or
   from any move in its list that replays, or the one the board was stepped back to), steps along their line (the

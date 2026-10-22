@@ -390,7 +390,9 @@ class Chess(Sport):
     def resettles(self, ask: str, state: dict[str, Any]) -> bool:
         """Not from a mini-match's game: its first game's question, asked before anyone knew more would follow, was
         settled by who won the match till its games were each a game of their own, and what its fans were told then
-        stands; a read of that game now answers by its own result. One game's result corrected settles it again."""
+        stands, though a read of that game now answers by its own result. So a mini-match's first game's result
+        corrected at its source isn't told again either (a game made ahead names game 1 one from the start). One
+        game's result corrected settles it again."""
         return not state.get("mini_match")
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
