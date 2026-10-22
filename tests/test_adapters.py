@@ -185,6 +185,17 @@ def test_cricket_winner_is_a_real_bool_on_every_board():
     assert cricket.side_final(snap.state, snap.score_label, snap.clock_label, west_indies) == "West Indies lost by 8 wkts (50b rem) v India"
 
 
+def test_a_team_result_read_from_the_final_board_is_in_its_form():
+    # BUG-230: before the schedule has a result, a team's is read from the game's last board from its side ("Won by 8
+    # wkts"), which Results shows as a W; the team page's Form strip read only "<team> won" and left it out.
+    snap = espn_cricket.parse_summary(load("cricket-summary-final"))
+    cricket, india, west_indies = sports.of("cricket"), "6", "4"
+    won, lost = (cricket.side_result(snap.state, snap.score_label, snap.clock_label, side) for side in (india, west_indies))
+    assert (won, lost) == ("Won by 8 wkts (50b rem)", "Lost by 8 wkts (50b rem)")
+    assert (cricket.outcome(won, ["India"]), cricket.outcome(lost, ["West Indies"])) == ("W", "L")
+    assert cricket.outcome("India won by 8 wkts (50b rem)", ["India"]) == "W"  # as before
+
+
 def test_cricket_scorecard_says_which_side_each_player_played_for():
     # BUG-084: whether a player won is told from the side the scorecard has them in, not from their teams' names.
     snap = espn_cricket.parse_summary(load("cricket-summary-final"))

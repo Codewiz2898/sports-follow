@@ -7,7 +7,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from ..naming import team_key
-from .base import ORDINAL, VOID, Ask, Fired, Found, Glance, Line, Notable, Poster, Seen, Sport, crossed, ground, joined, number, short, spaced, stage, stat, undecided, values, words
+from .base import ORDINAL, VOID, Ask, Fired, Found, Glance, Line, Notable, Poster, Seen, Sport, crossed, ground, joined, number, outcome, short, spaced, stage, stat, undecided, values, words
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture
@@ -390,7 +390,9 @@ class Cricket(Sport):
         """Won or lost by the side the player played for, as the board marks the winner: a summary the source garbled
         ("Royal Challengers won by 6Bengaluru wickets") is still Bengaluru's win. Their side is the one `side` names,
         else the one of the board's that's one of their teams by name. With no side marked (a tie, no result, a source
-        that doesn't say), the summary's words decide (winner_outcome), read for that side, else for their teams."""
+        that doesn't say), the summary's words decide (winner_outcome), read for that side, else for their teams; a
+        result put from their side already ("Won by 57 runs": a team's, read from its last board) says it itself, as
+        the app reads it."""
         pair = [t for t in (board or {}).get("teams") or [] if isinstance(t, dict)]
         ours = next((t for t in pair if side and str(t.get("id") or "") == side), None)
         if ours is None:
@@ -399,6 +401,8 @@ class Cricket(Sport):
             ours = named[0] if len(named) == 1 else None
         if ours is not None and any(t.get("winner") is True for t in pair):
             return "W" if ours.get("winner") is True else "L"
+        if said := outcome(result):
+            return said
         return winner_outcome(result, [str(ours.get("name") or "")] if ours else teams, [str(t.get("name") or "") for t in pair] or None)
 
     def notable(self, fixture: Fixture) -> Notable | None:
