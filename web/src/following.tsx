@@ -183,17 +183,21 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
 
   // Back in the app after a while: what came while it was away may be in the activity list. Not on every reconnect
   // of the stream, which every open app makes at once when the server restarts (BUG-265): only one after a while
-  // without it (below).
+  // without it (below). And the fan's list as it is now: a stream sends it when a follow is made on another device
+  // (BUG-165), but an app following no one yet has no stream to hear it on.
   useEffect(() => {
     let away = document.visibilityState === 'hidden' ? Date.now() : null
     const seen = () => {
       if (document.visibilityState === 'hidden') { away ??= Date.now(); return }
-      if (away != null && Date.now() - away >= AWAY_MS) setHeard((n) => n + 1)
+      if (away != null && Date.now() - away >= AWAY_MS) {
+        setHeard((n) => n + 1)
+        if (loadedRef.current) { void reloadRef.current(); void reloadMatches() }
+      }
       away = null
     }
     document.addEventListener('visibilitychange', seen)
     return () => document.removeEventListener('visibilitychange', seen)
-  }, [])
+  }, [reloadMatches])
 
   const apply = useCallback((e: StreamEvent) => {
     if (e.type === 'following') {

@@ -18,7 +18,7 @@ import re
 import secrets
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, MutableMapping
+from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -384,6 +384,21 @@ def fan_id(request: Request, response: Response, signed_in: accounts.Signed | No
     return fan
 
 
+async def _tell_devices(fan: str = Depends(fan_id)) -> AsyncIterator[None]:
+    """For a route that changes what the fan follows, or a level (TellsDevices): once it has saved the change, say
+    so on the fan's own channel, and each of their open streams sends their list again (my_stream), so a follow made
+    on their phone reaches the app open on their laptop (BUG-165). A change refused (an error) says nothing; a change
+    saved stands if Redis can't say so: other devices catch up when their streams connect again."""
+    yield
+    try:
+        await state["redis"].publish(bus.follows_channel(fan), "{}")
+    except Exception as exc:  # noqa: BLE001 — telling the other devices is a courtesy
+        log.warning("follows: couldn't tell the fan's other devices: %s", exc)
+
+
+TellsDevices = [Depends(_tell_devices, scope="function")]  # its word goes once the route's work is done, before the answer
+
+
 def _fan(request: Request, response: Response, signed_in: accounts.Signed | None, make: bool | None = None) -> str:
     """The fan, as fan_id says. A device without a fan of its own keeps a new one (its cookie) only from a request
     that `make`s one: by default a write, not a read. A read is answered as a new fan who owns nothing, for that
@@ -638,7 +653,7 @@ async def match_page(system: str, game: str, fan: str = Depends(fan_id)) -> dict
     return {**page, "refreshing": ask}  # a read is on its way, or was asked for within the minute
 
 
-@app.put("/api/match/{system}/{game}/follow")
+@app.put("/api/match/{system}/{game}/follow", dependencies=TellsDevices)
 def follow_match(system: str, game: str, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Follow a game by itself (matches.py): its key moments, from both sides, reach this fan until it ends.
     A game no source has named here is a 404, so a made-up address makes no follow and no poll; one that's
@@ -652,7 +667,7 @@ def follow_match(system: str, game: str, fan: str = Depends(fan_id), db: Session
     return {"following": True, "event_id": event_id}
 
 
-@app.delete("/api/match/{system}/{game}/follow")
+@app.delete("/api/match/{system}/{game}/follow", dependencies=TellsDevices)
 def unfollow_match(system: str, game: str, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Stop following a game by itself: nothing more of it is sent to this fan (their players in it still are)."""
     if system in KNOWN:
@@ -668,7 +683,7 @@ def my_matches(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dic
     return {"matches": matches.mine(db, fan)}
 
 
-@app.delete("/api/me/matches/{event_id}")
+@app.delete("/api/me/matches/{event_id}", dependencies=TellsDevices)
 def unfollow_match_event(event_id: RowId, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Stop following a game by the event the follow is on (the match page's follow state, or /api/me/matches):
     whichever of a game's addresses the follow was made at, or has moved to (a chess board's)."""
@@ -677,7 +692,7 @@ def unfollow_match_event(event_id: RowId, fan: str = Depends(fan_id), db: Sessio
     return {"event_id": event_id, "following": False}
 
 
-@app.put("/api/me/matches/{event_id}/alerts")
+@app.put("/api/me/matches/{event_id}/alerts", dependencies=TellsDevices)
 def set_match_alerts(event_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Which of a followed game's own moments the fan is told about: everything, key, results or off, as for a player."""
     level = body.get("level")
@@ -893,7 +908,7 @@ async def _read_team(system: str, team_id: int) -> bool:
         return False
 
 
-@app.put("/api/teams/{team_id}/follow")
+@app.put("/api/teams/{team_id}/follow", dependencies=TellsDevices)
 async def follow_team(team_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any]:
     """Follow a team (teams.py): each of its games' moments, from both sides, reach this fan by their level, and
     its results from its side. No such team, or one of a sport turned off, is a 404; one whose source isn't
@@ -913,7 +928,7 @@ async def follow_team(team_id: RowId, fan: str = Depends(fan_id)) -> dict[str, A
     return {"team_id": team_id, "following": True}
 
 
-@app.delete("/api/teams/{team_id}/follow")
+@app.delete("/api/teams/{team_id}/follow", dependencies=TellsDevices)
 def unfollow_team(team_id: RowId, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Stop following a team: nothing more of its games is sent to this fan (their players in them still are, and
     a game they follow by itself)."""
@@ -922,7 +937,7 @@ def unfollow_team(team_id: RowId, fan: str = Depends(fan_id), db: Session = Depe
     return {"team_id": team_id, "following": False}
 
 
-@app.put("/api/teams/{team_id}/alerts")
+@app.put("/api/teams/{team_id}/alerts", dependencies=TellsDevices)
 def set_team_alerts(team_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Which of a followed team's games' moments the fan is told about: everything, key, results or off, as for a player."""
     level = body.get("level")
@@ -1026,7 +1041,7 @@ async def _follow_row(row: dict[str, Any], fan: str, address: str | None, turns:
         return None
 
 
-@app.post("/api/campaigns/{slug}/follow")
+@app.post("/api/campaigns/{slug}/follow", dependencies=TellsDevices)
 async def campaign_follow(request: Request, slug: str, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
     """Follow a whole team in one tap ({"team": its id}: every player on its roster), or all of the campaign's
     own players ({"players": true}). Each is an ordinary follow with key alerts, of a player a running source
@@ -1295,7 +1310,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
     return player_id
 
 
-@app.post("/api/follows")
+@app.post("/api/follows", dependencies=TellsDevices)
 async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
     from .config import RESEARCH
 
@@ -1371,7 +1386,7 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
     return {"player_id": player_id, "card": card}
 
 
-@app.put("/api/follows/{player_id}/alerts")
+@app.put("/api/follows/{player_id}/alerts", dependencies=TellsDevices)
 def set_alerts(player_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Which of this player's moments the fan is told about: everything, key, results or off."""
     level = body.get("level")
@@ -2522,7 +2537,7 @@ def my_feed_items(
     return found
 
 
-@app.delete("/api/follows/{player_id}")
+@app.delete("/api/follows/{player_id}", dependencies=TellsDevices)
 def unfollow(player_id: RowId, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
     pipeline.unfollow(db, fan, player_id)
     db.commit()  # or a follow sent straight after could find this one still there, and then lose it
@@ -2740,11 +2755,11 @@ async def athlete_preview(request: Request, system: str, athlete_id: str, league
 # ---------------------------------------------------------------- realtime
 
 
-async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[str, Any]]]], request: Request):
+async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[str, Any]]]], request: Request, again: str | None = None):
     """Every message on the channels, after `first()`: what they cover as it is now, read once
     subscribed so nothing published in between is missed. Each reconnect starts here, so it is how an
-    app catches up. Holds no database connection, and one Redis connection, from the streams' own pool;
-    its route takes its places first (_hold_streams)."""
+    app catches up; a word on the channel `again` sends `first()` again. Holds no database connection, and
+    one Redis connection, from the streams' own pool; its route takes its places first (_hold_streams)."""
     pubsub = state["streams"].pubsub()
     await pubsub.subscribe(*channels)
     try:
@@ -2754,6 +2769,10 @@ async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[s
             msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=HEARTBEAT)
             if msg is None:
                 yield PING
+                continue
+            if again is not None and msg.get("channel") == again:
+                for event in await first():
+                    yield f"data: {json.dumps(event, default=str)}\n\n"
                 continue
             yield f"data: {msg['data']}\n\n"
     finally:
@@ -2819,26 +2838,20 @@ async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingRe
     It opens with what /api/me/following returns, and the games they follow by themselves (/api/me/matches),
     so an app that reconnects (a phone back from the lock screen, a restart) gets every score and result it
     missed; then each followed game's board as it's polled, and its own moments (bus.match_channel): of the games
-    they follow by themselves, and of their teams' games on now or soon (teams.event_ids), with their teams."""
+    they follow by themselves, and of their teams' games on now or soon (teams.event_ids), with their teams.
+    A follow, an unfollow or a level changed on another of their devices sends the list again (bus.follows_channel):
+    the app takes it as the list (BUG-165), and connects again for the players it then has. A fan with nothing else
+    to hear yet listens for that too; their list first, as on any stream, so an app whose fan was signed out
+    elsewhere (it reads as nobody now), or stopped following everyone there, drops what it shows (BUG-162)."""
     ids, games = await in_db(lambda db: (db.scalars(select(Follow.player_id).where(Follow.fan_id == fan)).all(),
                                          list(dict.fromkeys([*matches.event_ids(db, fan), *teams.event_ids(db, fan)]))))
 
     async def first() -> list[dict[str, Any]]:
         return [{"type": "following", "players": await _following(fan), "matches": await in_db(matches.mine, fan), "teams": await in_db(teams.mine, fan)}]
 
-    if not ids and not games:
-        async def idle():
-            # Nothing to hear yet, but the fan's list still comes first, as on any stream: an app whose fan was signed
-            # out elsewhere (it reads as nobody now), or stopped following everyone there, drops what it shows (BUG-162).
-            for event in await first():
-                yield f"data: {json.dumps(event, default=str)}\n\n"
-            while not await request.is_disconnected():
-                yield PING
-                await asyncio.sleep(HEARTBEAT)
-        return _sse(idle())
-
     places = _hold_streams(request, fan)
-    return _sse(_stream([*(bus.channel(i) for i in ids), *(bus.match_channel(e) for e in games)], first, request), places)
+    mine = bus.follows_channel(fan)
+    return _sse(_stream([*(bus.channel(i) for i in ids), *(bus.match_channel(e) for e in games), mine], first, request, again=mine), places)
 
 
 # ---------------------------------------------------------------- the Android app
