@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from importlib.metadata import metadata
 from pathlib import Path
@@ -76,6 +77,25 @@ def test_a_build_without_the_agent_credits_no_model_and_no_news():
     # SPORTS_FOLLOW_AGENT=0 (no OpenRouter key): pages come from the sources alone.
     page = credits.credits({"sportmonks_football": 1, "pandascore_esports": 1, "pubg_esports": 1}, stockfish=False, agent=False)
     assert "PandaScore" in _names(page["data"]) and "AI" not in _names(page["also"]) and "News publishers" not in _names(page["also"])
+
+
+ROOT_WEB = ROOT / "web"
+# A package the web app ships that is part of another's project, credited as that one.
+PART_OF = {"react-dom": "react"}
+
+
+def test_every_package_the_web_app_ships_is_credited():
+    # What web/package.json puts in the bundle (its dependencies, not the tools that build it) is under Built with,
+    # with the licence its package gives where it's installed; the page itself shows only the name, link and licence.
+    shipped = json.loads((ROOT_WEB / "package.json").read_text())["dependencies"]
+    listed = {item["npm"]: item for item in credits.SOFTWARE if "npm" in item}
+    missing = [name for name in shipped if PART_OF.get(name, name) not in listed]
+    assert not missing, f"shipped but not credited: {missing}"
+    for name, item in listed.items():
+        installed = ROOT_WEB / "node_modules" / name / "package.json"
+        if installed.is_file():
+            assert item["licence"] == json.loads(installed.read_text())["license"], name
+    assert all(set(s) <= {"name", "url", "licence"} for s in credits.credits({}, stockfish=False)["software"])
 
 
 def test_listed_python_licences_match_the_installed_packages():

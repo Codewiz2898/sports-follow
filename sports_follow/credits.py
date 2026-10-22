@@ -18,8 +18,8 @@ from .adapters import ADAPTERS, KNOWN, providers
 from .agent import MODEL
 from .config import APP_NAME
 
-# Server, web app and services, with the licence each is used under (tests check the Python ones
-# against the installed packages).
+# Server, web app and services, with the licence each is used under (tests check the Python ones against the
+# installed packages, and that each package the web app ships, by its npm name, is here with its licence).
 SOFTWARE: list[dict[str, str]] = [
     {"name": "FastAPI", "url": "https://fastapi.tiangolo.com", "licence": "MIT", "package": "fastapi"},
     {"name": "Starlette", "url": "https://www.starlette.io", "licence": "BSD-3-Clause", "package": "starlette"},
@@ -44,9 +44,10 @@ SOFTWARE: list[dict[str, str]] = [
     {"name": "YuNet face detector by Shiqi Yu", "url": "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet", "licence": "MIT"},
     {"name": "PostgreSQL", "url": "https://www.postgresql.org", "licence": "PostgreSQL"},
     {"name": "Redis", "url": "https://redis.io", "licence": "RSALv2 or SSPLv1"},
-    {"name": "React", "url": "https://react.dev", "licence": "MIT"},
-    {"name": "React Router", "url": "https://reactrouter.com", "licence": "MIT"},
-    {"name": "Vite", "url": "https://vite.dev", "licence": "MIT"},
+    {"name": "React", "url": "https://react.dev", "licence": "MIT", "npm": "react"},
+    {"name": "React Router", "url": "https://reactrouter.com", "licence": "MIT", "npm": "react-router-dom"},
+    {"name": "Vite", "url": "https://vite.dev", "licence": "MIT", "npm": "vite"},
+    {"name": "chess.js by Jeff Hlywa", "url": "https://github.com/jhlywa/chess.js", "licence": "BSD-2-Clause", "npm": "chess.js"},
     {"name": "Anton font by Vernon Adams", "url": "https://fonts.google.com/specimen/Anton", "licence": "OFL-1.1"},
     {"name": "Manrope font by Mikhail Sharanda", "url": "https://fonts.google.com/specimen/Manrope", "licence": "OFL-1.1"},
     {"name": "Fredoka font by Milena Brandão", "url": "https://fonts.google.com/specimen/Fredoka", "licence": "OFL-1.1"},
@@ -142,6 +143,6 @@ def credits(running: Mapping[str, Any] | None = None, stockfish: bool | None = N
         "data": data,
         "also": also,
         "photos": [{k: p.get(k) for k in ("name", "credit", "page", "author", "licence", "licence_url")} for p in photos or []],
-        "software": [{k: v for k, v in s.items() if k != "package"} for s in SOFTWARE],
+        "software": [{k: v for k, v in s.items() if k not in ("package", "npm")} for s in SOFTWARE],
         "notices": [*NOTICES, *(PHOTO_NOTICES if photos else [])],
     }
