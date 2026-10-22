@@ -1558,11 +1558,15 @@ async def google_callback(request: Request, state: str = "", code: str = "", err
 @app.post("/api/auth/signout")
 async def sign_out(request: Request, response: Response, body: dict | None = Body(None), signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
     """Sign this device out, or every device ({"everywhere": true}). Their alerts stop; this device
-    becomes a new, empty anonymous fan."""
+    becomes a new, empty anonymous fan. A device signed in to nothing (signed out in another tab, or
+    everywhere from another device) keeps the fan it has, and what it followed since (BUG-094); only a
+    session cookie that ended elsewhere goes."""
     if signed is not None:
         everywhere = bool((body or {}).get("everywhere"))
         await _forget_sessions(await in_db(accounts.end_sessions, signed.account_id, None if everywhere else signed.session_id))
-    _clear_cookies_for_anonymous(request, response)
+        _clear_cookies_for_anonymous(request, response)
+    elif request.cookies.get(accounts.SESSION_COOKIE):
+        response.delete_cookie(accounts.SESSION_COOKIE, httponly=True, samesite="lax", secure=_secure(request))
     return {"signed_in": False}
 
 

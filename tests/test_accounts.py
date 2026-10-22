@@ -441,6 +441,19 @@ def test_signing_out_ends_the_session_and_leaves_a_new_empty_fan(api, store, out
     assert api.call("GET", "/api/me/account", headers=cookies(session=other)).json()["signed_in"] is not everywhere
 
 
+def test_signing_out_when_already_signed_out_keeps_the_devices_fan(api, store, outbox):
+    """BUG-094 (BHA-416): "Sign out" in a tab left from before (signed out in another, or everywhere from the phone)
+    gave the device a new, empty anonymous fan, so what it had followed since was gone. Signed in to nothing, it
+    keeps its fan; a session cookie that ended elsewhere goes."""
+    answer = api.call("POST", "/api/auth/signout", body={}, headers=cookies(fan="anon-1"))
+    assert answer.json() == {"signed_in": False} and set_cookies(answer) == {}
+    token = set_cookies(sign_in(api, outbox))["sf_session"][0]
+    store.sessions.clear()  # signed out everywhere from another device
+    answer = api.call("POST", "/api/auth/signout", body={}, headers=cookies(fan="anon-2", session=token))
+    jar = set_cookies(answer)
+    assert answer.json() == {"signed_in": False} and jar["sf_session"][1] and "sf_fan" not in jar
+
+
 ENDINGS = {  # each way a session ends that another device or the admin panel sets off
     "signed out everywhere": lambda api, other, panel: api.call("POST", "/api/auth/signout", body={"everywhere": True}, headers=cookies(session=other)),
     "account deleted": lambda api, other, panel: api.call("DELETE", "/api/me/account", body={"confirm": True}, headers=cookies(session=other)),
