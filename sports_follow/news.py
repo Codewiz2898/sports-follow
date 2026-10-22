@@ -387,9 +387,10 @@ def keep(source: NewsSource, found: list[Linked], now: datetime, read: Iterable[
                 log.info("feed: story %s for player %s not kept: %s", f.article.url, f.player_id, type(exc).__name__)
         stories = {(external_id(a.url), a.feed): a for a in read}
         named = {(f.player_id, external_id(f.article.url)) for f in found}
-        for row in session.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.candidate).where(
-                FeedCandidate.source == source.system, FeedCandidate.external_id.in_({e for e, _ in stories}),
-                FeedCandidate.candidate["channel_id"].astext.in_({f for _, f in stories}))).all():  # fmt: skip
+        rows = session.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.candidate).where(
+            FeedCandidate.source == source.system, FeedCandidate.external_id.in_({e for e, _ in stories}),
+            FeedCandidate.candidate["channel_id"].astext.in_({f for _, f in stories}))).all() if stories else []  # fmt: skip
+        for row in rows:
             was = row.candidate or {}
             article = stories.get((row.external_id, str(was.get("channel_id") or "")))
             if article is None or (row.player_id, row.external_id) in named:
