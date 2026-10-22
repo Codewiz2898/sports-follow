@@ -303,25 +303,32 @@ export function FromTheFans({ feed, name, sport, now, onAll }: { feed: Feed | nu
   )
 }
 
+const PICKED_FROM = 8  // the posts From your players picks its two from: a game picked on Today has some among them
+
 /** Today's "From your players": at its foot, after This week and the Wire; the two best of the fan's Feed
  * (Following) right now in the edge-to-edge layout's cards (FeedLayouts.tsx, boxed here, whichever layout the Feed
- * tab draws: a full-screen one doesn't sit in a page), and the way to the rest. Absent while their Feed is empty. */
-export function FromYourPlayers({ now }: { now: number }) {
+ * tab draws: a full-screen one doesn't sit in a page), and the way to the rest. With a game picked on Today
+ * (`game`, a sport's key), the two best of that game's among the first few, the players taking turns; the way to
+ * the rest is to the whole Feed, so it says no count. Absent while there are none. */
+export function FromYourPlayers({ now, game = null }: { now: number; game?: string | null }) {
   const { cards, loaded } = useFollowing()
   const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
-  const { page, hide } = useMyFeed(null, 2, loaded ? who : null)  // once, when the follow list is in
+  // Asked once, when the follow list is in, enough for a game picked, so picking one asks nothing more.
+  const { page, hide } = useMyFeed(null, PICKED_FROM, loaded ? who : null)
   const [open, setOpen] = useState<FeedEntry | null>(null)
   const [playing, setPlaying] = useState<string | null>(null)
-  if (!loaded || !page?.items.length) return null
+  const shown = (page?.items ?? []).filter((e) => !game || sportKey(e.player.sport) === game).slice(0, 2)
+  if (!loaded || !page || !shown.length) return null
+  const all = game ? 'All' : `All ${page.count}`
   return (
     <section className="section from-players" aria-label="From your players">
       <SectionHead title="From your players">
-        <Link to="/me/feed?tab=following" className="eyebrow link" style={{ color: 'var(--text)' }}>All {page.count}</Link>
+        <Link to="/me/feed?tab=following" className="eyebrow link" style={{ color: 'var(--text)' }}>{all}</Link>
       </SectionHead>
       <div className="edge boxed">
-        {page.items.map((e) => <EdgePost key={e.item.id} entry={e} now={now} playing={playing === e.item.id} onPlay={setPlaying} onMore={() => setOpen(e)} />)}
+        {shown.map((e) => <EdgePost key={e.item.id} entry={e} now={now} playing={playing === e.item.id} onPlay={setPlaying} onMore={() => setOpen(e)} />)}
       </div>
-      <Link to="/me/feed?tab=following" className="btn all">All {page.count} in your Feed</Link>
+      <Link to="/me/feed?tab=following" className="btn all">{all} in your Feed</Link>
       {open && <ItemSheet item={open.item} name={open.player.name} onClose={() => setOpen(null)} onHide={(_, verdict) => hide(open, verdict)}><EdgeSheetExtras entry={open} /></ItemSheet>}
     </section>
   )
