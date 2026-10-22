@@ -746,9 +746,10 @@ def table(db: Session, league: League) -> list[dict[str, Any]]:
 
 def league(db: Session, fan: str, code: str, now: datetime | None = None) -> dict[str, Any]:
     """A league's page, for its members: its table, and the questions its members have picked that are still to
-    settle, soonest first, then those settled lately, newest first (LEAGUE_CALLS of each at most, of sports that are
-    on), each with who picked what once it's closed (before, only who has picked). Raises Refused for no such
-    league, or one this fan isn't in."""
+    settle, those taking picks first, soonest first, then those under way or held for a postponed game's new date,
+    latest start first; then those settled lately, newest first (LEAGUE_CALLS still to settle at most, and as many
+    settled, of sports that are on), each with who picked what once it's closed (before, only who has picked).
+    Raises Refused for no such league, or one this fan isn't in."""
     now = now or _now()
     found = find(db, code)
     if found is None or db.get(LeagueMember, (found.id, fan)) is None:
@@ -760,8 +761,15 @@ def league(db: Session, fan: str, code: str, now: datetime | None = None) -> dic
     # Sports turned off are left out before the cut, and the calls still to settle come first: else members' calls
     # settled lately take every place, and the open ones (whose "still to pick" is the page's point) go.
     theirs.append(Question.sport.not_in([s for s in db.scalars(select(Question.sport).where(*theirs).distinct()) if not sports.on(s)]))
-    coming = list(db.scalars(select(Question).where(*theirs, Question.status.in_(UNSETTLED))
+    # Those taking picks come before those whose start has gone by (under way, or a postponed game's, held a month):
+    # else twenty of those take every place, and tonight's call goes.
+    postponed = select(Event.id).where(Event.status == "postponed")
+    taking = and_(Question.status == OPEN, or_(Question.locks_at.is_(None), Question.locks_at > now), or_(Question.event_id.is_(None), Question.event_id.not_in(postponed)))
+    coming = list(db.scalars(select(Question).where(*theirs, taking)
                              .order_by(Question.locks_at.asc().nulls_last(), Question.game, Question.position).limit(LEAGUE_CALLS)))
+    if len(coming) < LEAGUE_CALLS:
+        coming += db.scalars(select(Question).where(*theirs, Question.status.in_(UNSETTLED), ~taking)
+                             .order_by(Question.starts_at.desc().nulls_last(), Question.game, Question.position).limit(LEAGUE_CALLS - len(coming)))
     settled = list(db.scalars(select(Question).where(*theirs, Question.status.not_in(UNSETTLED))
                               .order_by(Question.settled_at.desc(), Question.game, Question.position).limit(LEAGUE_CALLS)))
     questions = {q.id: q for q in [*coming, *settled]}

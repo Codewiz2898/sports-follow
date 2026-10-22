@@ -291,6 +291,28 @@ def test_a_league_page_keeps_its_open_calls_however_many_settled_lately(db, redi
     assert len([item for item in listed if item["status"] == "settled"]) >= 1  # and the settled ones after it
 
 
+def test_a_league_page_lists_its_open_calls_before_those_under_way_or_put_back(db, redis):  # noqa: F811
+    """Round two: the calls still to settle are those open and those closed, under way or held for a postponed game's
+    new date (POSTPONED_KEEP), whose start has gone by. The open ones come first, soonest first: twenty of the others
+    don't take tonight's place."""
+    now = datetime.now(timezone.utc)
+    code = league_of(db, "Asha", "Ravi")
+    for i in range(predictions.LEAGUE_CALLS):  # Saturday afternoon: Ravi's twenty calls, kicked off or put back
+        gone = open_question(db, now + timedelta(minutes=5), game=f"on-{i}", event_id=10 + i)
+        predictions.pick(db, "acct-ravi", gone.id, "w")
+        if i % 2:
+            gone.status, gone.closed_at = "closed", now  # under way: closed, to be settled when it ends
+        else:
+            db.get_one(Event, gone.event_id).status = "postponed"  # put back: held open, taking no picks, till its new date
+        gone.locks_at = gone.starts_at = now - timedelta(minutes=30 + i)
+    tonight = open_question(db, now + timedelta(hours=4), game="tonight", event_id=99)
+    predictions.pick(db, "acct-asha", tonight.id, "w")
+    db.commit()
+    listed = predictions.league(db, "acct-asha", code)["questions"]
+    assert (listed[0]["id"], listed[0]["status"], listed[0]["waiting"]) == (tonight.id, "open", ["Ravi"])
+    assert len(listed) == predictions.LEAGUE_CALLS and {item["status"] for item in listed[1:]} == {"closed"}
+
+
 def test_signing_in_counts_a_devices_open_picks_and_leaves_a_closed_ones_split_as_it_stood(db, redis):  # noqa: F811
     """A pick from a fan the request made up (counted False) moved into an account (merge, BUG-091): on a question
     still open it counts from now, as an account's does; on one closed it stays as it was, so a split already shown
