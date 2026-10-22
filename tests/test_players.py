@@ -202,6 +202,25 @@ def test_a_pick_with_a_removed_players_name_and_birth_date_is_refused(db, monkey
     assert not registry.removed(db, "Cricket", shutte_elsewhere("9990001"))
 
 
+def test_a_removed_athletes_new_years_birthday_blocks_only_them(db, monkeypatch):
+    """BUG-292: a removed athlete's 1 January birth date counted as the year alone, and a name inside theirs as
+    theirs, so removing an Ahmed Hassan born on New Year's Day blocked every namesake born that year, and a
+    Mohammad Ali the one-name Ali."""
+    monkeypatch.setattr(registry, "ALL", ())  # no other source to ask
+    registry.upsert(db, [athlete("Q1", "football", "Ahmed Hassan", birth_date=date(1993, 1, 1), birth_precision=registry.DAY),  # a real New Year's Day
+                         athlete("Q2", "cricket", "Mohammad Ali", birth_date=date(1990, 1, 1), birth_precision=registry.YEAR)])  # the year alone
+    db.commit()
+    assert players.main(["remove", "Q1", "--yes"]) == 0 and players.main(["remove", "Q2", "--yes"]) == 0
+
+    def pick(sport: str, name: str, born: str) -> bool:
+        return registry.removed(db, sport, PlayerRef("sportmonks", f"x{name}{born}", name, [], [], born=born))
+
+    assert pick("Football", "Ahmed Hassan", "1993-01-01") and pick("Football", "A. Hassan", "1993-01-01")  # him, as before
+    assert not pick("Football", "Ahmed Hassan", "1993-11-02") and not pick("Football", "Ahmed Hassan Mahgoub", "1993-03-05")
+    assert pick("Cricket", "Mohammad Ali", "1990-08-30") and pick("Cricket", "Ali Mohammad", "1990-08-30")  # known to the year: maybe him
+    assert not pick("Cricket", "Ali", "1990-05-05") and not pick("Cricket", "Moeen Munir Ali", "1990-05-05")  # but only by his whole name
+
+
 def test_an_added_athlete_is_kept_through_the_weekly_import(db, monkeypatch):
     assert players.main(["add", "--sport", "chess", "--name", "Club Player", "--alias", "C. Player", "--born", "1990-05-01", "--note", "local hero"]) == 0
     added = db.scalars(select(Athlete)).one()

@@ -129,9 +129,11 @@ def describe(db: Session, found: Found) -> list[str]:
     return lines
 
 
-def _decide(db: Session, qid: str, sport: str, action: str, name: str, ids: dict[str, str], note: str | None, born: date | None = None) -> None:
-    stmt = insert(AthleteOverride).values(qid=qid, sport=sport, action=action, name=name[:200], ids=ids, note=note, birth_date=born)
-    db.execute(stmt.on_conflict_do_update(index_elements=["qid", "sport"], set_={"action": action, "name": name[:200], "ids": ids, "note": note, "birth_date": born, "created_at": func.now()}))
+def _decide(db: Session, qid: str, sport: str, action: str, name: str, ids: dict[str, str], note: str | None, born: date | None = None,
+            precision: int | None = None) -> None:
+    stmt = insert(AthleteOverride).values(qid=qid, sport=sport, action=action, name=name[:200], ids=ids, note=note, birth_date=born, birth_precision=precision)
+    db.execute(stmt.on_conflict_do_update(index_elements=["qid", "sport"], set_={"action": action, "name": name[:200], "ids": ids, "note": note, "birth_date": born,
+                                                                                 "birth_precision": precision, "created_at": func.now()}))
 
 
 def remove(db: Session, found: Found, note: str | None = None) -> list[int]:
@@ -158,7 +160,7 @@ def remove(db: Session, found: Found, note: str | None = None) -> list[int]:
             people.append((registry.Person(f"player:{p.id}", sports.family(p.sport) or "other", p.name, [], None, list(p.teams or []), None, _source_ids(db, p.id)), None))
     everywhere = [registry.everywhere(person) for person, _ in people]
     for (person, a), ids in zip(people, everywhere):
-        _decide(db, person.qid, person.sport, "remove", person.name, ids, note, person.birth_date)
+        _decide(db, person.qid, person.sport, "remove", person.name, ids, note, person.birth_date, person.birth_precision)
         if a is not None:
             db.execute(delete(Athlete).where(Athlete.id == a.id))
     starters.remove(db, found.athletes)

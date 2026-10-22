@@ -364,17 +364,21 @@ def blocked(db: Session) -> set[tuple[str, str]]:
 def removed(db: Session, sport: str | None, ref: PlayerRef) -> bool:
     """Whether a source's athlete, in this sport, is one an operator removed (players.py): by their id in that
     source (blocked), or, in a source that had no id for them then (one switched to or added since, or one that
-    didn't answer), by the same name and birth date. A pick with no birth date isn't taken for anyone: a
-    namesake can still be followed."""
+    didn't answer), by the same name and birth date: as far as the registry knew the date (a real New Year's Day
+    is that day), and a date it knew only to the month or year by their whole name, in any order ("Ahmed Hassan",
+    not every Ahmed Hassan Mahgoub born that year, nor the one-name "Ali" for Mohammad Ali). A pick with no birth
+    date isn't taken for anyone: a namesake can still be followed."""
     if (ref.system, str(ref.athlete_id)) in blocked(db):
         return True
     if not ref.born:
         return False
     key = sports.family(sport)
     within = [key, *([group] if (group := sports.of(key).group) else [])]  # removed as "esports": every game's
-    gone = db.execute(select(AthleteOverride.name, AthleteOverride.birth_date).where(
+    gone = db.execute(select(AthleteOverride.name, AthleteOverride.birth_date, AthleteOverride.birth_precision).where(
         AthleteOverride.action == "remove", AthleteOverride.sport.in_(within), AthleteOverride.birth_date.is_not(None))).all()
-    return any(same_day(born, ref.born) and naming.names_match(name, ref.name) for name, born in gone)
+    picked = sorted(words(ref.name))
+    return any(same_day(born, ref.born, known) and (naming.names_match(name, ref.name) if date_precision(born, known) == DAY else sorted(words(name)) == picked)
+               for name, born, known in gone)  # fmt: skip
 
 
 def db_now() -> datetime:
