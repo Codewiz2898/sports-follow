@@ -75,6 +75,16 @@ def _sides(now: Seen) -> tuple[dict[str, Any], dict[str, Any]] | None:
     return (ours, theirs) if ours and theirs else None
 
 
+def took(ours: dict[str, Any], theirs: dict[str, Any], draw: bool = False) -> bool | None:
+    """Whether the first side took a finished series: as its source marks the winner, else (the winner can come a
+    poll after the series is over) by the maps, the side with more; None for a draw."""
+    if ours.get("winner") or theirs.get("winner"):
+        return bool(ours.get("winner"))
+    if draw or int(ours.get("score") or 0) == int(theirs.get("score") or 0):
+        return None
+    return int(ours.get("score") or 0) > int(theirs.get("score") or 0)
+
+
 def _series(who: str, now: Seen) -> Found:
     """The series result from the player's team's side: "TenZ: Sentinels win 2–1"."""
     sides = _sides(now)
@@ -86,7 +96,7 @@ def _series(who: str, now: Seen) -> Found:
         verb = "win by forfeit" if ours.get("winner") else "lose by forfeit" if theirs.get("winner") else "forfeit"
         title = f"{who}: {ours['name']} {verb}"
     else:
-        verb = "win" if ours.get("winner") else "lose" if theirs.get("winner") else "draw"
+        verb = {True: "win", False: "lose", None: "draw"}[took(ours, theirs, bool(now.state.get("draw")))]
         title = f"{who}: {ours['name']} {verb} {ours['score']}–{theirs['score']}"
     return Found("final", "key", title, " · ".join(x for x in (f"v {theirs['name']}", stage) if x))
 
@@ -288,6 +298,14 @@ class Esports(Sport):
 
     def left_out(self, now: Seen) -> bool:
         return _lobby(now) and now.lineups and now.line is None
+
+    def result_pending(self, state: dict[str, Any], score: str, clock: str) -> bool:
+        """A series its source says is over before it says who won it (two sides, neither marked the winner, the maps
+        not level): held a poll or two for the winner, then told from the maps."""
+        teams = [t for t in state.get("teams") or [] if isinstance(t, dict)]
+        if state.get("kind") != "esports" or len(teams) != 2 or state.get("forfeit") or state.get("draw") or any(t.get("winner") for t in teams):
+            return False
+        return int(teams[0].get("score") or 0) != int(teams[1].get("score") or 0)
 
     def start(self, who: str, now: Seen) -> Found:
         if _lobby(now):

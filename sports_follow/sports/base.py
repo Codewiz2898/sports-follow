@@ -281,8 +281,8 @@ def num(value: str | None) -> float:
 
 def outcome(result: str) -> str | None:
     """W, D or L from a result put from the player's side ("Won 2–1"); None if it doesn't say."""
-    if "(w/o)" in (result or ""):
-        return None  # a walkover wasn't played, so it isn't form (as the tennis Win–loss leaves it out)
+    if "(w/o)" in (result or "") or " by forfeit" in (result or ""):
+        return None  # a walkover or a forfeit wasn't played, so it isn't form (as the tennis Win–loss leaves it out)
     word = (result or "").split(" ", 1)[0]
     return {"Won": "W", "Drew": "D", "Lost": "L"}.get(word)
 

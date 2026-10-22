@@ -208,6 +208,49 @@ def test_the_series_result_from_the_teams_side():
     assert other.title == "TenZ: Sentinels 2 – 1 NRG"
 
 
+def test_a_series_over_before_its_winner_is_in_waits_for_it_and_never_says_draw():
+    """PandaScore can say a series is finished a poll before it fills in who won: its final is held a poll or two
+    for the winner (structured.hold_result), and if it still isn't in, the maps say who won, never "draw" (BUG-204)."""
+    nowinner = {**FINAL, "winner_id": None, "winner_type": None}
+    rules = sports.of("Valorant")
+    snap = ps.parse_match(nowinner)
+    assert rules.result_pending(snap.state, snap.score_label, snap.clock_label)
+    assert structured.hold_result(rules, snap, None).status == "live"
+    assert not rules.result_pending(ps.parse_match(FINAL).state, "", "")  # the winner's in
+    one_all = _seen(_match("running", 1, 1, [_game(1, "finished", SEN), _game(2, "finished", NRG), _game(3, "running")]))
+    [final] = moments.detect("Valorant", "TenZ", str(TENZ), one_all, _seen(nowinner))
+    assert final.title == "TenZ: Sentinels win 2–1"
+    [nrg] = moments.detect("Valorant", "s0m", "1", one_all, _seen(nowinner, teams=[str(NRG)]))
+    assert nrg.title == "s0m: NRG lose 1–2"
+    [f] = ps.parse_fixtures([nowinner])
+    assert (ps.result_label(f, [str(SEN)]), ps.result_label(f, [str(NRG)])) == ("Won 2–1", "Lost 1–2")
+    # A series that ends level (every game played, one each) is a draw, and nothing's to come.
+    level = _match("finished", 1, 1, [_game(1, "finished", SEN), _game(2, "finished", NRG)], number_of_games=2, match_type="all_games_played", draw=True)
+    assert not rules.result_pending(ps.parse_match(level).state, "", "")
+    [drew] = moments.detect("Valorant", "TenZ", str(TENZ), _seen(_match("running", 1, 0)), _seen(level))
+    assert drew.title == "TenZ: Sentinels draw 1–1"
+    assert ps.result_label(ps.parse_fixtures([level])[0], [str(SEN)]) == "Drew 1–1"
+
+
+def test_a_series_paused_mid_way_stays_on_and_what_happens_when_it_resumes_is_told():
+    """BUG-207: PandaScore may mark a series postponed mid-way (a technical pause). It was put off: no longer polled, its
+    live card taken down, and a map won after it resumed fell into a quiet first look. Put off after it began, it's
+    still on ("Paused") for PAUSE_FOR from its last map's news; put off longer than that, it's postponed."""
+    paused = _match("postponed", 1, 0, [_game(1, "finished", SEN), _game(2, "not_started"), _game(3, "not_started")])  # began 19:12
+    at = datetime(2026, 10, 11, 20, 30, tzinfo=timezone.utc)
+    snap = ps.parse_match(paused, at)
+    assert (snap.status, snap.clock_label, ps.parse_fixtures([paused], at)[0].status) == ("live", "Paused", "live")
+    resumed = _seen(_match("running", 1, 1, [_game(1, "finished", SEN), _game(2, "finished", NRG), _game(3, "running")]))
+    during = moments.Seen(snap.status, snap.state, None, snap.score_label, snap.clock_label, teams=[str(SEN)])
+    assert [f.title for f in moments.detect("Valorant", "TenZ", str(TENZ), during, resumed)] == ["TenZ: Sentinels lose map 2"]
+    # Hours on, it's put off; counted from its last map's news, not the series' start.
+    assert ps.parse_match(paused, at + ps.PAUSE_FOR).status == "postponed"
+    late_map = _match("postponed", 1, 0, [{**_game(1, "finished", SEN), "end_at": "2026-10-11T22:00:00Z"}, _game(2, "not_started"), _game(3, "not_started")])
+    assert ps.parse_match(late_map, at + ps.PAUSE_FOR).status == "live"
+    # Put off before a map was played, it's postponed as ever.
+    assert (ps.parse_match(_match("postponed"), at).status, ps.parse_match(_match("postponed"), at).clock_label) == ("postponed", "Postponed")
+
+
 def test_a_forfeit_is_a_result():
     # As PandaScore sends every forfeit (all 100 in /matches/past?filter[forfeit]=true on 2026-10-13):
     # "canceled", with forfeit set, the series awarded (winner_id) and no map played. It was stored as
@@ -250,8 +293,23 @@ def test_a_pros_sport_is_their_game():
 def test_form_counts_series_and_maps():
     items = [({"result": "Won 2–1"}, None), ({"result": "Lost 0–2"}, None), ({"result": "Won by forfeit"}, None)]
     stats, note = form.summarize("Esports", items, ["Sentinels"])
-    assert stats == [{"label": "W–L", "value": "2–1"}, {"label": "Maps", "value": "2–3"}]
+    assert stats == [{"label": "W–L", "value": "1–1"}, {"label": "Maps", "value": "2–3"}]
     assert note == "Last 3 series"
+
+
+def test_a_forfeit_isnt_in_the_win_loss():
+    """A series given by forfeit wasn't played, so it's left out of a player's W–L and their team's Form, as a
+    tennis walkover is (BUG-142); its row still says "Won by forfeit"."""
+    unplayed = [_game(1, "not_started"), _game(2, "not_started"), _game(3, "not_started")]
+    forfeit = _match("canceled", games=unplayed, forfeit=True, winner_id=SEN, begin_at=None)
+    [f] = ps.parse_fixtures([forfeit])
+    kept = structured.result_item(ps.PandascoreEsports(), f, ps.parse_match(forfeit), None, ps.parse_player(PLAYER))
+    assert (kept["result"], kept["outcome"]) == ("Won by forfeit", None)
+    items = [({"result": "Won 2–1", "outcome": "W"}, None), (kept, None), ({"result": "Lost by forfeit"}, None)]
+    stats, note = form.summarize("Valorant", items, ["Sentinels"])
+    assert (stats[0], note) == ({"label": "W–L", "value": "1–0"}, "Last 3 series")
+    # The team page's Form reads each result's words.
+    assert [sports.of("Valorant").outcome(r, ["Sentinels"]) for r in ("Won 2–1", "Won by forfeit", "Lost by forfeit")] == ["W", None, None]
 
 
 # ---------------------------------------------------------------- registry, search, credits, scheduling
@@ -393,6 +451,33 @@ def test_live_now_lets_a_games_tier_c_series_stand_in_while_none_bigger_is_on_in
     assert [(g.source_id, g.sport, g.tier) for g in games] == [("4", "cs2", 2), ("1", "dota2", 0), ("5", "dota2", 0)]
     running[0]["tournament"]["tier"] = "b"  # a bigger Dota series comes on: the C's give way
     assert [(g.source_id, g.tier) for g in ps.PandascoreEsports().live_now()] == [("4", 2), ("1", 1)]
+
+
+def test_live_now_reads_on_past_a_full_page_on_a_busy_day(monkeypatch):
+    """BUG-208: /matches/running is a page of 100. On a busy day it can be full of small series, and a bigger one on
+    the next page wasn't seen: a C stood in for it. A full page is read on from (and only then), a series on both
+    pages is one, and a next page the budget can't spare leaves the first page's."""
+    def on(match_id: int, slug: str, tier: str) -> dict:
+        return {**LIVE, "id": match_id, "videogame": {"id": match_id, "slug": slug}, "tournament": {"id": match_id, "name": "Group stage", "tier": tier}}
+
+    pages = {1: [on(1, "cs-go", "c"), *(on(n, "cs-go", "d") for n in range(2, 101))], 2: [on(100, "cs-go", "d"), on(101, "cs-go", "s")]}
+    asked: list[int] = []
+
+    def get_json(path, ttl, **params):
+        asked.append(params.get("page[number]", 1))
+        if asked[-1] == 2 and down:
+            raise pandascore.RateLimited("the refresh lane's share is spent")
+        return pages[params.get("page[number]", 1)]
+
+    down = False
+    monkeypatch.setattr(pandascore, "get_json", get_json)
+    assert [(g.source_id, g.tier) for g in ps.PandascoreEsports().live_now()] == [("101", 3)] and asked == [1, 2]
+    down = True
+    assert [(g.source_id, g.tier) for g in ps.PandascoreEsports().live_now()] == [("1", 0)]  # the first page's stand-in
+    asked.clear()
+    pages[1] = pages[1][:50]
+    ps.PandascoreEsports().live_now()
+    assert asked == [1]  # a page that isn't full is the last
 
 
 def test_the_schedule_is_the_big_tournaments_series_between_two_days_each_with_its_tier(monkeypatch):

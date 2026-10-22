@@ -3,9 +3,9 @@
 Not a source of its own: it adds to PandaScore's Dota 2 series (pandascore_esports), which have the
 schedule and the series and map scores but nothing inside a map. No key needed: the free tier allows 60
 requests a minute and 3,000 a day, counted by the source budget (budget.py, BUDGET) and never spent past
-FREE_* less a margin. What's kept long (a finished match, the heroes, the items, the pros) is in the source
-cache (cache.py), shared by the API and the worker; the live list and the last pro matches only a moment,
-per process.
+FREE_* less a margin, nor past what OpenDota says is left of the day (it counts by address). What's kept
+long (a finished match, the heroes, the items, the pros) is in the source cache (cache.py), shared by the
+API and the worker; the live list and the last pro matches only a moment, per process.
 
 A finished match comes in two steps: from Valve's own record first (each player's hero, kills, items), and
 minutes later, once OpenDota has parsed its replay, with the rest (the gold lead by minute, the draft's
@@ -45,6 +45,15 @@ _memo: dict[str, tuple[float, Any]] = {}  # short-lived answers (the live list),
 RateLimited = budget.RateLimited
 
 
+def _observe(res: httpx.Response) -> None:
+    """What OpenDota says is left of the day (x-rate-limit-remaining-day), held until our day's count starts
+    again at midnight UTC. Its allowance is per address, so anything else on the server spends it too, which
+    our own count can't see."""
+    header = res.headers.get("x-rate-limit-remaining-day") or ""
+    if header.isdigit():
+        budget.observe(BUDGET, "", int(header), 86400 - time.time() % 86400)
+
+
 def _get(path: str, kind: type = list) -> Any:
     """An OpenDota document: a list (live games, pro matches, heroes, pros), or a dict (a match, the items)."""
     if not ENABLED:
@@ -54,6 +63,7 @@ def _get(path: str, kind: type = list) -> Any:
         res = _client.get(f"{BASE}{path}")
     except httpx.HTTPError as exc:
         raise AdapterError(f"OpenDota unreachable: {exc}") from exc
+    _observe(res)
     if res.status_code == 429:
         budget.pause(BUDGET)
         raise RateLimited("OpenDota said too many requests (429)")

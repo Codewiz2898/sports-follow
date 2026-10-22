@@ -137,6 +137,24 @@ def test_a_lobby_without_a_time_waits_for_its_first_result():
     assert lp.parse_match(_lobby(0, **day), WIKI, datetime(2026, 10, 13, 12, 5, tzinfo=timezone.utc)).status == "postponed"
 
 
+def test_a_lobby_without_a_time_first_seen_late_in_its_day_is_coming_up_and_armed():
+    # BUG-205: stored at midnight UTC, a lobby with no time first seen after 06:00 UTC (a fan following at noon in
+    # India) was past the arming window, and after noon UTC not even coming up: it was first polled once its results
+    # were in, so its start and first games were never told. On its day, nothing in yet, its source says it's next
+    # (Fixture.next_up): it's coming up, and armed from the refresh that reads it, so its start is seen when it comes.
+    day = {"date": "2026-10-12 00:00:01", "dateexact": 0}
+    late = datetime(2026, 10, 12, 13, 0, tzinfo=timezone.utc)
+    [f] = lp.parse_fixtures([_lobby(0, **day)], WIKI, late)
+    assert (f.status, f.next_up) == ("scheduled", True)
+    assert structured.upcoming([f], late) == [f]
+    event = Event(key=f"liquipedia_esports:{f.source_id}", sport="BGMI", status="scheduled")
+    structured.reschedule(None, event, f.start_utc, f.status, "BGMI", f.next_up)  # type: ignore[arg-type]  (no question to move)
+    assert event.status == "armed"
+    # Not the day before (armed by the clock, as any game), nor once under way, nor a lobby with a time.
+    before = datetime(2026, 10, 11, 20, 0, tzinfo=timezone.utc)
+    assert [lp.parse_fixtures([x], WIKI, t)[0].next_up for x, t in ((_lobby(0, **day), before), (_lobby(1, **day), late), (_lobby(0), late))] == [False] * 3
+
+
 def test_players_are_keyed_by_wiki_and_page():
     ref = lp.parse_player({"pagename": "Jonathan", "id": "JONATHAN", "teampagename": "GodLike Esports", "team": "GodLike Esports", "birthdate": "1970-01-01"}, WIKI)
     assert (ref.system, ref.athlete_id, ref.name, ref.team_ids, ref.team_names, ref.league, ref.born) == (

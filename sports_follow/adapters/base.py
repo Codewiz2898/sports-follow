@@ -100,8 +100,8 @@ class Fixture:
     # fixture is the game, or the source doesn't know it yet.
     board: str = ""
     # A game with no start time of its own that the source says is next: it starts once the one before it is over
-    # (a chess round set to start after the previous one). It's armed while it is, so its start is seen when it
-    # comes (structured.reschedule).
+    # (a chess round set to start after the previous one), or some time on its day (a lobby entered without a time,
+    # whose start_utc is its day's). It's armed while it is, so its start is seen when it comes (structured.reschedule).
     next_up: bool = False
 
 
