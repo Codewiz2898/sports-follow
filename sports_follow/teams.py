@@ -746,7 +746,7 @@ def ended(db: Session, event_id: int) -> None:
     and as often as a team's with a game soon for AFTER on (stale), since that read may have the schedule as the
     source kept it from before the result, and the next game may be set and played the same day (a Swiss round)."""
     db.execute(update(Team).where(Team.id.in_(select(EventTeam.team_id).where(EventTeam.event_id == event_id)), Team.id.in_(select(TeamFollow.team_id)))
-               .values(fetched_at=None, card=Team.card.op("||")(func.jsonb_build_object("ended_at", _now().isoformat()))))  # fmt: skip
+               .values(fetched_at=None, card=func.coalesce(Team.card, func.jsonb_build_object()).op("||")(func.jsonb_build_object("ended_at", _now().isoformat()))))  # fmt: skip
 
 
 def look_again(team: Team) -> bool:
