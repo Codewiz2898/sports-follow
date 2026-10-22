@@ -369,14 +369,14 @@ class PubgEsports(Adapter):
         (rewriting its result), under the next day once its matches before midnight had gone, or under the key of
         the day's lobby before it."""
         now = datetime.now(timezone.utc)
-        listed = [(m, now - _time(m["createdAt"]) <= RECENT) for m in pubg.tournament_matches(tournament, max_age) if m.get("createdAt")]
-        played = [pubg.match(m["id"], summarize_match) if fresh else pubg.kept(m["id"]) for m, fresh in listed]
+        listed = [(m, at) for m in pubg.tournament_matches(tournament, max_age) if (at := _time(m.get("createdAt")))]
+        played = [pubg.match(m["id"], summarize_match) if now - at <= RECENT else pubg.kept(m["id"]) for m, at in listed]
         # A match gone and not kept (never read: a fresh Redis) may have begun a lobby, or been one before it that day.
-        lost = [_time(m["createdAt"]) for (m, fresh), summary in zip(listed, played) if not fresh and summary is None]
+        lost = [at for (_, at), summary in zip(listed, played) if now - at > RECENT and summary is None]
         whole = []
-        for lobby in group_lobbies(tournament, played):
+        for lobby in group_lobbies(tournament, [m for m in played if m]):
             began = _time(lobby["matches"][0]["at"])
-            if now - began <= RECENT and not any(began - t < LOBBY_GAP or t.date().isoformat() == lobby["day"] for t in lost):
+            if began and now - began <= RECENT and not any(began - at < LOBBY_GAP or at.date().isoformat() == lobby["day"] for at in lost):
                 whole.append(lobby)
         return whole
 
