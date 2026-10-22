@@ -1,6 +1,7 @@
 """The pipeline worker: arq jobs for card builds, source refreshes, live polls and agent live
-checks, plus the one-minute scheduler tick (which also sends moments no sender claimed). Cron times
-are UTC, whatever the machine's zone.
+checks, plus the one-minute scheduler tick (which also sends moments no sender claimed), which runs
+beside the jobs rather than in one of their slots (_ticker). Cron times are UTC, whatever the
+machine's zone.
 
 Run it with:  .venv/bin/arq sports_follow.worker.WorkerSettings
 """
@@ -8,6 +9,7 @@ Run it with:  .venv/bin/arq sports_follow.worker.WorkerSettings
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import inspect
 import logging
@@ -36,6 +38,11 @@ _tick_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tick")
 # it missed: 384 ticks in four minutes once. A run this many seconds past its time is skipped, unless no
 # other late run has gone for as long, so a busy queue that delays every tick can't stop them all.
 LATE = 50
+# The tick: every minute on the minute (UTC), and once at startup (_ticker).
+TICK_EVERY = 60
+# A tick still running after this is cancelled, so one stuck on a query can't hold up the rest: the job timeout
+# it had as a cron job.
+TICK_TIMEOUT = 900
 
 # Again at startup: arq's CLI replaces the logging config after importing this module.
 logs.setup()
@@ -345,13 +352,20 @@ async def startup(ctx) -> None:
         await redis.enqueue_job("refresh_starters", _job_id="refresh_starters:startup")
     if redis is not None and not await redis.exists(TEAMS_DONE):
         await redis.enqueue_job("import_teams", _job_id="import_teams:startup")
+    if redis is not None:
+        ctx["ticker"] = asyncio.create_task(_ticker(ctx))  # stopped by wind_down
 
 
 async def wind_down(ctx) -> None:
-    """The worker is stopping (a deploy, a restart). arq has cancelled the running jobs and queued them
-    again, but their threads run on: they end at their next step (shutdown.stopping) and free their locks.
-    Whatever is still held after STOP_WAIT, say a build waiting on the model, is freed here, so the next
-    worker starts that work at once instead of finding it locked for up to twenty minutes (BHA-51)."""
+    """The worker is stopping (a deploy, a restart). The tick stops first, so it queues nothing more. arq
+    has cancelled the running jobs and queued them again, but their threads run on: they end at their next
+    step (shutdown.stopping) and free their locks. Whatever is still held after STOP_WAIT, say a build
+    waiting on the model, is freed here, so the next worker starts that work at once instead of finding it
+    locked for up to twenty minutes (BHA-51)."""
+    ticker = ctx.pop("ticker", None)
+    if ticker is not None:
+        ticker.cancel()
+        await asyncio.wait([ticker])
     shutdown.stopping.set()
     deadline = time.monotonic() + STOP_WAIT
     while bus.held() and time.monotonic() < deadline:
@@ -403,12 +417,45 @@ async def tick(ctx) -> None:
                  len(due.builds), len(due.refreshes), len(due.teams), len(due.polls), len(due.lanes), len(due.lives), len(due.profiles))
 
 
+def _next_tick(last: float, now: float) -> float:
+    """When the tick after one due at `last` is due, it being `now`: the next whole TICK_EVERY after both. A tick
+    that ran long, or a laptop that slept, skips the minutes it missed instead of running them all, and one woken
+    a moment early doesn't run its minute twice."""
+    return max(last // TICK_EVERY, now // TICK_EVERY) * TICK_EVERY + TICK_EVERY
+
+
+async def _ticker(ctx) -> None:
+    """The tick, at startup and then every TICK_EVERY seconds on the clock, as a task of the worker's own.
+
+    It was one of arq's cron jobs, and arq runs a cron job in a job slot like any other: with MAX_JOBS poll
+    sessions running (about 20 followed chess players live in a broadcast, each board its own ten-minute poll), no
+    game was armed, no poll handed over and no moment swept for up to ten minutes (BUG-173). Here it takes no slot,
+    and its work keeps to threads of its own (_in_tick_pool). Each run is a task of its own, logged as a job is,
+    under an id like arq's for a cron run ("cron:tick:<ms>", which _missed reads), and runs once a minute however
+    many workers share the queue, as arq's cron did."""
+    run = _logged(tick, quiet=True)
+    due = time.time()
+    while True:
+        ms = int(due * 1000)
+        try:
+            first = await ctx["redis"].set(f"tick:{ms}", "1", nx=True, px=int(TICK_EVERY * 2000))
+        except Exception:
+            log.warning("tick: Redis didn't answer; the next tick tries again", exc_info=True)
+            first = False
+        if first:
+            job = {"redis": ctx["redis"], "job_id": f"cron:tick:{ms}", "enqueue_time": datetime.fromtimestamp(due, timezone.utc)}
+            with contextlib.suppress(Exception):  # a run that failed or timed out has logged how it ended (_logged)
+                await asyncio.wait_for(asyncio.create_task(run(job)), TICK_TIMEOUT)
+        due = _next_tick(due, time.time())
+        await asyncio.sleep(due - time.time())
+
+
 class WorkerSettings:
     functions: list[Any] = [_logged(f) for f in (build_card, reread_profile, refresh_live, refresh_structured, refresh_team, poll_event, poll_lane, send_moments, send_held, engine_lane, history_lane, adopt_stragglers, read_live, read_match, read_league)]
     functions.append(func(_logged(refresh_starters), timeout=2400))  # also queued by a worker starting without a recent refresh
     functions.append(func(_logged(import_teams), timeout=1800))  # and the team import, likewise
+    # The tick isn't one of these: a cron run waits for a free job slot (_ticker).
     cron_jobs = [
-        cron(_logged(tick, quiet=True), second=0, run_at_startup=True),
         cron(_logged(purge_sessions), hour=4, minute=10, second=0),
         cron(_logged(refresh_starters), hour=4, minute=40, second=0, timeout=2400),
         cron(_logged(warm_sources), minute=set(range(0, 60, 10)), second=30, run_at_startup=True, timeout=900),

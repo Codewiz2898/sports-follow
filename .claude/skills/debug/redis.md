@@ -49,6 +49,8 @@ Deleting one left by a crash is fine, but they all expire on their own.
 - `engine:queue` (zset), `engine:want` (hash), `engine:latest:<game>`, `engine:pos:<hash>`: chess engine work and its cache.
 - `history:resting`: a hash of scorecard reads backing off.
 - `late:tick`, `late:warm_sources`: skip a backlog of missed cron runs.
+- `tick:<ms>`: the tick due at that time (epoch ms) has run, kept 2 minutes: one worker ticks a minute however
+  many share the queue. The tick isn't a queued job: it runs beside the jobs, needing no slot (`worker._ticker`).
 
 ## Source budgets: `budget:*` (`adapters/budget.py`)
 
@@ -97,7 +99,7 @@ again from its source. On production, ask Bharath first. Never `FLUSHALL` the ma
 
 - `arq:queue`: a zset of job id → due time (ms). A job stays in it while it runs. Ids are random, except:
   - `poll-lane:<system>`, `engine-lane`, `send-moments`, `history-lane`
-  - cron runs: `cron:<function>:<ms>`
+  - cron runs: `cron:<function>:<ms>` (the tick's lines carry `cron:tick:<ms>` as their `job_id`, though it's never queued)
 - `arq:in-progress:<job id>`: present while a job runs.
 - `arq:job:<job id>`: the job (pickled, so not readable). While it exists, the same id can't be queued again.
 - `arq:retry:<job id>`: counts a job's tries.
