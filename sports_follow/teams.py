@@ -285,10 +285,17 @@ def follow(db: Session, fan: str, team_id: int) -> Team:
     db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"team-follow:{fan}", 0))))
     if db.scalar(select(TeamFollow.id).where(TeamFollow.fan_id == fan, TeamFollow.team_id == team.id)) is not None:
         return team
-    if (db.scalar(select(func.count()).select_from(TeamFollow).where(TeamFollow.fan_id == fan)) or 0) >= MAX:
+    if counted(db, fan) >= MAX:
         raise Refused(429, f"You follow {MAX} teams already: unfollow one to follow this.")
     db.execute(insert(TeamFollow).values(fan_id=fan, team_id=team.id, alert_rules={}).on_conflict_do_nothing())
     return team
+
+
+def counted(db: Session, fan: str) -> int:
+    """The teams a fan follows that count toward MAX: those of the sports that run. A turned-off sport's stay
+    followed, out of sight (mine), and the fan can't unfollow them to make room."""
+    return db.scalar(select(func.count()).select_from(TeamFollow).join(Team, Team.id == TeamFollow.team_id)
+                     .where(TeamFollow.fan_id == fan, Team.sport.in_(sports.running_keys()))) or 0
 
 
 def unfollow(db: Session, fan: str, team_id: int) -> None:
@@ -722,7 +729,7 @@ def merge(db: Session, anon: str, fan: str) -> None:
     account's level and the earlier date. The account follows at most MAX: of this device's others, the earliest
     followed that fit come over."""
     have = set(db.scalars(select(TeamFollow.team_id).where(TeamFollow.fan_id == fan)))
-    room = MAX - len(have)
+    room = MAX - counted(db, fan)
     for row in db.scalars(select(TeamFollow).where(TeamFollow.fan_id == anon).order_by(TeamFollow.created_at, TeamFollow.id)):
         if row.team_id in have:
             db.execute(update(TeamFollow).where(TeamFollow.fan_id == fan, TeamFollow.team_id == row.team_id).values(created_at=func.least(TeamFollow.created_at, row.created_at)))

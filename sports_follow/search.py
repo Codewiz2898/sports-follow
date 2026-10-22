@@ -479,7 +479,9 @@ def offered(db: Session, athletes: list[Athlete], fan: str | None) -> list[Searc
 
 
 def offered_pairs(db: Session, athletes: list[Athlete], fan: str | None) -> list[tuple[Athlete, SearchResult]]:
-    """offered, each row with the athlete it stands for."""
+    """offered, each row with the athlete it stands for. Not one of a sport turned off (a group campaign's pro of a
+    game that's off)."""
+    athletes = [a for a in athletes if sports.on(a.sport)]
     rows = [from_athlete(a, "") for a in athletes]
     _ours(db, rows, fan)
     return [(a, r) for a, r in zip(athletes, rows) if r.player_id or (r.system and r.athlete_id)]
@@ -568,15 +570,16 @@ def previewed(system: str, athlete_id: str) -> bool:
 
 def preview(system: str, athlete_id: str, league: str | None) -> dict[str, Any] | None:
     """What following this athlete would show: who they are, their next game, their last game with
-    their line, and their stats. None if the source has no such athlete, or has just been turned off."""
+    their line, and their stats. None if the source has no such athlete, or has just been turned off, or their
+    sport has (a source of several games runs while any of them does)."""
     adapter = ADAPTERS.get(system)
     if adapter is None:
         return None
     hit = _kept(system, athlete_id)
     if hit is not None:
-        return hit
+        return hit if sports.on(hit.get("sport")) else None
     ref = adapter.player(athlete_id, league)
-    if ref is None:
+    if ref is None or not sports.on(structured.sport_name(adapter, ref)):
         return None
     out: dict[str, Any] = {
         "system": system,

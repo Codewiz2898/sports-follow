@@ -25,8 +25,8 @@ from sports_follow import accounts, bus, notify, pipeline, server, sports, struc
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, Fixture, Line, PlayerRef, Provider, Snapshot, SourceTeam, budget, espn_basketball, espn_cricket
 from sports_follow.adapters.base import DIGITS
 from sports_follow.alerts import Item, Watch, plan
-from sports_follow.models import (Account, Event, EventPlayer, EventState, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerIdentity,
-                                  PushSubscription, Team, TeamFollow, TeamOverride)
+from sports_follow.models import (Account, Event, EventPlayer, EventState, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerCard,
+                                  PlayerIdentity, PushSubscription, Team, TeamFollow, TeamOverride)
 from sports_follow.sports.football import result_label
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
@@ -800,3 +800,47 @@ def test_a_fan_of_both_sides_gets_full_pages_of_their_game(db, redis, source):
         got = pages(db, fan, 10)
         assert [len(p) for p in got] == [10, 10, 1]
         assert [t for p in got for t in p] == want
+
+
+@needs_db
+def test_a_sport_turned_off_is_out_of_reach_and_its_hidden_follows_take_no_room(db, redis, source, monkeypatch):
+    # BUG-097: a turned-off sport's player could still be followed by their id here, stayed on the fan's Following,
+    # and its teams, hidden from the fan, still counted toward the teams they may follow.
+    class Cards(dict):
+        async def get(self, key: str):
+            return super().get(key)
+
+        async def set(self, key: str, value: str, **kwargs) -> bool:
+            self[key] = value
+            return True
+
+    monkeypatch.setitem(server.state, "redis", Cards())
+    teams.import_teams(source.fake, NOW)
+    lakers = Team(name="Los Angeles Lakers", sport="basketball", system="pitch", external_id="50", search_text=teams.search_text("Los Angeles Lakers", "LAL"))
+    carlsen = Player(slug="magnus-carlsen", name="Magnus Carlsen", sport="Chess")
+    db.add_all([lakers, carlsen])
+    db.flush()
+    db.add(PlayerCard(player_id=carlsen.id, status="ready", card={"player_id": carlsen.id, "player": {"name": "Magnus Carlsen", "sport": "Chess"}}))
+    db.add_all([TeamFollow(fan_id="fan", team_id=team(db, ARS).id, alert_rules={}), TeamFollow(fan_id="fan", team_id=lakers.id, alert_rules={}),
+                Follow(fan_id="fan", player_id=carlsen.id, alert_rules={}),
+                TeamFollow(fan_id="account", team_id=team(db, ARS).id, alert_rules={}), TeamFollow(fan_id="account", team_id=lakers.id, alert_rules={}),
+                TeamFollow(fan_id="phone", team_id=team(db, CHE).id, alert_rules={})])
+    db.commit()
+    monkeypatch.setattr(teams, "MAX", 2)
+    monkeypatch.setattr(sports, "ENABLED", [s for s in sports.ALL if s.key not in ("basketball", "chess")])
+    # The Lakers and Carlsen are out of sight, so they take none of the fan's room: a second football team is theirs to follow.
+    teams.follow(db, "fan", team(db, CHE).id)
+    db.commit()
+    teams.merge(db, "phone", "account")
+    db.commit()
+    assert set(db.scalars(select(TeamFollow.team_id).where(TeamFollow.fan_id == "account"))) == {team(db, ARS).id, team(db, CHE).id, lakers.id}
+    shown = asyncio.run(server.following("fan"))
+    assert shown["players"] == [] and [t["name"] for t in shown["teams"]] == ["Arsenal", "Chelsea"]
+    # A turned-off sport's player isn't followed by their id here either.
+    with pytest.raises(server.HTTPException) as off:
+        asyncio.run(server.follow(None, {"player_id": carlsen.id}, "other"))  # pyright: ignore[reportArgumentType]: the request isn't read for a player here
+    assert off.value.status_code == 404 and db.scalar(select(func.count()).select_from(Follow).where(Follow.fan_id == "other")) == 0
+    # Back on, all of it is back.
+    monkeypatch.setattr(sports, "ENABLED", sports.ALL)
+    assert [p["player"]["name"] for p in asyncio.run(server.following("fan"))["players"]] == ["Magnus Carlsen"]
+    assert asyncio.run(server.follow(None, {"player_id": carlsen.id}, "other"))["player_id"] == carlsen.id  # pyright: ignore[reportArgumentType]

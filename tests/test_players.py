@@ -409,6 +409,25 @@ def test_a_sport_thats_off_offers_no_starters(db, monkeypatch):
     assert starters.offer(db, "fan") == []
 
 
+def test_a_turned_off_sports_registry_row_isnt_found_by_its_id_alone(db, monkeypatch):
+    # BUG-097: a registry id with no sport took any sport's row, so a turned-off sport's athlete was previewed and
+    # followed by it; and one in two sports was the better-known row's even with that sport off.
+    from sports_follow import server
+
+    registry.upsert(db, [athlete("Q5812", "tennis", "Novak Djokovic", {"espn_tennis": "296"}),
+                         athlete("Q2", "cricket", "Yuzvendra Chahal", {"espn_cricket": "430246"}, sitelinks=5),
+                         athlete("Q2", "chess", "Yuzvendra Chahal", {"lichess_chess": "yuzi"}, sitelinks=9)])
+    db.commit()
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key not in ("tennis", "chess")))
+    assert server._registry_athlete(db, {"qid": "Q5812"}) is None  # pyright: ignore[reportPrivateUsage]
+    assert server._registry_athlete(db, {"qid": "Q5812", "sport": "tennis"}) is None  # pyright: ignore[reportPrivateUsage]
+    chahal = server._registry_athlete(db, {"qid": "Q2"})  # pyright: ignore[reportPrivateUsage]
+    assert chahal is not None and chahal.sport == "cricket"
+    monkeypatch.setattr(sports, "ENABLED", sports.ALL)
+    djokovic, chahal = server._registry_athlete(db, {"qid": "Q5812"}), server._registry_athlete(db, {"qid": "Q2"})  # pyright: ignore[reportPrivateUsage]
+    assert djokovic is not None and djokovic.name == "Novak Djokovic" and chahal is not None and chahal.sport == "chess"
+
+
 def test_removing_a_starter_or_the_athlete_takes_the_starter_out(db, capsys):
     chess_starters(db)
     for qid in ("Q10", "Q11"):

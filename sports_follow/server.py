@@ -557,12 +557,13 @@ async def app_picture() -> Response:
 
 
 async def _following(fan: str) -> list[dict[str, Any]]:
-    """The fan's players as the app lists them: each card's summary and the fan's alert level."""
+    """The fan's players as the app lists them: each card's summary and the fan's alert level. Not a turned-off
+    sport's: the follow stays, out of sight, for when it's back (as teams.mine)."""
     rows = await in_db(lambda db: db.execute(select(Follow.player_id, Follow.alert_rules).where(Follow.fan_id == fan).order_by(Follow.created_at)).all())
     out = []
     for player_id, rules in rows:
         card = await read_card(player_id)
-        if card:
+        if card and sports.on((card.get("player") or {}).get("sport")):
             out.append({**_summary(card), "alerts": (rules or {}).get("level", moments.DEFAULT_LEVEL)})
     return out
 
@@ -1164,7 +1165,8 @@ def _registry_athlete(db: Session, body: dict) -> registry.Person | None:
     qid, sport = str(body.get("qid") or ""), str(body.get("sport") or "").lower()
     if not re.fullmatch(r"Q[0-9]{1,12}", qid) or len(sport) > 60 or not sport.isprintable() or not sports.on(sport):
         return None
-    athlete = registry.get(db, qid, sport or None)
+    # Of the sports that run: with no sport given, a row of a turned-off one isn't taken for them.
+    athlete = registry.get(db, qid, sport or None, only_running=True)
     return registry.Person.of(athlete) if athlete else None
 
 
@@ -1252,6 +1254,8 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
                 adapter, ref = found
                 if await in_db(registry.removed, structured.sport_name(adapter, ref), ref):
                     raise HTTPException(404, f"That athlete isn't on {APP_NAME}.")  # another registry row of someone removed
+                if not sports.on(structured.sport_name(adapter, ref)):
+                    raise HTTPException(404, "No such athlete.")  # an esports pro's game turned off, though their source runs
                 player_id, created = await asyncio.to_thread(pipeline.start_from_pick, adapter, ref)
     else:
         system = str(body.get("system") or "")
@@ -1273,6 +1277,9 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
         if await in_db(registry.removed, structured.sport_name(adapter, ref), ref):
             # Removed, in a source that had no id for them then: their name and birth date say who they are.
             raise HTTPException(404, f"That athlete isn't on {APP_NAME}.")
+        if not sports.on(structured.sport_name(adapter, ref)):
+            # A source of several games runs while any of them does: a pro of one turned off isn't followed.
+            raise HTTPException(404, "No such athlete.")
         player_id, created = await asyncio.to_thread(pipeline.start_from_pick, adapter, ref)
 
     def save(db: Session) -> None:
@@ -1309,7 +1316,7 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
         if not isinstance(wanted, int) or isinstance(wanted, bool):
             raise HTTPException(400, "player_id must be a whole number.")
         player = await in_db(lambda db: db.get(Player, wanted)) if 1 <= wanted <= MAX_ID else None
-        if player is None:
+        if player is None or not sports.on(player.sport):  # a turned-off sport's isn't offered, by id or otherwise
             raise HTTPException(404, "No such player.")
         known = await in_db(lambda db: db.get(PlayerCard, player.id))
         query = None

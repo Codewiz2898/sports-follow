@@ -289,6 +289,21 @@ def test_an_esports_campaign_takes_any_games_teams(db, teams, monkeypatch):
 
 
 @needs_db
+def test_an_esports_campaigns_own_players_of_a_game_turned_off_arent_offered(db, monkeypatch):
+    # BUG-097: only its teams' rows asked whether their game runs; its own players were offered, and "Follow all"
+    # followed them, with their game turned off.
+    _athlete(db, "pandascore:7", "valorant", "TenZ", {"pandascore_esports": "7"})
+    _athlete(db, "pandascore:8", "lol", "Faker", {"pandascore_esports": "8"})
+    monkeypatch.setattr(players, "check_source", lambda person: "pandascore_esports")
+    campaigns.main(["set", "ewc", "--sport", "esports", "--title", "Esports World Cup"])
+    assert campaigns.main(["player", "add", "ewc", "pandascore:7"]) == 0 and campaigns.main(["player", "add", "ewc", "pandascore:8"]) == 0
+    monkeypatch.setitem(adapters.ADAPTERS, "pandascore_esports", adapters.KNOWN["pandascore_esports"])
+    assert [r["name"] for r in campaigns.page(db, "ewc", None)["players"]] == ["TenZ", "Faker"]
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "valorant"))
+    assert [r["name"] for r in campaigns.page(db, "ewc", None)["players"]] == ["Faker"]
+
+
+@needs_db
 def test_a_campaign_link_typed_with_capitals_opens_its_page(db, monkeypatch):
     """BUG-191: /Gukesh, retyped from a poster with the name capitalised, is /gukesh's page and picture, not Not found."""
     campaigns.main(["set", "gukesh", "--sport", "chess", "--title", "Gukesh v Sindarov"])

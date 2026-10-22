@@ -627,10 +627,14 @@ def near(db: Session, query: str, sport: str | None = None, limit: int = 10) -> 
     return list(db.scalars(stmt.order_by(func.word_similarity(folded, Athlete.search_text).desc(), Athlete.sitelinks.desc()).limit(limit)))
 
 
-def get(db: Session, qid: str, sport: str | None = None) -> Athlete | None:
+def get(db: Session, qid: str, sport: str | None = None, only_running: bool = False) -> Athlete | None:
+    """An athlete by registry id: in this sport, or the best known of their rows (a person in two sports is two);
+    only_running: of the sports that run (running)."""
     stmt = select(Athlete).where(Athlete.qid == qid)
     if sport:
         stmt = stmt.where(Athlete.sport == sport)
+    if only_running:
+        stmt = running(stmt)
     return db.scalars(stmt.order_by(Athlete.sitelinks.desc()).limit(1)).first()
 
 
