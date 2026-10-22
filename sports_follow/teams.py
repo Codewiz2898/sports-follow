@@ -724,7 +724,9 @@ def look_again(team: Team) -> bool:
 def merge(db: Session, anon: str, fan: str) -> None:
     """An anonymous fan's team follows into their account's (accounts.adopt): a team both follow keeps the
     account's level and the earlier date. The account follows at most MAX: of this device's others, the earliest
-    followed that fit come over."""
+    followed that fit come over. One at a time with the account's own follows (follow's lock), so a follow on
+    another device as this one signs in can't pass MAX (BUG-099)."""
+    db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"team-follow:{fan}", 0))))
     have = set(db.scalars(select(TeamFollow.team_id).where(TeamFollow.fan_id == fan)))
     room = MAX - len(have)
     for row in db.scalars(select(TeamFollow).where(TeamFollow.fan_id == anon).order_by(TeamFollow.created_at, TeamFollow.id)):

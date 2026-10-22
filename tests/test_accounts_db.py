@@ -16,12 +16,13 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, func, select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import accounts, notify
-from sports_follow.models import (Account, AccountSession, Clip, ClipReport, Event, FanSource, Follow, League, LeagueMember, Notification, NotificationMute, Pick, Player, PushSubscription,
-                                  Question, Team, TeamFollow)
+from sports_follow import accounts, matches, notify
+from sports_follow.models import (Account, AccountSession, Clip, ClipReport, Event, FanSource, Follow, League, LeagueMember, MatchFollow, Notification, NotificationMute, Pick, Player,
+                                  PushSubscription, Question, Team, TeamFollow)
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -116,7 +117,7 @@ def test_signing_in_brings_follows_mutes_the_push_log_and_devices(db):
     assert db.get(AccountSession, done.session_id).token_hash == accounts.token_hash(done.token)
 
 
-def test_moving_again_brings_only_what_came_since_and_nothing_after_signing_out(db):
+def test_moving_again_brings_only_what_came_since_even_after_signing_out(db):
     account_id, fan = account(db)
     follow(db, "anon", 1)
     db.commit()
@@ -130,9 +131,68 @@ def test_moving_again_brings_only_what_came_since_and_nothing_after_signing_out(
     accounts.end_sessions(db, account_id, done.session_id)
     db.commit()
     follow(db, "anon", 3)
+    device(db, "anon", "this-phone")
     db.commit()
-    assert accounts.adopt_later("anon", account_id, done.session_id) == 0  # signed out since: it stays anonymous
-    assert set(follows(db, "anon")) == {3}
+    # BUG-099: signed out within the minute, what was under way stayed on the anonymous fan, which no device holds:
+    # nobody could unfollow it. It comes into the account; its device doesn't, as its alerts stopped with the session.
+    assert accounts.adopt_later("anon", account_id, done.session_id) == 1
+    assert set(follows(db, fan)) == {1, 2, 3} and follows(db, "anon") == {}
+    assert endpoints(db, "anon") == set() and endpoints(db, fan) == set()
+
+
+def test_what_was_under_way_goes_with_an_account_deleted_since_signing_in(db):
+    """BUG-099: the account deleted within the minute, the stragglers stayed on the anonymous fan for good."""
+    account_id, fan = account(db)
+    done = accounts.sign_in(db, account_id, "anon")
+    db.commit()
+    follow(db, "anon", 2)
+    device(db, "anon", "this-phone")
+    db.add(TeamFollow(fan_id="anon", team_id=1))
+    db.commit()
+    accounts.delete_account(db, account_id)
+    db.commit()
+    assert accounts.adopt_later("anon", account_id, done.session_id) == 0
+    db.expire_all()
+    assert db.scalars(select(Follow.fan_id)).all() == [] and endpoints(db, "anon") == set() and db.scalars(select(TeamFollow.fan_id)).all() == []
+
+
+def test_a_game_the_account_let_lapse_comes_back_on_only_if_it_fits(db):
+    """BUG-099: a game the account followed once (lapsed) but the device still follows came over without counting
+    toward matches.MAX, and on again: the account then followed more games than it may."""
+    account_id, fan = account(db)
+    db.add_all([Event(id=i, key=f"e{i}", sport="football", title=f"Game {i}") for i in range(3, matches.MAX + 3)])
+    db.flush()
+    db.add_all([MatchFollow(fan_id=fan, event_id=i) for i in range(3, matches.MAX + 3)])  # a full account
+    db.add(MatchFollow(fan_id=fan, event_id=1, until=NOW - timedelta(days=1)))
+    db.add(MatchFollow(fan_id="anon", event_id=1))
+    db.commit()
+    accounts.sign_in(db, account_id, "anon")
+    db.commit()
+    db.expire_all()
+    assert db.scalar(select(func.count()).select_from(MatchFollow).where(MatchFollow.fan_id == fan, MatchFollow.until.is_(None))) == matches.MAX
+    assert db.scalar(select(MatchFollow.until).where(MatchFollow.fan_id == fan, MatchFollow.event_id == 1)) is not None
+
+
+def test_bringing_a_devices_teams_waits_for_a_team_follow_under_way_on_the_account(db):
+    """BUG-099: teams.merge counted the account's teams without the lock teams.follow takes, so a follow on another
+    device at that moment could take the account past teams.MAX."""
+    account_id, fan = account(db)
+    db.add(TeamFollow(fan_id="anon", team_id=1))
+    db.commit()
+    other = db.get_bind().connect()
+    under_way = other.begin()
+    other.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"team-follow:{fan}", 0))))  # as teams.follow does
+    try:
+        db.execute(text("SET lock_timeout = '300ms'"))
+        with pytest.raises(OperationalError, match="lock timeout"):
+            accounts.sign_in(db, account_id, "anon")
+        db.rollback()
+    finally:
+        under_way.rollback()
+        other.close()
+    accounts.sign_in(db, account_id, "anon")  # once it's done
+    db.commit()
+    assert db.scalars(select(TeamFollow.fan_id)).all() == [fan]
 
 
 def test_the_device_signing_in_is_never_the_one_dropped_for_room(db):
