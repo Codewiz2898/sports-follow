@@ -22,7 +22,10 @@ export function AccountPage() {
       </div>
       {me === null ? <div className="card empty small"><span className="spinner" /></div> : me.signed_in ? <SignedIn account={me} /> : <SignIn failed={failed} />}
       <Videos />
-      <Link to="/privacy" className="tiny muted link" style={{ alignSelf: 'flex-start' }}>What we keep, and why</Link>
+      <span className="row tiny muted" style={{ justifyContent: 'flex-start' }}>
+        <Link to="/privacy" className="link">What we keep, and why</Link>
+        <Link to="/terms" className="link">Terms</Link>
+      </span>
     </>
   )
 }

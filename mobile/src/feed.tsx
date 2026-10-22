@@ -17,6 +17,7 @@ import { matchHref } from './blocks'
 import { useTone, type Tone } from './catalog'
 import { PlayIcon } from './icons'
 import { FeedPost, ItemSheet } from './post'
+import { SourceMark } from './sourceMark'
 import { colour, font, RADIUS_CARD, t } from './theme'
 import { Btn, Card as Surface, ErrorBox, Eyebrow, Pill, SectionHead, Spinner } from './ui'
 
@@ -103,7 +104,7 @@ function Whose({ item, name, tone }: { item: FeedItem; name: string; tone: Tone 
     : <View style={[s.fan, { borderColor: tone.sport }]}><Text style={[t.tag, { fontSize: 10, color: colour.text }]}>Fan</Text></View>
 }
 
-/** A video: its thumbnail and a play button; a tap opens it where it plays. */
+/** A video: its thumbnail and a play button; a tap opens it where it plays. Its source's icon (SourceMark) beside the words. */
 export function VideoCard({ item, tone, now, onMore }: { item: FeedItem; tone: Tone; now: number; onMore?: () => void }) {
   const id = item.video?.youtube_id
   if (!id) return null
@@ -122,6 +123,7 @@ export function VideoCard({ item, tone, now, onMore }: { item: FeedItem; tone: T
           <Text style={[t.title, s.title]} numberOfLines={2}>{item.title}</Text>
           <Text style={[t.tiny, t.muted, { fontFamily: font[700] }]}>{[item.source, views(item.video?.views), ago(item.published_at, now)].filter(Boolean).join(' · ')}</Text>
         </View>
+        <SourceMark item={item} />
         {onMore ? <More onPress={onMore} /> : null}
       </View>
     </Surface>
@@ -265,6 +267,7 @@ function Evergreen({ item, last, onMore }: { item: FeedItem; last: boolean; onMo
           <Text style={[t.tiny, t.muted, { fontFamily: font[700] }]}>{[item.source, views(item.video?.views)].filter(Boolean).join(' · ')}</Text>
         </View>
       </Pressable>
+      <SourceMark item={item} />
       <More onPress={onMore} />
     </View>
   )

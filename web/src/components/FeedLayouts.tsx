@@ -11,6 +11,7 @@ import { FeedPlayer } from './FeedPlayer'
 import { Face } from './FeedPost'
 import { BackIcon, MutedIcon, SoundIcon } from './Icons'
 import { ShareButton } from './Share'
+import { SourceMark } from './SourceMark'
 
 /**
  * The fan's Feed in the two layouts the server picks between (BHA-349, GET /api/me/feed/items' `layout`, which the
@@ -166,7 +167,8 @@ export function usePlaying(box: HTMLElement | null, root: HTMLElement | null, en
 /** One post edge to edge: who it's about (photo ringed in their sport's colour, name and under it the channel,
  * Follow when the fan doesn't, "…"), the full-width 16:9 picture with the video's length (an upright video upright
  * in the middle of a 4:5 one), the title, and "views · when". `playing`: its video plays in the picture's place,
- * with the sound button under its right-hand corner. */
+ * with the sound button under its right-hand corner. A video's source's icon (SourceMark) sits by the "…", linked to
+ * it there; full screen, before the channel's name, and in a Short's row. */
 export function EdgePost({ entry, now, follows, playing, onPlay, onMore }: {
   entry: FeedEntry; now: number; follows?: Follows; playing: boolean; onPlay: (id: string) => void; onMore: () => void
 }) {
@@ -218,6 +220,7 @@ export function EdgePost({ entry, now, follows, playing, onPlay, onMore }: {
             </button>
           </>
         )}
+        <SourceMark item={item} />
         <button type="button" className="epost-more" aria-label="More about this item" onClick={onMore}>{dots}</button>
       </div>
       {media}
@@ -343,7 +346,8 @@ function Reel({ n, entry, now, follows, playing, onPlay, onMore }: {
           <Face name={who.name} sport={who.sport} photo={who.photo} size={40} />
           <span className="ellipsis">{who.name}</span>
         </Link>
-        {channel && <span className="reel-chan ellipsis">{channel}</span>}
+        {/* The source's icon before the channel, not down the side: the buttons there grow toward the player. */}
+        {channel && <span className="reel-chan-row"><SourceMark item={item} /><span className="reel-chan ellipsis">{channel}</span></span>}
         <span className="reel-title clamp3">{item.kind === 'post' ? `${shortName(who.name)} on ${item.post?.platform ?? ''}` : item.title}</span>
         <span className="reel-src">{[statsLine(item, now, true), entry.moment ? `after ${entry.moment}` : ''].filter(Boolean).join(' · ')}</span>
       </div>
@@ -396,6 +400,7 @@ function ShortReel({ n, entry, now, follows, playing, onPlay, onMore }: {
               {mine ? 'Following' : 'Follow'}
             </button>
           )}
+          <SourceMark item={item} />
           <ShareButton {...shareFeedItem(who.id, item)} className="short-icon" />
           <button type="button" className="short-icon" aria-label="More about this item" onClick={onMore}>{dots}</button>
         </div>

@@ -16,6 +16,10 @@ collected, shared, optional, and why; "collected" means sent off the device, eve
 - **Encrypted in transit:** yes. **Deletable:** yes, in the app and at stann.in/account.
 - **Not collected:** location, contacts, photos, files, messages, calendar, health, financial, browsing
   history, crash logs, advertising id, device id, phone number, name.
+- **YouTube's player:** the Feed's videos play in YouTube's embedded player (youtube-nocookie.com) in a WebView,
+  and their pictures load from YouTube's servers. The app sends YouTube nothing about the fan; what YouTube's
+  player collects is YouTube's, under Google's Privacy Policy, which the privacy and terms pages link (BHA-652).
+  No video made for kids is shown (YouTube's API policies, III.E.4.j).
 
 ## Overview questions
 

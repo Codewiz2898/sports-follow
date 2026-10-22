@@ -26,6 +26,7 @@ import { TeamPage } from './pages/TeamPage'
 import { MomentToasts, PushResync } from './notifications'
 import { PlayerPage } from './pages/PlayerPage'
 import { PrivacyPage } from './pages/PrivacyPage'
+import { TermsPage } from './pages/TermsPage'
 import { FriendLeaguePage, InvitePage, LeaguesPage } from './pages/LeaguesPage'
 import { InstallButton, PwaNotices, PwaProvider } from './pwa'
 import { SearchPage } from './pages/SearchPage'
@@ -153,6 +154,7 @@ function Sidebar() {
       <span className="row tiny muted" style={{ marginTop: 'auto', justifyContent: 'flex-start' }}>
         <NavLink to="/credits" className="link">Credits and sources</NavLink>
         <NavLink to="/privacy" className="link">Privacy</NavLink>
+        <NavLink to="/terms" className="link">Terms</NavLink>
       </span>
     </aside>
   )
@@ -273,6 +275,7 @@ function App() {
               <Route path="/credits" element={<CreditsPage />} />
               <Route path="/account" element={<AccountPage />} />
               <Route path="/privacy" element={<PrivacyPage />} />
+              <Route path="/terms" element={<TermsPage />} />
               <Route path="/me/leagues" element={<LeaguesPage />} />
               <Route path="/league/:code" element={<FriendLeaguePage />} />
               <Route path="/j/:code" element={<InvitePage />} />
