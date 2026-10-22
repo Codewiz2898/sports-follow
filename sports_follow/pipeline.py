@@ -261,17 +261,19 @@ def start_from_registry(athlete: Any) -> tuple[int, bool]:
 
 
 def start_from_pick(adapter: Any, ref: Any) -> tuple[int, bool]:
-    """A fan picked this exact athlete in search: their player, created and bound if new.
+    """A fan picked this exact athlete in search: their player, created and bound if new, and if not, bound to the
+    teams the pick names where those have changed (a transfer).
 
     Returns (player_id, created). A new player's card is published at once from the source with its
     profile pending; the caller queues the fixtures refresh and the build, which reads the profile.
     """
     sport = structured.sport_name(adapter, ref)
 
-    def create(db: Session) -> tuple[int, dict[str, Any] | None]:
+    def create(db: Session) -> tuple[int, dict[str, Any] | None, bool]:
         holder = db.scalar(select(PlayerIdentity).where(PlayerIdentity.system == ref.system, PlayerIdentity.external_id == ref.athlete_id))
         if holder is not None:
-            return holder.player_id, None
+            bound = db.scalar(select(SourceBinding.locator).where(SourceBinding.player_id == holder.player_id, SourceBinding.purpose == "fixtures", SourceBinding.adapter == ref.system))
+            return holder.player_id, None, isinstance(bound, dict) and set(bound.get("team_ids") or []) != set(ref.team_ids)
         slug = _free_slug(db, ref.name, sport, ref.athlete_id)
         individual = ref.team_ids == [ref.athlete_id]
         player = Player(slug=slug, name=ref.name, sport=sport, status="active", teams=[] if individual else [t for t in ref.team_names if t])
@@ -282,10 +284,17 @@ def start_from_pick(adapter: Any, ref: Any) -> tuple[int, bool]:
         db.execute(insert(PlayerAlias).values(alias=slug, player_id=player.id).on_conflict_do_nothing())
         card = {**placeholder_card(player), "status": "ready", "version": 1, "pending": ["profile"]}
         db.add(PlayerCard(player_id=player.id, status="ready", card=card, version=1))
-        return player.id, card
+        return player.id, card, False
 
-    player_id, card = _create(create)
+    player_id, card, moved = _create(create)
     if card is None:
+        # Here already. The pick is the source's latest word on them: one bound to other teams (they've moved since)
+        # moves to the new team's games now (structured.record_move), and a move that fails never stops the follow.
+        if moved:
+            try:
+                structured.record_move(player_id, ref)
+            except Exception:
+                log.exception("pick %s: couldn't move them to the teams %s names", player_id, ref.system)
         return player_id, False
     try:
         structured.record(player_id, ref)  # the identity is this player's already: this writes the bindings

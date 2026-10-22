@@ -18,7 +18,7 @@ import logging
 import time
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
@@ -37,6 +37,9 @@ log = logging.getLogger("sports_follow.structured")
 # Card sections a bound player's source owns; an agent rebuild keeps them as they are.
 OWNED = ("live", "upcoming", "recent_results", "season_stats", "season_stats_note", "provenance")
 BIND_RETRY = 6 * 3600
+# A bound player is read again from their source this often, in a refresh (reread): one request, which the sources
+# keep in their caches as long. A transfer then moves their fixtures to the new team's within hours.
+REREAD = 6 * 3600
 # A refresh's lock outlasts the worker's job_timeout (900 s): arq's timeout doesn't stop the refresh's
 # thread (a Lichess refresh reads for minutes), so the lock, not the job, says one is still running.
 REFRESH_LOCK = 20 * 60
@@ -269,7 +272,8 @@ def bind(player_id: int, ref: PlayerRef | None = None) -> bool:
                 person = registry.Person.of(athlete) if athlete else None
     if ref is None:
         try:
-            # Re-read every build, so a transfer shows up in the team ids within hours.
+            # Re-read every build, as a refresh re-reads a bound player every few hours (reread): a transfer shows
+            # up in the team ids within hours.
             if pinned:
                 ref = adapter.player(*pinned)
             elif person is not None:
@@ -363,6 +367,60 @@ def rekey_bound(adapter: Adapter) -> int:
             continue
         moved += record(player_id, new, confidence)
     return moved
+
+
+def reread(player_id: int, adapter: Adapter, ref: PlayerRef) -> PlayerRef:
+    """A bound player as their source has them now, read again in a refresh every REREAD seconds (one request, in
+    the refresh's lane, so counted against the source's budget there), their bindings moved to the teams it names
+    if those changed (record_move); otherwise the ref as bound. An athlete of an individual sport has no team to
+    change and isn't read again. A source with nothing left for the refresh lane is asked at the next refresh, and
+    that's no failure; one that fails is asked after REREAD. Either way the refresh goes on as bound."""
+    mark = f"reread:{player_id}"
+    if ref.team_ids == [ref.athlete_id] or not bus.cooldown(mark, REREAD):
+        return ref
+    try:
+        fresh = adapter.player(ref.athlete_id, ref.league)
+    except budget.RateLimited:
+        bus.release(mark)
+        return ref
+    except AdapterError as exc:
+        log.warning("refresh %s: %s couldn't say again who athlete %s is: %s", player_id, adapter.system, ref.athlete_id, exc)
+        return ref
+    return (record_move(player_id, fresh) if fresh else None) or ref
+
+
+def record_move(player_id: int, fresh: PlayerRef) -> PlayerRef | None:
+    """Move a bound player's bindings to a fresh read of them from their source (a refresh's reread, or a fan's
+    pick from search) where it names other teams than the bound ones: a transfer, or a pro leaving their team.
+    Their fixtures are then the new team's, their old team's games still to come are no longer theirs (one against
+    the new team stays), and their card's fixtures are due at the next tick. What the read leaves out (a league, a
+    birth date) stays as bound, and so do the other sides the agent named, less any the source names now. Returns
+    the ref now bound, or None where nothing moved: not bound to that source, another athlete, or the same teams."""
+    with session() as db:
+        row = db.scalar(select(SourceBinding).where(SourceBinding.player_id == player_id, SourceBinding.purpose == "fixtures", SourceBinding.adapter == fresh.system))
+        if row is None or not row.locator:
+            return None
+        old, confidence = PlayerRef(**row.locator), row.confidence
+    if fresh.athlete_id != old.athlete_id or set(fresh.team_ids) == set(old.team_ids):
+        return None
+    known = {naming.team_key(t) for t in fresh.team_names if t}
+    ref = replace(fresh, profile_url=fresh.profile_url or old.profile_url, league=fresh.league or old.league, born=fresh.born or old.born,
+                  game=fresh.game or old.game, other_teams=[t for t in old.other_teams if naming.team_key(t) not in known])
+    if not record(player_id, ref, confidence):
+        return None
+    left, teams = set(old.team_ids) - set(ref.team_ids), set(ref.team_ids)
+    with session() as db:
+        ahead = db.scalars(select(Event).join(EventPlayer, EventPlayer.event_id == Event.id).where(
+            EventPlayer.player_id == player_id, Event.key.like(f"{ref.system}:%"), Event.status.in_(PRE_MATCH)))
+        sides = {e.id: {str(t) for t in e.participants or []} for e in ahead}
+        gone = [event_id for event_id, ids in sides.items() if ids & left and not ids & teams]
+        if gone:
+            db.execute(delete(EventPlayer).where(EventPlayer.player_id == player_id, EventPlayer.event_id.in_(gone)))
+        card = db.get(PlayerCard, player_id)
+        if card is not None:
+            card.freshness = {k: v for k, v in (card.freshness or {}).items() if k != "fixtures"}
+    log.info("bind %s: %s has athlete %s on %s now, not %s", player_id, ref.system, ref.athlete_id, ", ".join(ref.team_names) or "no team", ", ".join(old.team_names) or "no team")
+    return ref
 
 
 def describe(player_id: int) -> str | None:
@@ -469,6 +527,7 @@ def _refresh(player_id: int) -> None:
         ref = PlayerRef(**row.locator)
     if adapter is None:
         return
+    ref = reread(player_id, adapter, ref)  # every few hours: a player who has changed teams moves to the new team's games
 
     now = _now()
     fixtures = adapter.fixtures(ref)
