@@ -351,6 +351,13 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   whose games are stale asks for them at most every ten minutes, so a team nobody follows is shown too. A fan
   follows at most 30 teams; one whose source isn't running can't be followed. `PUT`/`DELETE
   /api/teams/<id>/follow`, `PUT /api/teams/<id>/alerts`, and `teams` in `GET /api/me/following`.
+- **Your sports** (`sports_follow/fansports.py`, BHA-653): the sports a fan said they watch, in their order, a row
+  each (`fan_sport`), kept as follows are: an anonymous fan's under their cookie's id, moved into the account on
+  sign-in (the account's first, then the device's others) and deleted with it. The welcome's first step saves them
+  and Following's Edit changes them (`GET`/`PUT /api/me/sports`, `{"sports": [keys]}`); a change reaches the fan's
+  other devices as a follow does (`sports` in the fan stream's list). Only the sports `/api/sports` says are on
+  count: a key of another is left out, and a sport turned off in the admin panel stays in the fan's list out of
+  sight, back in its place when it's on again. Dropping a sport unfollows nobody in it.
 - **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
   service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
   "Install app"; the app then opens full screen from the home screen. The app shell opens offline and

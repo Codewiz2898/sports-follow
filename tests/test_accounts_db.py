@@ -20,9 +20,9 @@ from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import accounts, matches, notify, teams
-from sports_follow.models import (Account, AccountSession, Clip, ClipReport, Event, FanSource, Follow, League, LeagueMember, MatchFollow, Notification, NotificationMute, Pick, Player,
-                                  PushSubscription, Question, Team, TeamFollow)
+from sports_follow import accounts, controls, fansports, matches, notify, teams
+from sports_follow.models import (Account, AccountSession, Clip, ClipReport, Event, FanSource, FanSport, Follow, League, LeagueMember, MatchFollow, Notification, NotificationMute, Pick,
+                                  Player, PushSubscription, Question, Team, TeamFollow)
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -35,7 +35,7 @@ def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
         c.execute(text("TRUNCATE account, account_session, follow, notification_mute, notification, push_subscription, player, event, fan_source, clip, clip_report, "
-                       "team, team_follow, match_follow, prediction_league RESTART IDENTITY CASCADE"))
+                       "team, team_follow, match_follow, fan_sport, prediction_league RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -138,6 +138,29 @@ def test_moving_again_brings_only_what_came_since_even_after_signing_out(db):
     assert accounts.adopt_later("anon", account_id, done.session_id) == 1
     assert set(follows(db, fan)) == {1, 2, 3} and follows(db, "anon") == {}
     assert endpoints(db, "anon") == set() and endpoints(db, fan) == set()
+
+
+def test_signing_in_brings_the_devices_sports_after_the_accounts_own(db):
+    """BHA-653: the account's sports first, in its order, then the device's it didn't have, in the device's; a sport turned
+    off comes too, out of sight, and the device keeps none."""
+    account_id, fan = account(db)
+    fansports.replace(db, fan, ["chess", "football"])
+    fansports.replace(db, "anon", ["cricket", "football", "tennis", "basketball"])
+    db.commit()
+    controls.turn_sport("tennis", False)
+    done = accounts.sign_in(db, account_id, "anon")
+    db.commit()
+    assert fansports.mine(db, fan) == ["chess", "football", "cricket", "basketball"] and fansports.mine(db, "anon") == []
+    controls.turn_sport("tennis", True)
+    assert fansports.mine(db, fan) == ["chess", "football", "cricket", "tennis", "basketball"]
+    assert db.scalars(select(FanSport.fan_id).distinct()).all() == [fan]
+    # Changed on the device after, under way as it signed in: the minute after brings it, after the rest.
+    db.add(FanSport(fan_id="anon", sport="tennis", position=0))
+    db.add(FanSport(fan_id="anon", sport="chess", position=1))
+    db.commit()
+    accounts.adopt_later("anon", account_id, done.session_id)
+    db.expire_all()
+    assert fansports.mine(db, fan) == ["chess", "football", "cricket", "tennis", "basketball"] and fansports.mine(db, "anon") == []
 
 
 def test_what_was_under_way_goes_with_an_account_deleted_since_signing_in(db):
@@ -290,12 +313,13 @@ def test_deleting_an_account_leaves_nothing_under_its_fan_id(db):
         db.add(Notification(fan_id=who, player_id=1, kind="final", loud=False))
         device(db, who, f"{who}-phone", done.session_id if who == fan else None)
         db.add(FanSource(fan_id=who, tag="share", landing="/"))
+        db.add(FanSport(fan_id=who, sport="chess", position=0))
     db.commit()
 
     gone = accounts.delete_account(db, account_id)
     db.commit()
     assert gone.fan_id == fan and gone.email == "fan@example.com" and gone.token_hashes == [accounts.token_hash(done.token)]
-    for model in (Follow, NotificationMute, Notification, PushSubscription, FanSource, ClipReport):
+    for model in (Follow, NotificationMute, Notification, PushSubscription, FanSource, FanSport, ClipReport):
         assert db.scalars(select(model.fan_id)).all() == [other]  # only the other fan's
     assert db.scalars(select(Account.id)).all() == [other_id]
     assert db.scalars(select(AccountSession.id)).all() == []

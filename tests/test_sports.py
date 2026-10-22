@@ -199,6 +199,19 @@ def test_a_sport_with_no_source_running_and_research_off_isnt_offered(api, monke
     assert offered() == (True, True)
 
 
+def test_a_fans_sports_are_only_ones_the_app_offers(api, monkeypatch):
+    """Your sports (fansports.py, BHA-653) shows and takes the sports /api/sports says are on, and no other: a sport
+    turned off, and one nothing can show, are out of sight on every device at once."""
+    from sports_follow import fansports
+
+    def on() -> set[str]:
+        return {s["key"] for s in api.call("GET", "/api/sports").json()["sports"] if s["on"]}
+
+    assert fansports.offered() == on() and on()
+    monkeypatch.setattr(sports, "ENABLED", sports.pick(sports.ALL, {"football", "chess", "valorant"}))
+    assert fansports.offered() == on() == {"football", "chess"}  # valorant runs, but no source of it has a key here
+
+
 def test_each_sport_brings_its_colour(api):
     res = api.call("GET", "/api/sports.css")
     assert res.headers["content-type"].startswith("text/css")

@@ -19,6 +19,7 @@ CHANGES = {
     ("PUT", "/api/teams/{team_id}/follow"), ("DELETE", "/api/teams/{team_id}/follow"), ("PUT", "/api/teams/{team_id}/alerts"),
     ("PUT", "/api/match/{system}/{game}/follow"), ("DELETE", "/api/match/{system}/{game}/follow"),
     ("DELETE", "/api/me/matches/{event_id}"), ("PUT", "/api/me/matches/{event_id}/alerts"),
+    ("PUT", "/api/me/sports"),
 }
 
 

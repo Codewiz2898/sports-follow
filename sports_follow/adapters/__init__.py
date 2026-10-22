@@ -148,6 +148,12 @@ def serving(sport: sports.Sport) -> list[Adapter]:
     return [a for a in ADAPTERS.values() if keys.intersection(a.sports)]
 
 
+def served() -> set[str]:
+    """The keys of the sports a running source has live scores for now (GET /api/sports' `live`, and sports.offered's
+    `served`)."""
+    return {k for a in ADAPTERS.values() for k in a.running()}
+
+
 def for_sport(name: str | None) -> Adapter | None:
     """The adapter for a sport as the research agent names it ("Cricket", "Soccer", "Chess", "BGMI"): its
     first running source. For a group ("Esports": a pro whose game isn't said), the first of any of its
@@ -174,5 +180,5 @@ def source_name(system: str) -> str:
 __all__ = [
     "ADAPTERS", "ALL", "KNOWN", "NEWS", "NOT_FOUND", "VIDEOS", "Absence", "Adapter", "AdapterError", "Article", "Fixture", "Line", "LiveGame", "LiveSearch", "NewsSource", "NotFound", "PlayerRef",
     "Mark", "Provider", "SourceTeam", "Roster", "Rostered", "SearchResult", "Snapshot", "Stream", "Upload", "VideoFacts", "VideoSource", "feed_source", "for_sport", "news", "pick",
-    "providers", "serving", "source_name", "videos",
+    "providers", "served", "serving", "source_name", "videos",
 ]

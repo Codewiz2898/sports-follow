@@ -42,8 +42,8 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, controls, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
-from .adapters import ADAPTERS, KNOWN, AdapterError, budget
+from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, controls, credits as credits_page, fansports, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
+from .adapters import ADAPTERS, KNOWN, AdapterError, budget, served
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, API_DOCS, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_LOOKUPS_PER_ADDRESS, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, released, session
@@ -602,7 +602,7 @@ def sports_list(response: Response) -> dict[str, Any]:
     "other" is any sport no module knows; "groups" the sports each standing for several of them, not listed
     (esports: every game), as a game no source covers ("Call of Duty: Mobile") is drawn."""
     response.headers["cache-control"] = "public, max-age=300"
-    live = {k for a in ADAPTERS.values() for k in a.running()}
+    live = served()
     return {"sports": [sports.shown(s, s.key in live) for s in sports.ALL], "other": sports.shown(sports.OTHER, False),
             "groups": [sports.shown(g, any(m.key in live for m in sports.members(g))) for g in sports.GROUPS]}
 
@@ -701,6 +701,25 @@ async def _following(fan: str) -> list[dict[str, Any]]:
 async def following(fan: str = Depends(fan_id)) -> dict[str, Any]:
     """The fan's players, and the teams they follow (teams.py), each with its next game, last result and game on now."""
     return {"players": await _following(fan), "teams": await in_db(teams.mine, fan)}
+
+
+@app.get("/api/me/sports")
+async def my_sports(fan: str = Depends(fan_id)) -> dict[str, Any]:
+    """The sports the fan said they watch (fansports.py), in their order: of those the app offers now."""
+    return {"sports": await in_db(fansports.mine, fan)}
+
+
+@app.put("/api/me/sports", dependencies=TellsDevices)
+def set_my_sports(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """The fan's sports are these now, in this order ({"sports": [keys]}): the welcome's Next, and Following's Edit.
+    A key of a sport the app doesn't offer is left out; a sport the fan had that's turned off now stays, out of
+    sight. Answers with the list as GET does."""
+    keys = body.get("sports")
+    if not isinstance(keys, list) or len(keys) > fansports.GIVEN_MOST or not all(isinstance(k, str) for k in keys):
+        raise HTTPException(400, "sports must be a list of sport keys")
+    saved = fansports.replace(db, fan, keys)
+    db.commit()
+    return {"sports": saved}
 
 
 @app.get("/api/live")
@@ -3073,7 +3092,7 @@ async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingRe
     so an app that reconnects (a phone back from the lock screen, a restart) gets every score and result it
     missed; then each followed game's board as it's polled, and its own moments (bus.match_channel): of the games
     they follow by themselves, and of their teams' games on now or soon (teams.event_ids), with their teams.
-    A follow, an unfollow or a level changed on another of their devices sends the list again (bus.follows_channel):
+    A follow, an unfollow, a level or their sports (fansports.py) changed on another of their devices sends the list again (bus.follows_channel):
     the app takes it as the list (BUG-165), and connects again for the players it then has. A fan with nothing else
     to hear yet listens for that too; their list first, as on any stream, so an app whose fan was signed out
     elsewhere (it reads as nobody now), or stopped following everyone there, drops what it shows (BUG-162)."""
@@ -3081,7 +3100,8 @@ async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingRe
                                          list(dict.fromkeys([*matches.event_ids(db, fan), *teams.event_ids(db, fan)]))))
 
     async def first() -> list[dict[str, Any]]:
-        return [{"type": "following", "players": await _following(fan), "matches": await in_db(matches.mine, fan), "teams": await in_db(teams.mine, fan)}]
+        return [{"type": "following", "players": await _following(fan), "matches": await in_db(matches.mine, fan), "teams": await in_db(teams.mine, fan),
+                 "sports": await in_db(fansports.mine, fan)}]
 
     places = _hold_streams(request, fan)
     mine = bus.follows_channel(fan)
