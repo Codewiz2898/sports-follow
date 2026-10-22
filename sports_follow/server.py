@@ -463,29 +463,32 @@ TellsDevices = [Depends(_tell_devices, scope="function")]  # its word goes once 
 
 # Follows (of a player, a team or a game) one fan, and one client address, make an hour. A cookie is free, and a follow
 # without one is a new fan's, so a fan's own caps (PLAYERS_MAX, teams.MAX, matches.MAX) don't bound a script's
-# (BUG-325). An IPv6 /64 is a household; an IPv4 address can be a phone network's, shared by thousands of its fans
-# (carrier-grade NAT), so it holds more, as with STREAMS_PER_IPV4.
+# (BUG-325). An IPv6 /64 is a household, and its /48 (_network) a home's or an office's every /64 at once; an IPv4
+# address can be a phone network's, shared by thousands of its fans (carrier-grade NAT), so it holds more, as with
+# STREAMS_PER_IPV4, and so does a /48, which a phone network may share among its subscribers too.
 FOLLOWS_PER_FAN = 150  # room to fill all three caps in the hour
 FOLLOWS_PER_ADDRESS = 300  # an IPv6 /64's
+FOLLOWS_PER_IPV6_48 = 1200  # an IPv6 /48's, all its /64s together
 FOLLOWS_PER_IPV4 = 1200  # an IPv4 address's
 FOLLOWS_HOUR = 3600
+FOLLOWS_FROM_NETWORK = "A lot of follows have come from your network this hour. Try again later."
 
 
-async def _take_follows(fan: str, address: str | None, n: int = 1) -> list[str]:
-    """Count n follows against the fan's hour and their address's (FOLLOWS_PER_FAN; FOLLOWS_PER_ADDRESS, or an IPv4
-    address's FOLLOWS_PER_IPV4). Past either, nothing is counted and the fan gets a 429. Returns the counts taken, n of
-    each, for give_back_research to give back those of a follow that isn't made."""
-    if n < 1:
-        return []
+async def _take_follows(fan: str, address: str | None) -> list[str]:
+    """Count a follow against the fan's hour and their address's: FOLLOWS_PER_FAN; an IPv4 address's FOLLOWS_PER_IPV4,
+    or an IPv6 client's /64's FOLLOWS_PER_ADDRESS and its /48's FOLLOWS_PER_IPV6_48. Past any, nothing is counted and
+    the fan gets a 429. Returns the counts taken, for give_back_research to give back should the follow not be made."""
     hour = int(time.time() // FOLLOWS_HOUR)
     limits = [(f"follows:fan:{fan}:{hour}", FOLLOWS_PER_FAN, "You've followed a lot this hour. Try again later.")]
-    if address:
-        limits.append((f"follows:address:{address}:{hour}", FOLLOWS_PER_ADDRESS if ":" in address else FOLLOWS_PER_IPV4,
-                       "A lot of follows have come from your network this hour. Try again later."))
+    if address and ":" in address:
+        limits += [(f"follows:address:{address}:{hour}", FOLLOWS_PER_ADDRESS, FOLLOWS_FROM_NETWORK),
+                   (f"follows:network:{_network(address)}:{hour}", FOLLOWS_PER_IPV6_48, FOLLOWS_FROM_NETWORK)]
+    elif address:
+        limits.append((f"follows:address:{address}:{hour}", FOLLOWS_PER_IPV4, FOLLOWS_FROM_NETWORK))
     taken: list[str] = []
     for key, limit, refusal in limits:
-        used = await state["redis"].incrby(key, n)
-        taken += [key] * n
+        used = await state["redis"].incr(key)
+        taken.append(key)
         await state["redis"].expire(key, 2 * FOLLOWS_HOUR)
         if used > limit:
             await give_back_research(taken)
@@ -1175,8 +1178,8 @@ async def _follow_row(row: dict[str, Any], fan: str, address: str | None, turns:
 async def campaign_follow(request: Request, slug: str, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
     """Follow a whole team in one tap ({"team": its id}: every player on its roster), or all of the campaign's
     own players ({"players": true}). Each is an ordinary follow with key alerts, of a player a running source
-    has, so none is an AI research, and counts in the hour's follows (_take_follows: past them, a 429 for all of
-    them). Returns the players now followed and how many couldn't be."""
+    has, so none is an AI research; all of them are one follow in the hour's (_take_follows: past them, a 429).
+    Returns the players now followed and how many couldn't be."""
     shown = await in_db(campaigns.page, _campaign_slug(slug), fan)
     if shown is None:
         raise HTTPException(404, "No such page.")
@@ -1191,13 +1194,15 @@ async def campaign_follow(request: Request, slug: str, body: dict = Body(...), f
     address = client_address(request)
     already = [r["player_id"] for r in rows if r.get("following") and r.get("player_id")]
     to_follow = [r for r in rows if not (r.get("following") and r.get("player_id"))]
-    taken = await _take_follows(fan, address, len(to_follow))  # each a follow, as one at a time (CountsFollow)
+    # One follow in the hour's, however many players: a campaign's are an admin's few, and a launch link's first tap
+    # from a phone network's address mustn't use up its hour. Given back if none could be followed.
+    taken = await _take_follows(fan, address) if to_follow else []
     turns = asyncio.Semaphore(CAMPAIGN_FOLLOWS_AT_ONCE)
     done = await asyncio.gather(*(_follow_row(r, fan, address, turns) for r in to_follow))
-    failed = sum(pid is None for pid in done)
-    await give_back_research(sorted(set(taken)) * failed)  # those not made aren't counted
+    if all(pid is None for pid in done):
+        await give_back_research(taken)
     followed = already + [pid for pid in done if pid is not None]
-    return {"player_ids": list(dict.fromkeys(followed)), "failed": failed}
+    return {"player_ids": list(dict.fromkeys(followed)), "failed": sum(pid is None for pid in done)}
 
 
 @app.get("/api/campaigns/{slug}/share.png")
