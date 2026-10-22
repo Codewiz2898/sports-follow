@@ -299,9 +299,9 @@ export function FromTheFans({ feed, name, sport, now, onAll }: { feed: Feed | nu
   )
 }
 
-/** Today's "From your players": after Results, before Coming up; the two best of the fan's Feed (Following) right now
- * in the edge-to-edge layout's cards (FeedLayouts.tsx, boxed here, whichever layout the Feed tab draws: a full-screen
- * one doesn't sit in a page), and the way to the rest. Absent while their Feed is empty. */
+/** Today's "From your players": at its foot, after This week and the Wire; the two best of the fan's Feed
+ * (Following) right now in the edge-to-edge layout's cards (FeedLayouts.tsx, boxed here, whichever layout the Feed
+ * tab draws: a full-screen one doesn't sit in a page), and the way to the rest. Absent while their Feed is empty. */
 export function FromYourPlayers({ now }: { now: number }) {
   const { cards, loaded } = useFollowing()
   const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')

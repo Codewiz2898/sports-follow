@@ -225,9 +225,6 @@ export default function TodayScreen() {
         </Rail>
       ) : null}
 
-      {/* What fans and the players themselves shared: after the results that set it off, before what's next. */}
-      <FromYourPlayers now={now} again={pulled} />
-
       <SaveNudge />
 
       {comingCount > 0 ? (
@@ -242,6 +239,10 @@ export default function TodayScreen() {
 
       {week.posters.length > 0 ? <ThisWeek posters={week.posters} now={now} /> : null}
       <Wire rows={week.wire} now={now} />
+
+      {/* What fans and the players themselves shared: after the day's facts, two posts tall, so they don't push
+          what's next down the page. */}
+      <FromYourPlayers now={now} again={pulled} />
 
       {cards.length > 0 && cards.length < FEW ? <StartersSection /> : null}
     </Page>

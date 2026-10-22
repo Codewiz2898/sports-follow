@@ -237,11 +237,6 @@ export function TodayPage() {
         )}
       </ErrorBoundary>
 
-      {/* What fans and the players themselves shared: after the results that set it off, before what's next. */}
-      <ErrorBoundary fallback={<BlockError />} resetKey={railKey}>
-        <FromYourPlayers now={now} />
-      </ErrorBoundary>
-
       <SaveNudge />
 
       <ErrorBoundary fallback={<BlockError />} resetKey={railKey}>
@@ -265,6 +260,12 @@ export function TodayPage() {
           </ErrorBoundary>
         </div>
       )}
+
+      {/* What fans and the players themselves shared: after the day's facts, two posts tall, so they don't push
+          what's next down the page. */}
+      <ErrorBoundary fallback={<BlockError />} resetKey={railKey}>
+        <FromYourPlayers now={now} />
+      </ErrorBoundary>
 
       {cards.length > 0 && cards.length < FEW && <StartersSection />}
     </>
