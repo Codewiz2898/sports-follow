@@ -77,6 +77,13 @@ SUMMARY = {
     "extract": "Asha Rao is an Indian international cricketer who bats right-handed.\n\nShe captains Mumbai Indians.",
     "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Asha_Rao"}},
 }
+# What Wikipedia answers for a link that redirects: the summary of the article it leads to, a list of a club's players.
+LIST_SUMMARY = {
+    "type": "standard", "title": "List of Riverside County Cricket Club players", "wikibase_item": "Q6000",
+    "titles": {"canonical": "List_of_Riverside_County_Cricket_Club_players", "normalized": "List of Riverside County Cricket Club players"},
+    "extract": "Riverside County Cricket Club, in its current form, was formed in 1992.",
+    "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/List_of_Riverside_County_Cricket_Club_players"}},
+}
 
 
 # ---------------------------------------------------------------- reading
@@ -197,6 +204,33 @@ def test_a_player_without_an_article_or_a_person_has_no_about(wikimedia):
     assert wiki.read("pandascore:20401", "Valorant") is None  # an esports pro's source key: no request
 
 
+@pytest.mark.parametrize("badge", ["Q70893996", "Q70894304"])  # a sitelink to a redirect; an intentional one
+def test_an_article_link_that_is_a_redirect_gives_no_about(wikimedia, badge):
+    # BUG-248: a lesser-known cricketer's English link is a redirect to a list of a club's players, and Wikipedia
+    # answers its summary with the list's: their About was a club's history, and the agent never wrote theirs.
+    badged = {**CRICKETER, "sitelinks": {"enwiki": {"site": "enwiki", "title": "Asha Rao", "badges": [badge]}}}
+    served = wikimedia(entity=badged, summary=LIST_SUMMARY)
+    found = wiki.read("Q1", "Cricket")
+    assert found and (found.summary, found.article, found.born) == (None, None, "1994-03-09")
+    assert len(served.asked) == 2  # the summary isn't even asked for
+
+
+def test_a_summary_of_another_article_than_the_players_is_no_about(wikimedia):
+    # A link Wikidata didn't badge leads to another article all the same (theirs was merged into a list since).
+    wikimedia(entity=CRICKETER, summary=LIST_SUMMARY)
+    found = wiki.read("Q1", "Cricket")
+    assert found and (found.summary, found.article) == (None, None)
+    # Wikipedia's summary names the article it's of: the player's own, renamed since Wikidata linked it, is theirs.
+    linked = lambda title: {**CRICKETER, "sitelinks": {"enwiki": {"site": "enwiki", "title": title, "badges": []}}}  # noqa: E731
+    wikimedia(entity=linked("Asha Rao (batter)"), summary={**SUMMARY, "wikibase_item": "Q2", "titles": {"canonical": "Asha_Rao_(cricketer)"}})
+    assert wiki.read("Q2", "Cricket").summary == "Asha Rao is an Indian international cricketer who bats right-handed. She captains Mumbai Indians."
+    wikimedia(entity=linked("Asha Rao (bowler)"), summary={**SUMMARY, "titles": {"canonical": "Asha_Rao_(bowler)"}})
+    assert wiki.read("Q3", "Cricket").summary
+    # A person's item merged into another since: the article linked is still theirs by its title.
+    wikimedia(entity=linked("Asha Rao (opener)"), summary={**SUMMARY, "wikibase_item": "Q40", "titles": {"canonical": "Asha_Rao_(opener)"}})
+    assert wiki.read("Q4", "Cricket").summary
+
+
 def test_wikimedia_asking_us_to_wait_is_unavailable(wikimedia):
     wikimedia(status=429)
     with pytest.raises(wiki.Unavailable):
@@ -223,6 +257,23 @@ def test_teams_wikidata_no_longer_lists_leave_the_page(monkeypatch, redis):
     monkeypatch.setattr(wiki, "read", lambda q, sport, ttl=wiki.MAX_AGE: wiki.Profile(qid="Q1", born="1994-03-09"))  # her stints all ended
     pipeline.refresh_profile(7)
     assert page.player.teams == [] and page.published[7]["player"]["teams"] == []
+
+
+def test_a_player_bound_to_a_live_source_after_wikidata_gave_their_teams_keeps_them(monkeypatch, redis):
+    # BUG-246: a player built before a live source knew them took Wikidata's teams; bound since, the monthly read
+    # took them all away for good (the source never writes player.teams), and with them their results' side.
+    page = _page(monkeypatch, bound=False, qid="Q1", card={"status": "ready", "player": {"name": "Asha Rao"}}, status="ready", profile=PROFILE)
+    pipeline.refresh_profile(7)
+    assert page.player.teams == ["India", "Mumbai Indians"] and "teams" in page.published[7]["player"]["profile_from"]
+    monkeypatch.setattr(structured, "binding", lambda db, player_id: SimpleNamespace(adapter="sportmonks_cricket"))
+    for _ in range(2):  # the monthly read, and every one after it
+        pipeline.refresh_profile(7)
+        card = page.published[7]["player"]
+        assert page.player.teams == card["teams"] == ["India", "Mumbai Indians"] and "teams" not in card["profile_from"]
+    # Bound, Wikidata listing none changes nothing either: their teams are the source's business.
+    monkeypatch.setattr(wiki, "read", lambda q, sport, ttl=wiki.MAX_AGE: wiki.Profile(qid="Q1", born="1994-03-09"))
+    pipeline.refresh_profile(7)
+    assert page.player.teams == page.published[7]["player"]["teams"] == ["India", "Mumbai Indians"]
 
 
 # ---------------------------------------------------------------- precedence (pipeline.merge_profile, keep_profile)

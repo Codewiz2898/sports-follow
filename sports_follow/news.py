@@ -21,8 +21,9 @@ story known by its address written one way (NewsSource articles' url), so two fe
   only the name before it counts.
 
 A story is never kept whole: its headline, its link, when it was published and the feed's own short description,
-which the Feed shows as they are, crediting the publisher. Stories about the same thing (clusters, read by rank.py)
-are one item in the Feed with the number of outlets that ran it.
+which the Feed shows as they are, crediting the publisher; as the publisher changes them at the same address (a
+corrected headline), so does the row (changed). Stories about the same thing (clusters, read by rank.py) are one
+item in the Feed with the number of outlets that ran it.
 
 A candidate goes with the player (ON DELETE CASCADE). The curator's weekly prune drops stories older than
 PRUNE_AFTER, but those an admin approved or pinned (evergreen).
@@ -33,12 +34,13 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, null, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -53,11 +55,17 @@ KEEP_FOR = timedelta(days=3)  # a story published longer ago than this isn't kep
 PRUNE_AFTER = timedelta(days=30)  # stories older than this go, weekly, but an admin's evergreen ones
 EVERGREEN = ("approved", "pinned")  # an admin's word that keeps a story past PRUNE_AFTER (rank.REVIEWS)
 COMMON = 3  # a surname this many of the sport's athletes in the registry share names a player only with their side
-# Two stories about one player are one story when published within CLUSTER_WITHIN of each other and their words
-# (headline and description, less the player's names and words every story has) overlap: at least SAME_WORDS of
-# them, and SAME_STORY of the shorter one's.
+# Two stories about one player are one story when published within CLUSTER_WITHIN of each other and they say the
+# same (same_story), in their words (headline and description) less the player's names and words every story has:
+# the same figure ("179") with FIGURE_AND more words (one more for a figure under 100); or SAME_HEADLINE words of
+# their headlines, HEADLINE_SHARE of the shorter one's; or SAME_WORDS words, SAME_STORY of the shorter one's. In
+# those last two, the words USUAL_SHARE of the player's stories within USUAL_WITHIN have (at least USUAL_STORIES of
+# them) don't count: a series' opponent and ground are in every one of its stories.
 CLUSTER_WITHIN = timedelta(hours=24)
-SAME_WORDS, SAME_STORY = 3, 0.35
+FIGURE_AND = 1  # words besides a figure two stories share to be one; one more for a figure under 100
+SAME_HEADLINE, HEADLINE_SHARE = 2, 0.5
+SAME_WORDS, SAME_STORY = 3, 0.3
+USUAL_WITHIN, USUAL_STORIES, USUAL_SHARE = timedelta(hours=24), 3, 1 / 3
 # Capitalised words that may stand before a player's surname without making it someone else's name: small words a
 # title-case headline capitalises, and what a story calls a player ("Captain Verma", "GM Carlsen").
 BEFORE_A_NAME = frozenset("""
@@ -70,9 +78,10 @@ STORY_WORD = 4  # letters a word needs to say what a story is about ("ruled", "i
 # Words most sports stories have, which say nothing of which story it is.
 STOP = frozenset("""
 about after again against ahead also amid another back been before being best big could does down during each
-first from game games have having here into just last latest live made make match more most much news next over
-play played player players report says season some still such take than that their them then there these they
-this three time today told true under week what when where which while will with would year years your
+first from game games happened have having here into just last latest live made make match more most much news
+next over play played player players report says season some still such take than that their them then there
+these they this three time today told true under updates week what when where which while will with would year
+years your
 """.split())
 
 
@@ -277,10 +286,18 @@ def candidate(found: Linked) -> dict[str, Any]:
     }  # fmt: skip
 
 
+# What a publisher may change of a story at the same address, which a kept row takes (keep).
+CHANGES = ("title", "description", "image", "published")
+
+
 def keep(source: NewsSource, found: list[Linked], now: datetime) -> int:
-    """Store what's new of what was found, one row per player and story; returns how many."""
+    """Store what's new of what was found, one row per player and story; returns how many. A story kept before that
+    its publisher has changed at the same address (a corrected headline, a new picture) takes the change (changed).
+    One an admin hid for one player is stored hidden for another found in it later: the Hide is on the story."""
     kept = 0
     with db.session() as session:
+        hidden = set(session.scalars(select(FeedCandidate.external_id).where(
+            FeedCandidate.source == source.system, FeedCandidate.external_id.in_({external_id(f.article.url) for f in found}), FeedCandidate.review == "hidden")))  # fmt: skip
         for f in found:
             # Its own savepoint: a player removed meanwhile fails only their row.
             try:
@@ -288,11 +305,36 @@ def keep(source: NewsSource, found: list[Linked], now: datetime) -> int:
                     added = session.scalar(insert(FeedCandidate).values(
                         player_id=f.player_id, source=source.system, external_id=external_id(f.article.url), url=f.article.url,
                         candidate=candidate(f), features={"outlets": 1}, fetched_at=now, checked_at=now,
+                        review="hidden" if external_id(f.article.url) in hidden else None,
                     ).on_conflict_do_nothing(index_elements=["player_id", "external_id"]).returning(FeedCandidate.id))  # fmt: skip
-                    kept += added is not None
+                    if added is not None:
+                        kept += 1
+                    else:
+                        changed(session, f)
             except Exception as exc:  # noqa: BLE001
                 log.info("feed: story %s for player %s not kept: %s", f.article.url, f.player_id, type(exc).__name__)
     return kept
+
+
+def changed(session: Session, found: Linked) -> bool:
+    """Give a kept story what its feed says of it now, where that changed (CHANGES): fans read a publisher's
+    correction, not the first wording for good. Only from the feed it was kept from: another feed's copy of it,
+    worded its own way, isn't the publisher's change. Words that now tell another story (same_story) go back to
+    the judge, the story unserved until it has said again; a smaller change keeps its verdict. Whether it changed."""
+    row = session.execute(select(FeedCandidate.id, FeedCandidate.candidate).where(FeedCandidate.player_id == found.player_id,
+                          FeedCandidate.external_id == external_id(found.article.url)).with_for_update()).first()  # fmt: skip
+    kept = (row.candidate or {}) if row is not None else {}
+    now = candidate(found)
+    if row is None or kept.get("channel_id") != now["channel_id"] or all(kept.get(k) == now[k] for k in CHANGES):
+        return False
+    values: dict[str, Any] = {"candidate": {**kept, **{k: now[k] for k in CHANGES}}}
+    before = story(row.id, None, str(kept.get("title") or ""), str(kept.get("description") or ""), [found.name])
+    again = not same_story(before, story(row.id, None, str(now["title"] or ""), str(now["description"] or ""), [found.name]))
+    if again:  # SQL's NULL, not JSON's null: the judge asks for rows with no verdict
+        values |= {"verdict": null(), "judged_at": None, "score": None, "judge_tries": 0, "judge_error": None, "judge_after": None}
+    session.execute(update(FeedCandidate).where(FeedCandidate.id == row.id).values(**values))
+    log.info("feed: story %s for player %s changed at its address%s", found.article.url, found.player_id, ", to be judged again" if again else "")
+    return True
 
 
 def poll(now: datetime | None = None) -> dict[str, dict[str, int]]:
@@ -352,36 +394,98 @@ def prune(now: datetime | None = None) -> dict[str, int]:
 # ---------------------------------------------------------------- the same story
 
 
+# A number that isn't one of the story's figures: a year, a season ("2026-27"), an age ("the 29-year-old", "aged 44").
+_YEAR = re.compile(r"(?:19|20)\d\d")
+_NOT_A_FIGURE = re.compile(r"\b(?:19|20)\d\d\s*[-–/]\s*\d\d\b|\b\d+[- ]?years?[- ]old\b|\baged? \d+\b", re.I)
+
+
+def _stem(word: str) -> str:
+    """A word's stem, so that "wickets" and "wicket", "giving" and "give" are one: an ending off, then a last e."""
+    for end in ("ing", "ed", "es", "s"):
+        if word.endswith(end) and len(word) - len(end) >= 3:
+            word = word[: -len(end)]
+            break
+    return word[:-1] if word.endswith("e") and len(word) > 3 else word
+
+
 def story_words(title: str, description: str, drop: Iterable[str] = ()) -> set[str]:
     """What a story is about, as words to compare with another's: its headline's and description's words of at
-    least STORY_WORD letters, but the player's names (drop) and the words every story has (STOP)."""
+    least STORY_WORD letters, stemmed (_stem), with "Bavuma's" read as Bavuma, and its figures (a score: "179";
+    two digits at least, and no year, season or age), but the player's names (drop) and the words every story
+    has (STOP)."""
     dropped = {w for name in drop for w in naming.words(name)}
-    return {w for w in naming.words(f"{title} {description}") if len(w) >= STORY_WORD and w not in STOP and w not in dropped and not w.isdigit()}
-
-
-def same_story(a: set[str], b: set[str]) -> bool:
-    shared = len(a & b)
-    return shared >= SAME_WORDS and shared >= SAME_STORY * min(len(a), len(b))
+    out = set()
+    for w in naming.words(_NOT_A_FIGURE.sub(" ", _POSSESSIVE.sub("", f"{title} {description}"))):
+        if w in dropped or w in STOP:
+            continue
+        if w.isdigit():
+            if len(w) >= 2 and not _YEAR.fullmatch(w):
+                out.add(w)
+        elif len(w) >= STORY_WORD:
+            out.add(_stem(w))
+    return out
 
 
 @dataclass(frozen=True)
 class Story:
-    """One stored story of one player's, as clusters() compares them."""
+    """One stored story of one player's, as clusters() compares them: its words (story_words), and its headline's."""
 
     id: int
     published: datetime | None
     words: frozenset[str]
+    headline: frozenset[str] = frozenset()
+
+
+def story(sid: int, published: datetime | None, title: str, description: str, drop: Iterable[str] = ()) -> Story:
+    """A stored story as clusters() compares it; drop: the player's names."""
+    drop = list(drop)
+    return Story(sid, published, frozenset(story_words(title, description, drop)), frozenset(story_words(title, "", drop)))
+
+
+def same_story(a: Story, b: Story, usual: frozenset[str] = frozenset()) -> bool:
+    """Whether two of one player's stories tell the same thing, as the outlets that ran it word it: they give the
+    same figure (a score) and another word or two (FIGURE_AND); or their headlines share SAME_HEADLINE words, at
+    least HEADLINE_SHARE of the shorter one's; or their words share SAME_WORDS, at least SAME_STORY of the shorter
+    one's. Neither of the last two counts the usual words (usual_words) of the days they're from."""
+    shared = a.words & b.words
+    if any(w.isdigit() and len(shared) > FIGURE_AND + (len(w) < 3) for w in shared):
+        return True
+    heads = (a.headline & b.headline) - usual
+    if len(heads) >= SAME_HEADLINE and len(heads) >= HEADLINE_SHARE * min(len(a.headline - usual), len(b.headline - usual)):
+        return True
+    rest = shared - usual
+    return len(rest) >= SAME_WORDS and len(rest) >= SAME_STORY * min(len(a.words - usual), len(b.words - usual))
+
+
+def usual_words(stories: Sequence[Story]) -> dict[int, frozenset[str]]:
+    """Each dated story's usual words: those at least USUAL_STORIES and USUAL_SHARE of the player's stories published
+    within USUAL_WITHIN of it have (itself too). Who they played, where and in what ("Australia", "Gqeberha",
+    "second Test") are in every story of a series, whichever day they tell. A story with fewer around it has none."""
+    dated = sorted(((s.published, s) for s in stories if s.published is not None), key=lambda p: (p[0], p[1].id))
+    out: dict[int, frozenset[str]] = {}
+    lo = hi = 0
+    for at, s in dated:
+        while dated[lo][0] < at - USUAL_WITHIN:
+            lo += 1
+        while hi < len(dated) and dated[hi][0] <= at + USUAL_WITHIN:
+            hi += 1
+        counts = Counter(w for _, o in dated[lo:hi] for w in o.words if not w.isdigit())
+        out[s.id] = frozenset(w for w, n in counts.items() if n >= USUAL_STORIES and n >= USUAL_SHARE * (hi - lo))
+    return out
 
 
 def clusters(stories: Iterable[Story]) -> list[list[int]]:
     """One player's stories grouped by what they're about, oldest first: each joins the group of the first story
     published within CLUSTER_WITHIN before it that's the same story (same_story), else starts one. A story with no
     time is a group of its own."""
+    stories = list(stories)
+    usual = usual_words(stories)
     groups: list[list[Story]] = []
     for s in sorted(stories, key=lambda s: (s.published or datetime.max.replace(tzinfo=timezone.utc), s.id)):
         home = None
         if s.published is not None:
-            home = next((g for g in groups for o in g if o.published is not None and s.published - o.published <= CLUSTER_WITHIN and same_story(set(s.words), set(o.words))), None)
+            home = next((g for g in groups for o in g if o.published is not None and s.published - o.published <= CLUSTER_WITHIN
+                         and same_story(s, o, usual.get(s.id, frozenset()) | usual.get(o.id, frozenset()))), None)  # fmt: skip
         if home is None:
             groups.append([s])
         else:

@@ -58,6 +58,7 @@ WHEN = "P585"  # an award's year
 LICENCE = "CC BY-SA 4.0"
 LICENCE_URL = "https://creativecommons.org/licenses/by-sa/4.0/"
 QID = re.compile(r"Q[1-9]\d{0,11}")
+REDIRECT = frozenset({"Q70893996", "Q70894304"})  # a sitelink's badges for a link to a redirect, and an intentional one
 ABOUT_MAX = 1200  # characters of the summary the page shows at most, cut at a sentence
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20, follow_redirects=True)
@@ -293,9 +294,28 @@ def summary(title: str, ttl: float) -> dict[str, Any]:
     return _cache.read(f"summary:{title}", ttl, lambda: _get(SUMMARY + quote(title.replace(" ", "_"), safe=""), missing_ok=True, needs="type"))
 
 
+def article(sitelinks: dict[str, Any]) -> str | None:
+    """The title of the person's English article, unless Wikidata says the link is a redirect (REDIRECT): a
+    lesser-known player's often leads to a list of a club's players, which is nobody's About."""
+    link = sitelinks.get("enwiki") or {}
+    title = link.get("title")
+    return title if isinstance(title, str) and title and not REDIRECT & set(link.get("badges") or []) else None
+
+
+def of_article(found: dict[str, Any], qid: str, title: str) -> bool:
+    """Whether Wikipedia's summary is of the person's own article, not of another one a link Wikidata didn't badge
+    led to: the Wikidata item it names is theirs, or its title is the one linked (an article renamed since keeps
+    its item; a person's item merged into another keeps its article's title). One that names neither is theirs."""
+    item = found.get("wikibase_item")
+    canonical = (found.get("titles") or {}).get("canonical") or found.get("title")
+    plain = lambda t: " ".join(str(t).replace("_", " ").split())  # noqa: E731
+    return (not item and not canonical) or item == qid or (bool(canonical) and plain(canonical) == plain(title))
+
+
 def read(qid: str, sport: str | None, ttl: float = MAX_AGE) -> Profile | None:
     """A player's profile, from copies younger than ttl seconds where the cache has them. None for an id
-    that isn't a Wikidata person's (an esports pro's source key, a deleted item). Raises Unavailable."""
+    that isn't a Wikidata person's (an esports pro's source key, a deleted item). An article link that's a
+    redirect gives no About (article, of_article). Raises Unavailable."""
     if not QID.fullmatch(qid or ""):
         return None
     kind = sports.of(sport)
@@ -303,8 +323,9 @@ def read(qid: str, sport: str | None, ttl: float = MAX_AGE) -> Profile | None:
     if not found:
         return None
     named = labels(wanted(found.get("claims") or {}, kind), ttl)
-    title = ((found.get("sitelinks") or {}).get("enwiki") or {}).get("title")
-    return parse(qid, found, named, summary(title, ttl) if title else None, kind)
+    title = article(found.get("sitelinks") or {})
+    page = summary(title, ttl) if title else None
+    return parse(qid, found, named, page if title and page and of_article(page, qid, title) else None, kind)
 
 
 def main(argv: list[str]) -> None:

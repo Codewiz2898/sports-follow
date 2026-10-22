@@ -673,10 +673,13 @@ def player_qid(db: Session, player_id: int) -> str | None:
 def merge_profile(player: dict[str, Any], found: wiki.Profile | None, bound: bool) -> dict[str, Any]:
     """A card's player section with what Wikidata and Wikipedia say in it, and in profile_from which they
     gave ({"born": "wikidata", "summary": "wikipedia"}). A live source's facts win (a bound player's teams
-    are their source's); Wikidata's and Wikipedia's win over the research agent's. What they gave before and
-    no longer say (an award taken back, an article deleted) goes. Pure, so it's tested without the network."""
+    are their source's: the ones Wikidata gave before they were bound stay, no longer Wikidata's); Wikidata's
+    and Wikipedia's win over the research agent's. What they gave before and no longer say (an award taken
+    back, an article deleted) goes. Pure, so it's tested without the network."""
     out = dict(player)
     for key in (player.get("profile_from") or {}):
+        if key == "teams" and bound:
+            continue
         out.pop(key, None)
         if key == "summary":
             out.pop("about", None)
@@ -726,7 +729,7 @@ def apply_profile(player_id: int, found: wiki.Profile | None, now: datetime) -> 
             player.role = merged["role"]
         if "teams" in given:
             player.teams = merged["teams"]
-        elif "teams" in before:  # Wikidata's, and it lists none now: they're nobody's player
+        elif "teams" in before and not bound:  # Wikidata's, and it lists none now: they're nobody's player
             player.teams = merged["teams"] = []
         elif "teams" not in merged:
             merged["teams"] = list(player.teams or [])

@@ -54,13 +54,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast, get_args
 
 from pydantic import ValidationError
-from sqlalchemy import not_, or_, select, update
+from sqlalchemy import literal, not_, or_, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from . import candidates, controls, curate, db, metrics, naming, news, shutdown, sports
 from .accounts import FAN_PREFIX
-from .adapters import NEWS, feed_source
-from .models import FeedCandidate, FeedFeedback, Moment, Player, PlayerAlias, PlayerCard
+from .adapters import ADAPTERS, NEWS, feed_source
+from .models import FeedCandidate, FeedFeedback, Moment, Player, PlayerAlias, PlayerCard, SourceBinding
 
 log = logging.getLogger("sports_follow.rank")
 
@@ -584,8 +585,7 @@ def _stories(session: Session, rows: Sequence[Any], published: dict[int, datetim
     outlet: dict[int, str] = {}
     for r in rows:
         kept = r.candidate or {}
-        words = news.story_words(str(kept.get("title") or ""), str(kept.get("description") or ""), drop.get(r.player_id, []))
-        by_player.setdefault(r.player_id, []).append(news.Story(r.id, published[r.id], frozenset(words)))
+        by_player.setdefault(r.player_id, []).append(news.story(r.id, published[r.id], str(kept.get("title") or ""), str(kept.get("description") or ""), drop.get(r.player_id, [])))
         outlet[r.id] = naming.fold(str(kept.get("channel") or "")) or str(kept.get("channel_id") or r.url)
     out = {}
     for stories in by_player.values():
@@ -598,9 +598,11 @@ def _stories(session: Session, rows: Sequence[Any], published: dict[int, datetim
 def cards(now: datetime | None = None) -> dict[str, int]:
     """After ranking: each player's served stories (news.py) onto their card as "stories" (feed.news_for), so every
     card that leaves the server carries them, a page's, a stream's or the Android app's, beside the research agent's
-    news, which stays under "news"; taken off once none is served. A card is written only where they differ, under
-    its row's lock, its version moved on, and published as any card is; one another writer replaced meanwhile gets
-    them back at the next run."""
+    news, which stays under "news"; taken off once none is served. A player a live source has has the publishers'
+    news alone (BHA-334): the agent's that a build before they were bound left on the card goes here too, without
+    waiting for an agent run that never comes for them (pipeline.agent_due). A card is written only where it
+    changes, under its row's lock, its version moved on, and published as any card is; one another writer replaced
+    meanwhile is put right at the next run."""
     from . import bus
     from .feed import news_for  # feed.py reads this module's helpers; this one of its, here only
 
@@ -608,15 +610,27 @@ def cards(now: datetime | None = None) -> dict[str, int]:
     with db.session() as session:
         ids = set(session.scalars(select(FeedCandidate.player_id).where(FeedCandidate.source.in_(list(NEWS)), FeedCandidate.score.is_not(None)).distinct()))
         ids |= set(session.scalars(select(PlayerCard.player_id).where(PlayerCard.card.has_key("stories"))))
+        bound = set(session.scalars(
+            select(PlayerCard.player_id).join(SourceBinding, SourceBinding.player_id == PlayerCard.player_id)
+            .where(SourceBinding.purpose == "fixtures", SourceBinding.adapter.in_(list(ADAPTERS)), PlayerCard.card["news"] != literal([], JSONB))
+        ))  # fmt: skip
         served = news_for(session, sorted(ids), now, strict=True)  # a failed read is an error, not every story gone
-        for pid in sorted(ids):
+        for pid in sorted(ids | bound):
             row = session.get(PlayerCard, pid, with_for_update=True)
             want = served.get(pid)
-            if row is None or row.status != "ready" or (row.card or {}).get("stories") == want:
+            if row is None or row.status != "ready":
                 continue
-            card = {k: v for k, v in (row.card or {}).items() if k != "stories"} | ({"stories": want} if want else {})
+            card: dict[str, Any] = {k: v for k, v in (row.card or {}).items() if k != "stories"} | ({"stories": want} if want else {})
+            agents = pid in bound and bool(card.get("news"))
+            if agents:
+                card["news"] = []
+                card["freshness"] = {k: v for k, v in (card.get("freshness") or {}).items() if k != "news"}
+            if card == (row.card or {}):
+                continue
             card["version"] = row.version = (row.version or 0) + 1
             row.card = card
+            if agents:
+                row.freshness = card["freshness"]
             changed.append((pid, card))
     for pid, card in changed:
         bus.store_card(pid, card)
