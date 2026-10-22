@@ -185,12 +185,13 @@ export function shortName(name: string): string {
   return words.slice(start).join(' ')
 }
 
-// Letters Unicode doesn't decompose into a base letter plus an accent (espn._LETTERS on the server).
-const LETTERS: Record<string, string> = { ø: 'o', Ø: 'O', æ: 'ae', Æ: 'Ae', œ: 'oe', Œ: 'Oe', ß: 'ss', đ: 'd', Đ: 'D', ł: 'l', Ł: 'L', þ: 'th', Þ: 'Th', ð: 'd', ı: 'i' }
+// Letters Unicode doesn't decompose into a base letter plus an accent (naming._LETTERS on the server). Ð (the
+// Icelandic capital eth) is often typed for Đ.
+const LETTERS: Record<string, string> = { ø: 'o', Ø: 'O', æ: 'ae', Æ: 'Ae', œ: 'oe', Œ: 'Oe', ß: 'ss', đ: 'd', Đ: 'D', Ð: 'D', ł: 'l', Ł: 'L', þ: 'th', Þ: 'Th', ð: 'd', ı: 'i' }
 
 /** The text with those letters written plainly ("Bodo/Glimt" for "Bodø/Glimt"), for comparing what a fan typed. */
 export function plainLetters(text: string): string {
-  return text.replace(/[øØæÆœŒßđĐłŁþÞðı]/g, (c) => LETTERS[c])
+  return text.replace(/[øØæÆœŒßđĐÐłŁþÞðı]/g, (c) => LETTERS[c])
 }
 
 // Each capital's width in the display face, in ems: Anton's own advance widths (Anton_400Regular.ttf), and those
@@ -226,7 +227,7 @@ export function lineEms(text: string, lean = LEAN, spacing = SPACING): number {
 /** A text in plain capitals, as the width table has them ("BODO" for "Bodø"): what it has kept as it is ("½", which
  * NFKD would make "1⁄2"), the rest without accents. */
 function capitals(text: string): string {
-  return [...text.replace(/[øØæÆœŒßđĐłŁþÞðı]/g, (c) => LETTERS[c])]
+  return [...text.replace(/[øØæÆœŒßđĐÐłŁþÞðı]/g, (c) => LETTERS[c])]
     .map((c) => (c.toUpperCase() in ANTON ? c.toUpperCase() : c.normalize('NFKD').replace(/\p{M}/gu, '').toUpperCase()))
     .join('')
 }
@@ -239,7 +240,7 @@ function ems(run: string, lean = LEAN, spacing = SPACING): number {
 /** A team name reduced for exact comparison, as the server's espn.team_key: "Australia 'A'" is "australia a". */
 function teamKey(name: string): string {
   return name
-    .replace(/[øØæÆœŒßđĐłŁþÞðı]/g, (c) => LETTERS[c])
+    .replace(/[øØæÆœŒßđĐÐłŁþÞðı]/g, (c) => LETTERS[c])
     .normalize('NFKD')
     .replace(/[\u0080-\uffff]/g, '')
     .toLowerCase()
@@ -252,10 +253,14 @@ function teamKey(name: string): string {
  * the winning side ("India won by 8 wkts", "Match tied (India won the Super Over)"), so the player's
  * teams decide by whole name ("India A" and "Mumbai Indians" aren't India), the same way the server
  * reads them (sports/cricket.py: winner_outcome). Another winner is a loss only where one of the game's
- * sides (`sides`, where known) is one of the player's teams: an IPL final isn't India's.
+ * sides (`sides`, where known) is one of the player's teams: an IPL final isn't India's. A game given by forfeit or a
+ * walkover ("Won by forfeit", "Lost (w/o)") wasn't played, so it's neither, as the server reads it (sports/base.py
+ * outcome); nor is a bare "Won" or "Lost", as every source puts the score after it: a walkover kept before walkovers
+ * were told apart ("Lost ", sports/tennis.py).
  */
 export function outcome(result: string, teams: string[] = [], sides?: string[]): 'W' | 'D' | 'L' | null {
   const r = result.trim()
+  if (/\(w\/o\)| by forfeit\b/i.test(r) || /^(won|lost)$/i.test(r)) return null
   if (/^won\b/i.test(r)) return 'W'
   if (/^lost\b/i.test(r)) return 'L'
   if (/^(drew|draw|drawn|tied)\b/i.test(r)) return 'D'

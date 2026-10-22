@@ -140,10 +140,12 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (counted as an AI research).
   `GET /api/athletes/{system}/{id}` and `/api/athletes/wikidata/{qid}` preview before following (a preview is
   kept 10 minutes, by the athlete, whatever `league` the link names). A fan follows at most 100 players
-  (`server.PLAYERS_MAX`). Previews and follows that ask a source for an athlete not on the app yet (a whole
+  (`follows.MAX`) of the sports that run; a sport turned off keeps its follows, out of sight, taking no room.
+  Previews and follows that ask a source for an athlete not on the app yet (a whole
   team's follow on a campaign page asks once for each such player) are limited to 30 a minute a fan and 120 a
   client address (`SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_MINUTE`, `SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_ADDRESS`), past
-  which they're a 429; a player already here costs nothing. Follows of every kind (a player, a team, a game; a
+  which they're a 429; a player already here costs nothing. A minute here, as for searches that go on to the
+  sources (20 a minute), is the last minute, whenever it began, and one refused isn't counted. Follows of every kind (a player, a team, a game; a
   campaign page's whole team in one tap is one) are limited to 150 an hour a fan, and 300 an IPv6 /64, 1,200 its
   /48 and 1,200 an IPv4 address (a phone network's may be shared by thousands of fans) (`server.FOLLOWS_PER_FAN`,
   `FOLLOWS_PER_ADDRESS`, `FOLLOWS_PER_IPV6_48`, `FOLLOWS_PER_IPV4`), past which they're a 429; one refused isn't counted.
@@ -289,12 +291,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `POST /api/admin/clip-keys`; the key is shown once). The app sends `Authorization: Bearer slam_pk_…` to
   `POST /api/clips` with the match page's address, the moment it read, length, size, its poster's size and source,
   and gets two upload URLs signed for 15 minutes, each for its file's type and size. It puts the video and its poster frame straight into the bucket (Cloudflare R2;
-  the server never carries a video), then `POST /api/clips/<id>/done`: both files are checked and the clip goes
-  live, served from the CDN domain. A clip recorded from a browser window (a broadcast, its organiser's production)
-  is refused while Slam itself posts clips (`clips.RIGHTS`, BHA-369). Fans report a clip once each
+  the server never carries a video), at the upload's own names (`uploads/`), then `POST /api/clips/<id>/done`: both
+  files are copied to where fans are served them (`clips/`), checked there, and the clip goes live, served from the CDN
+  domain. A link can't be taken back, so one used after done puts a file nobody is shown, which the daily sweep
+  clears. A clip recorded from a browser window (a broadcast, its organiser's production) is refused while Slam
+  itself posts clips (`clips.RIGHTS`, BHA-369). Fans report a clip once each
   (`POST /api/clips/<id>/report`), which flags it for the admin panel (`/api/admin/clips?status=reported`) to hide
   or take down; reports never hide a clip by themselves, as an anonymous fan is just a request without a cookie.
-  A hidden clip's files are moved off their public address, to a name made with the bucket's secret (the CDN domain
+  A hidden clip's files are moved off their public address, to a name made with a token of its own (the CDN domain
   serves every name), and back when it's put back; one taken down has them deleted, wherever they are. Without the bucket's settings, publishing says it isn't set up and the feeds are empty.
 - **Predictions with friends** (`sports_follow/predictions.py`, BHA-317): before a game, or a map of a series, a
   fan calls it in a tap; the app settles it from the board its poller reads anyway, and friends compare in small
@@ -431,8 +435,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   on Overview is absent (as is `GET /api/me/feed`, a followed player's top video or post, never news, which
   only Android builds from before its Feed tab read). The "…" on a card says why
   it's there and takes the fan's word (`POST /api/players/<id>/feed/<item>/feedback`: not interested, not about
-  the player, a report), kept per fan in `feed_feedback`, which hides it from them at once, moves to their
-  account when they sign in, and goes with the player or the account. Every card has a picture where there is
+  the player, a report), kept per fan in `feed_feedback`, which hides it from them at once (under every player
+  holding the video, but "not about the player" under that one alone), moves to their account when they sign in,
+  and goes with the player or the account; 300 an hour from an address (an IPv6 /64, its /48's /64s together
+  1,200), or from a signed-in fan's account. Every card has a picture where there is
   one (`picture`): a video's is YouTube's thumbnail (`VideoSource.picture`, hqdefault, which every video has)
   behind a play button, and the player, from youtube-nocookie.com, loads only once it's tapped; a story's is
   the image its publisher's feed attaches (`publisher_rss.image`: media:content, media:thumbnail, an image
@@ -449,8 +455,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   This month, Earlier), the ranking deciding within a day and the players taking turns, so no two in a row are
   one player's while another has something to show; a story two players hold is one card, and hiding it from
   either hides it. A page is 20; its `cursor` keeps the order as it was read (an item the fan hides meanwhile
-  keeps its place, unserved, and rows that come in later wait for the next first page), though a rescore in
-  between (views growing) can still move an item across a page's end. Each item
+  keeps its place, unserved, and rows that come in later wait for the next first page) and the last 20 served, so
+  an item gone from every fan's Feed meanwhile skips nothing: each player's items carry on after their last one
+  served, whatever moved up into its place. A rescore in between (views growing) can still move an item across a
+  page's end. Each item
   carries its player (id, name, sport, photo with its framing) for the card's head; `players` are the circles
   across the top (a tap filters with `player=`), each with when their newest came in, which rings them in their
   sport's colour until the fan taps them; `newest` puts a dot on the tab until the fan opens it (only items of
@@ -708,8 +716,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   The research agent's `fetch_url` spends the same budget when it reads a source's API (`Budget.urls`).
   Counts are kept in Redis, so the API and the worker spend from one allowance. A minute's allowance (a
   rate limit) is counted over the last minute, whenever it began, so a burst across a minute's edge can't
-  send twice it; an hour's or a day's from its start, as the source resets it. Every request is in a
-  lane, set once where the work starts: `live` (polls), `fan` (every API request: search, previews,
+  send twice it, and so is fans' share of it; an hour's or a day's from its start, as the source resets
+  it. Every request is in a lane, set once where the work starts: `live` (polls), `fan` (every API request: search, previews,
   following), `refresh`, `history`, `import` and `feed` (the curator's). The background lanes stop at the reserve; a fan loop
   stops at its share and is logged, so live games keep the rest of the reserve. `python -m sports_follow.usage` shows each
   source's spend this hour and today, by lane.
@@ -743,8 +751,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   filters (embeddable, public, not age-restricted, not made for kids (`status.madeForKids`: YouTube's III.E.4.j),
   playing in India (`SPORTS_FOLLOW_FEED_COUNTRY`), not live, 1 to 20 minutes)
   in `feed_candidates`, one row per player and video, which goes with the player. A day later each is read
-  again for its pace, and every stored video is read again weekly and dropped once removed, private, no
-  longer embeddable, age-restricted, made for kids or blocked in India; while one is under two days old it's read again every six hours.
+  again for its pace, and every stored video of a followed or pool player is read again weekly and dropped once
+  removed, private, no longer embeddable, age-restricted, made for kids or blocked in India; while one is under two
+  days old it's read again every six hours. A player nobody follows any more and the pool has left isn't offered in
+  For you, and their videos, unread, go within a month.
   Some still won't play inside the app: a Content ID owner (LaLiga's, say) keeps them off other sites, which
   the Data API doesn't say (embeddable, no region rule). Only the player knows: YouTube's IFrame Player API
   says so (error 101 or 150, or 100 for one gone), and the apps then show "This one plays only on YouTube"
@@ -807,14 +817,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   **gap search** for each followed player with nothing the Feed would serve published in the last 7 days (the
   coverage gauge's test): their name and their sport's words (`Sport.video_words`: "Shreyas Iyer cricket", "TenZ
   Valorant"), videos of the last 14 days, most viewed first, embeddable and syndicated, as a viewer in India finds
-  them. The most followed (by signed-in fans, then by anyone) go first, up to `SPORTS_FOLLOW_FEED_GAP_SEARCHES` in any 24 hours (20); a
+  them. The most followed (by signed-in fans, then by anyone) go first, up to `SPORTS_FOLLOW_FEED_GAP_SEARCHES` a day (20; a sweep's day is the last 23 hours, so a run a little earlier than the day before's still has its own); a
   player is searched once a day at most, and after a search that kept nothing, not again for 3 days. Then the
   **wide sweep** (BHA-340): every followed player, gaps or not, for videos of the last six months (183 days), most
   viewed first, which the score weighs for their age and the Feed fades as it serves them; each player at most once
-  a week, a seventh of them a day, up to `SPORTS_FOLLOW_FEED_WIDE_SEARCHES` in any 24 hours (14), the longest unswept first and the most
+  a week, a seventh of them a day, up to `SPORTS_FOLLOW_FEED_WIDE_SEARCHES` a day (14), the longest unswept first and the most
   followed of those; a player the same run gap-searches waits for a later day. Then the
   **famous sweep**: each followed player's most watched videos ever (no date limit), for "The ones everyone's seen",
-  each player at most once a month, `SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES` in any 7 days (35) and a seventh of that a
+  each player at most once a month, `SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES` a week (35, over the last 7 days less an hour) and a seventh of that a
   day (5), the longest unswept first and the most followed of those, so a cap that binds gets round
   everyone before anyone's swept again. What they find goes the moment search's way (hard filters, the judge,
   the ranking; what's stored already isn't kept again, and counts as `already_stored`). Each search is a
@@ -826,7 +836,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   and their three caps (20 gap, 14 wide, 5 famous: 39) bind first; all four caps together are 79 searches a day,
   under the 95, and their finds' reads under 100 of the 10,000 units. Then the **pool sweep** (BHA-382): each pool
   player nobody follows (below), for videos of the last 60 days, each at most once a fortnight, up to
-  `SPORTS_FOLLOW_FEED_POOL_SEARCHES` in any 24 hours (10), the longest unswept first and the best known of those:
+  `SPORTS_FOLLOW_FEED_POOL_SEARCHES` a day (10), the longest unswept first and the best known of those:
   the five caps are 89 searches a day, and 10 more units of the 10,000 for reading what they find. At 19 followed players (17 uncovered) the
   first day is the heaviest: 17 gap searches, the 2 covered players' wide searches and 5 famous, 24 searches;
   after that a day is the gap searches still due (fewer as players are covered or wait out the 3 days), about 3
@@ -899,7 +909,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Wikidata (`profile_nation`, `profile_role` and the awards worth naming, `honours`: wiki.py), its moments (start, result,
   line-up, what happens during a game, whether a player's first line in a game polled all along is news
   (`first_line_is_news`: a cricketer's first ball) and whether a result is still to come (`result_pending`: cricket's
-  summary a poll behind its "Result"), what a source takes back (`taken_back`), and which of them are a
+  summary a poll behind its "Result"), what a source takes back (`taken_back`), how one reads naming several of a fan's
+  players at once (`told_by_several`: "Pant and Rohit are in the XI"), what its own kinds of moment are
+  worth (`priorities`: a goal 85, a yellow card 20; the kinds every sport has are `moments.PRIORITY`'s), and which of them are a
   player's highs on Today's "This week" and in what words (`poster`: a "Five-for"), and the same off a
   finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), how big a game
   its sources list league-wide is and what its card says (`notable`: a final, "1st v 3rd", a last-over
@@ -940,7 +952,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sports` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
-  code change, and the admin panel without a restart. `tests/test_sports.py` fails if shared code names a sport.
+  code change, and the admin panel without a restart. `tests/test_sports.py` fails if shared code names a sport, or
+  keeps a kind of moment only a sport finds.
   Its look in the web app is `web/src/sports/<sport>.tsx` and its facts, `web/src/sports/facts/<sport>.ts`, and
   whatever else of its own sits beside them under its name: chess's analysis board (`chessAnalysis.tsx`,
   `chessEngine.ts`, `facts/chessLine.ts`, `facts/chessEngineCore.ts`) and the engine it runs in the fan's browser
@@ -1141,6 +1154,7 @@ that build too: turn them on under Alerts. Always pass
 |---|---|---|
 | `DATABASE_URL` | `postgresql+psycopg://sports:sports@127.0.0.1:5433/sports_follow` | |
 | `REDIS_URL` | `redis://127.0.0.1:6380/0` | |
+| `SPORTS_FOLLOW_MIGRATION_LOCK_TIMEOUT` | `5s` | how long a migration waits for a lock (`migrations/env.py`) before it gives up: the deploy then stops with nothing replaced, and the next one goes on from there |
 | `SPORTS_FOLLOW_CACHE_REDIS_URL` | `REDIS_URL` | where the data sources' answers are cached (`adapters/cache.py`), shared by the API and the worker and kept across deploys. In production a Redis of its own, capped and evicting the least recently used key (deploy/compose.yaml); locally, `docker compose --profile cache up -d` and `redis://127.0.0.1:6382/0` run it as production does |
 | `SPORTS_FOLLOW_MODEL` | `openrouter:moonshotai/kimi-k2.6:nitro` | any gateway model ref, e.g. `openrouter:anthropic/claude-opus-5` |
 | `SPORTS_FOLLOW_EFFORT` | `medium` | `anthropic:` route only |
@@ -1197,12 +1211,12 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_ADDRESS` | `120` | the same from one client address (an IPv6 /64), higher since many fans can share one; not counted for private addresses |
 | `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY` | `India` | whose athletes count double among the best-known starters new fans are offered (empty: nobody's) |
 | `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` | `40` | moment searches in any 24 hours (`searches.py`), each run counted (a moment's search runs twice; each 1 of YouTube's 100 searches a day); the biggest moments first; `0` turns them off |
-| `SPORTS_FOLLOW_FEED_GAP_SEARCHES` | `20` | gap searches in any 24 hours (`sweeps.py`): a followed player with nothing to watch this week, the most followed first; each 1 of YouTube's 100 searches a day; `0` turns them off |
-| `SPORTS_FOLLOW_FEED_WIDE_SEARCHES` | `14` | wide-sweep searches in any 24 hours (`sweeps.py`): every followed player's most watched videos of the last six months, each player at most weekly, the longest unswept first; each 1 of YouTube's 100 searches a day; `0` turns it off |
-| `SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES` | `35` | famous-sweep searches in any 7 days (`sweeps.py`), a seventh of them a day: a followed player's most watched videos ever, each player at most monthly; `0` turns it off |
+| `SPORTS_FOLLOW_FEED_GAP_SEARCHES` | `20` | gap searches a day, counted over the last 23 hours so a daily run a little early still has its own (`sweeps.py`): a followed player with nothing to watch this week, the most followed first; each 1 of YouTube's 100 searches a day; `0` turns them off |
+| `SPORTS_FOLLOW_FEED_WIDE_SEARCHES` | `14` | wide-sweep searches a day, the last 23 hours (`sweeps.py`): every followed player's most watched videos of the last six months, each player at most weekly, the longest unswept first; each 1 of YouTube's 100 searches a day; `0` turns it off |
+| `SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES` | `35` | famous-sweep searches a week, the last 7 days less an hour (`sweeps.py`), a seventh of them a day: a followed player's most watched videos ever, each player at most monthly; `0` turns it off |
 | `SPORTS_FOLLOW_FEED_POOL_SIZE` | `50` | the feed's pool of top players a sport (`feedpool.py`), and that many for each running esports game: fetched for besides followed players, for For you; `0` turns the pool off |
 | `SPORTS_FOLLOW_FEED_POOL_ADDS` | `40` | pool players made a day at most, each found in their sport's live source as a follow from search would (a request or a few each) |
-| `SPORTS_FOLLOW_FEED_POOL_SEARCHES` | `10` | pool-sweep searches in any 24 hours (`sweeps.py`): a pool player nobody follows, their last 60 days, each at most fortnightly; `0` turns it off |
+| `SPORTS_FOLLOW_FEED_POOL_SEARCHES` | `10` | pool-sweep searches a day, the last 23 hours (`sweeps.py`): a pool player nobody follows, their last 60 days, each at most fortnightly; `0` turns it off |
 | `SPORTS_FOLLOW_FEED_COUNTRY` | `IN` | where the feed's fans watch from (ISO 3166-1 alpha-2): a video that doesn't play there isn't kept |
 | `SPORTS_FOLLOW_FEED_ZONES` | `Asia/Kolkata,Asia/Calcutta` with `IN`, else empty | the time zones a device in `SPORTS_FOLLOW_FEED_COUNTRY` says it's in, comma-separated: only an app in one of them helps take a "won't play" video from every fan's Feed (it always leaves that fan's); empty, every app does |
 | `SPORTS_FOLLOW_FEED_LAYOUT` | `edge` | how the apps draw the Feed tab: `edge` (posts edge to edge) or `full` (a video a screen); the admin panel's Feed tab changes it live, and every page of the Feed and `/api/config` say which |
@@ -1337,8 +1351,8 @@ the app draws itself (designs: https://claude.ai/artifact/6YxZ16GcGD4zSMNaJLpwX9
 - **A live card** for each game the fan follows while it's on (`sports_follow/livecards.py`): its board, how far
   along it is and the fan's own players in it, sent after a poll that changed it (at once for the score, else at
   most every 20 s, and again every 10 minutes when nothing has, as the phone takes down a card nothing has come
-  for in 20), ongoing and silent, and taken down at the end, and overnight (a Test at stumps: `Sport.paused`) till play
-  resumes. Cards aren't collapsible FCM messages: FCM lets a
+  for in 20), ongoing and silent, and taken down at the end, and overnight (a Test at stumps, a limited-overs match
+  rained off past its day's play: `Sport.paused`) till play resumes. Cards aren't collapsible FCM messages: FCM lets a
   phone have a burst of 20 of those, then one every 3 minutes, and a moment would wait behind them. On an Android 16 phone that allows it, a live
   card is a Live Update instead: first on the lock screen, with the score in the status bar. Alerts' Settings has
   a switch for them (Live scores), and each card a Stop button; the phone tells the server either, which then
@@ -1433,7 +1447,8 @@ the native app's, and the TWA loses its full screen.
   by sport, title and date.
 - Signing in is optional. Without it each browser or phone is its own anonymous fan (a signed cookie);
   signed in (a code sent by email, or Google), a fan's players, alert levels, muted games and devices
-  are the same on every device, and what they followed before signing in comes with them. Google's
+  are the same on every device, and what they followed before signing in comes with them, as much as the account
+  may follow (100 players, 30 teams, 20 games; the fan is told how many didn't fit). Google's
   button is hidden in the iPhone home-screen app until its sign-in sheet is tried there.
 - Notifications: on iPhone, Web Push works only once the app is added to the Home Screen (iOS 16.4+),
   and there are no lock-screen live scores (Live Activities); the Android app has them, but a web page can't.

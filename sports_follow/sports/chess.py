@@ -170,6 +170,7 @@ class Chess(Sport):
         "key": ("The game turning and the result", "The game starting, turning (a side winning, a turnaround) and the result"),
         "more": ("every edge", "the game edging one way or back to level"),
     }
+    priorities = {"swing": 30}
 
     def credits_also(self) -> list[dict[str, Any]]:
         return [{

@@ -6,9 +6,9 @@
 # Every commit on main that CI passes starts a run, which waits at the production environment until you
 # approve it (its required reviewer; GitHub's phone app shows the Approve button). Only the newest one
 # waits: a newer commit's run cancels the older waiting ones, and a run for a commit that a newer one has
-# replaced stops before it waits. With no required reviewer on production, nothing deploys by itself.
-# By hand too (Actions → Deploy → Run workflow), which also waits for approval. Never on pull_request: a
-# fork's PR must not reach the deploy key.
+# replaced stops before it waits. By hand too (Actions → Deploy → Run workflow), which also waits for
+# approval. With no required reviewer on production, no run deploys or rolls back, after CI or by hand: it
+# fails and says so. Never on pull_request: a fork's PR must not reach the deploy key.
 name: Deploy
 run-name: >-
   ${{ inputs.action == 'rollback' && 'Roll back to the previous deploy' ||
@@ -57,14 +57,15 @@ jobs:
         id: newest
         run: |
           go=true
+          # Without a required reviewer the deploy job wouldn't wait, so a merge, or a run started by hand (by anyone
+          # whose gh can start one, a Claude session too), would go live unseen (BUG-221).
+          reviewers=$(gh api "repos/$GITHUB_REPOSITORY/environments/production" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+          if ! [ "${reviewers:-0}" -gt 0 ] 2>/dev/null; then
+            echo "::error::The production environment has no required reviewer, so this run would go ahead unseen: it stops here. Add one (deploy/README.md, Deploying)."
+            exit 1
+          fi
           if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
-            # Without a required reviewer the deploy job wouldn't wait, so a merge would go live unseen.
-            reviewers=$(gh api "repos/$GITHUB_REPOSITORY/environments/production" \
-              --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
-            if ! [ "${reviewers:-0}" -gt 0 ] 2>/dev/null; then
-              echo "::error::The production environment has no required reviewer, so ${SHA:0:7} won't deploy by itself. Add one (deploy/README.md, Deploying), or run Deploy by hand."
-              exit 1
-            fi
             # CI on main runs one push at a time (ci.yml's concurrency), so CI passes in order, but a re-run
             # can pass an older commit late.
             newest=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" \

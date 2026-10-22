@@ -1,8 +1,9 @@
 // What an open app takes from the server when it catches up (its stream connecting again, coming back to the app):
-// who the device is signed in as, and the fan's players. Shared by the web app and the Android app (mobile/): no
-// browser here, so tests/test_web_resync.py runs it in Node.
+// who the device is signed in as, and the fan's players; and how a level the fan taps here is saved, which those
+// lists leave as shown till it is. Shared by the web app and the Android app (mobile/): no browser here, so
+// tests/test_web_resync.py and tests/test_web_following.py run it in Node.
 
-import type { Card, Me } from './types'
+import type { AlertLevel, Card, Me } from './types'
 
 /** Who an answer of GET /api/me/account says the device is: an account's address, or null for no account. */
 export function signedInAs(me: Me): string | null {
@@ -99,4 +100,38 @@ export function listed(players: Card[], shown: Card[], changing: (playerId: numb
 export function withFollowed(shown: Card[], card: Card): Card[] {
   if (!shown.some((c) => c.player_id === card.player_id)) return [...shown, card]
   return shown.map((c) => (c.player_id === card.player_id ? { ...card, alerts: card.alerts ?? c.alerts } : c))
+}
+
+/** A level's saves under way for one player, team or game: the newest tap's number, the level last saved, and the
+ * saves queued behind each other. */
+export interface LevelSaves { latest: number; saved: AlertLevel; queue: Promise<void> }
+
+/**
+ * A level the fan tapped for a player, team or game (`key`): it shows at once (`show`), and its saves (`save`: the
+ * PUT) go one at a time per key, one a newer tap has replaced not sent, so fast taps can't land out of order: the
+ * server ends on the last one (BUG-307: a team's and a game's each went at once, and the server kept whichever
+ * came last). If that fails, the level goes back to the last one saved (`shown`: as shown before these taps), and
+ * the error is the caller's. A key is in `writes` till its last tap is saved or fails: a list from the server
+ * meanwhile leaves its level as shown.
+ */
+export function saveLevel<K>(writes: Map<K, LevelSaves>, key: K, level: AlertLevel, shown: () => AlertLevel, show: (level: AlertLevel) => void,
+  save: (level: AlertLevel) => Promise<unknown>): Promise<void> {
+  const saves = writes.get(key) ?? { latest: 0, saved: shown(), queue: Promise.resolve() }
+  writes.set(key, saves)
+  const n = ++saves.latest
+  show(level)
+  const done = saves.queue.then(async () => {
+    if (n !== saves.latest) return
+    try {
+      await save(level)
+      saves.saved = level
+    } catch (e) {
+      if (n === saves.latest) show(saves.saved)
+      throw e
+    } finally {
+      if (n === saves.latest) writes.delete(key)
+    }
+  })
+  saves.queue = done.catch(() => {})
+  return done
 }

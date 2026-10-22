@@ -86,7 +86,12 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       }
       meRef.current = now
       setMe(now)
-      if (shown === null && now.signed_in === false && now.reason === 'signed_out') setNotice((said) => said ?? SIGNED_OUT)
+      // Found signed out elsewhere as it starts (the app was closed meanwhile): said once, and its live cards, the old
+      // account's games, go too, as they would have had it been open (BUG-278).
+      if (shown === null && now.signed_in === false && now.reason === 'signed_out') {
+        StannNotifications?.takeDownLive(null)
+        setNotice((said) => said ?? SIGNED_OUT)
+      }
     })
     who.current = asker
     asker.ask().finally(go)
@@ -107,7 +112,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const dismissNotice = useCallback(() => setNotice(null), [])
-  const signedIn = useCallback((account: Account) => startOver('/account', welcome(account.players_added ?? 0, account.teams_dropped ?? 0)), [startOver])
+  const signedIn = useCallback((account: Account) => startOver('/account', welcome(account.players_added ?? 0, account.teams_dropped ?? 0, account.players_dropped ?? 0, account.games_dropped ?? 0)), [startOver])
   // Signed out or deleted, the phone is off the server (its session's devices go): its live cards, the account's
   // games, would stay on the lock screen with nothing to end them, so they go now. If the call fails, the phone is as
   // it was, and who it is is asked again: the server may have ended its session all the same.

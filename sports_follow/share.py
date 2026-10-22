@@ -176,11 +176,12 @@ def of_campaign(shown: dict[str, Any]) -> Preview:
 def of_question(q: dict[str, Any]) -> Preview:
     """A question fans call (predictions.public), as the link a fan shares from its card (/match/<game>?q=<id>):
     once settled, how few called it ("7%", "called it: Sindarov"); before, how fans split ("71%", "say Gukesh D"),
-    once enough have picked to show it; with fewer, the question itself. In its sport's colour, as every preview."""
+    once enough have picked to show it; with fewer, the question itself, and once settled its answer (no picks that
+    count: no share of them, BUG-314). In its sport's colour, as every preview."""
     ground, ink = _colours(sports.of(q["sport"]))
     label = sports.label(q["sport"])
     shown = [o for o in q["options"] if o.get("share") is not None]
-    answer = next((o for o in shown if o["key"] == q.get("answer")), None) if q["status"] == "settled" else None
+    answer = next((o for o in shown if o["key"] == q.get("answer")), None) if q["status"] == "settled" and q["picks"] else None
     top = max(shown, key=lambda o: o["share"]) if shown and q["picks"] else None
     rest = _joined(*(f"{o['label']} {o['share']}%" for o in shown if o is not (answer or top)))
     if answer is not None:
@@ -190,7 +191,8 @@ def of_question(q: dict[str, Any]) -> Preview:
         word, name, lines = f"{top['share']}%", f"say {top['label']}", (_joined(q["title"], q["game"]), _joined(rest, f"{q['picks']:,} picks"))
         title = f"{top['share']}% of {APP_NAME} fans say {top['label']}: {q['title']} {q['game']}"
     else:
-        word, name, lines = q["title"], "", (q["game"], f"Call it on {APP_NAME} before it starts")
+        right = next((o["label"] for o in q["options"] if o["key"] == q.get("answer")), None) if q["status"] == "settled" else None
+        word, name, lines = q["title"], "", (q["game"], f"Answer: {right}" if right else f"Call it on {APP_NAME} before it starts")
         title = f"{q['title']} {q['game']}"
     return Preview(
         title=title,
@@ -204,15 +206,19 @@ def of_question(q: dict[str, Any]) -> Preview:
 def of_invite(shown: dict[str, Any]) -> Preview:
     """A league's invite (predictions.about), as its page (/j/<code>) says it: "You're invited", the league's name in
     big type, who asked and how many are in it, on the app's own blue (a league calls any sport's games). Its code is
-    in the link alone, never in the words or the picture: a screenshot of the preview is no invite."""
+    in the link alone, never in the words or the picture: a screenshot of the preview is no invite. A name the
+    typefaces can't draw (a league named in Hindi: _drawable leaves it out) isn't in the picture: it says "Join the
+    league", or that you're asked, instead of nothing (BUG-313); the words keep it."""
     asked = f"{shown['by']} asked you" if shown.get("by") else "You're asked"  # its maker left: still an invite
     together = f"{asked} to call the games together"
     count = f"{shown['members']} in it so far"
+    word = shown["name"] if _drawable(shown["name"].upper(), "anton", "manrope")[1] else "Join the league"  # as _draw draws the big word
+    line = together if _drawable(together, "manrope")[1] else "You're asked to call the games together"  # and its lines
     return Preview(
         title=f"Join {shown['name']} on {APP_NAME}",
         description=f"{together} on {APP_NAME}: {count}. Call each game before it starts; bragging rights only.",
         path=f"/j/{shown['code']}",
-        picture=Picture(BRAND, "#ffffff", "You're invited", shown["name"], "", (together, count)),
+        picture=Picture(BRAND, "#ffffff", "You're invited", word, "", (line, count)),
         image=f"/api/leagues/{shown['code']}/share.png",
     )
 

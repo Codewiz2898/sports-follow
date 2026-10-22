@@ -35,6 +35,7 @@ class Tennis(Sport):
         "more": ("every set", "each set"),
     }
     kind_words = {"set": "Set"}
+    priorities = {"set": 30, "upset": 90}
     stats_title = "Overview"
     games = ("match", "matches")
 
@@ -65,14 +66,24 @@ class Tennis(Sport):
     def outcome(self, result: str, teams: list[str], board: dict[str, Any] | None = None, side: str | None = None) -> str | None:
         """As every sport's, but a result with no score wasn't played: a walkover kept before walkovers were told
         apart ("Lost ", where it's "Lost (w/o)" now) is no more form than one kept since. A retirement counts."""
-        word, _, score = (result or "").strip().partition(" ")
-        if word in ("Won", "Lost") and not score.strip():
+        if not self.played(result):
             return None
         return super().outcome(result, teams, board, side)
+
+    def played(self, result: str) -> bool:
+        """As every sport's, and a win or a loss with no score wasn't (outcome)."""
+        word, _, score = (result or "").strip().partition(" ")
+        return super().played(result) and not (word in ("Won", "Lost") and not score.strip())
 
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
         winner = next((p for p in state.get("players") or [] if p.get("winner")), None)
         return f"{winner['name']} won" if winner and winner.get("name") else ""
+
+    def says_who_won(self, state: dict[str, Any], clock: str) -> bool:
+        """Its source's note under a finished match's score names the winner, with whom they beat: "(8) Ben Shelton
+        (USA) bt (2) Carlos Alcaraz (ESP) 6-7 (5-7) 6-1…"; a pair by their full names, where the board has them short."""
+        winner = next((p for p in state.get("players") or [] if p.get("winner")), None)
+        return winner is not None and bool(re.search(r"\bbt\b", clock) or (winner.get("name") and winner["name"].casefold() in clock.casefold()))
 
     def after_final(self, who: str, athlete_id: str, now: Seen) -> list[Found]:
         """A win over a much better-seeded player (UPSET_GAP seeds or more; any seed, for an unseeded one), in a match

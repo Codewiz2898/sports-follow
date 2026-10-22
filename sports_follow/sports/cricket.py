@@ -94,7 +94,7 @@ def batting_bowling(lines: list[dict[str, Any]]) -> list[dict[str, str]]:
 _RUNS = {50: "Fifty", 100: "Hundred", 200: "Double hundred", 300: "Triple hundred"}
 _HAUL = {3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten"}
 MARKS = (50, 100, 150, 200, 250, 300)  # the batting milestones told
-# Their moments' priorities: a fifty's and a hundred's are their kinds' (moments.PRIORITY), 150 on above both.
+# Their moments' priorities: a fifty's and a hundred's are their kinds' (Cricket.priorities), 150 on above both.
 _RUNS_PRIORITY = {50: 70, 100: 90}
 
 
@@ -106,6 +106,13 @@ _LENGTHS = ((re.compile(r"\bt10\b", re.I), 10), (re.compile(r"t20|twenty20", re.
 def overs_a_side(fmt: str | None) -> int | None:
     """How many overs a side bats in a match of this format, or None for one without a set length."""
     return next((overs for pattern, overs in _LENGTHS if pattern.search(fmt or "")), None)
+
+
+def day_of_play(overs: int) -> timedelta:
+    """How long after its start a limited-overs match's day of play can run, rain and all: both innings at four minutes
+    an over, the break between them, and the two hours a delay may take before overs are lost or the match called
+    off (a T20's five hours, an ODI's nine)."""
+    return timedelta(minutes=2 * overs * 4 + 20 + 120)
 
 
 def _balls(overs: Any) -> int | None:
@@ -204,9 +211,12 @@ class Cricket(Sport):
         "more": ("", ""),
     }
     kind_words = {"out": "Out"}
+    priorities = {"fifty": 70, "hundred": 90, "out": 60, "wickets": 70}
     stats_title = "Overview"
 
-    def lineup_title(self, who: str, starting: bool) -> str:
+    def lineup_title(self, who: str, starting: bool, several: bool = False) -> str:
+        if several:
+            return f"{who} are in the XI" if starting else f"{who} are named substitutes"
         return f"{who} is in the XI" if starting else f"{who} is named a substitute"
 
     def starts_unlisted(self, now: Seen) -> bool:
@@ -238,9 +248,14 @@ class Cricket(Sport):
         one no word says the length of) within six (lasts), as the tick closes any source's game (pipeline.due_work)."""
         return start + (timedelta(days=2) if overs_a_side(state.get("format")) else self.lasts) if start is not None else None
 
-    def paused(self, state: dict[str, Any], score: str, clock: str) -> bool:
-        """Stumps: the day's play is over, and the match goes on tomorrow ("Stump Day 2", "Day 3 · Stumps")."""
-        return bool(re.search(r"\bstumps?\b", clock, re.I))
+    def paused(self, state: dict[str, Any], score: str, clock: str, start: datetime | None = None, now: datetime | None = None) -> bool:
+        """Stumps: the day's play is over, and the match goes on tomorrow ("Stump Day 2", "Day 3 · Stumps"). And a
+        limited-overs match stopped (rain, bad light: "Delayed") past its day's play (day_of_play): it goes on tomorrow,
+        on its reserve day, if at all (BUG-302). A stop within its day's play is a break: play may yet resume."""
+        if re.search(r"\bstumps?\b", clock, re.I):
+            return True
+        overs = overs_a_side(state.get("format"))
+        return bool(overs and start and now and re.search(r"\bdelay", clock, re.I) and now - start > day_of_play(overs))
 
     def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
         """A scorecard: each side, in the order they batted, with who batted for it (runs, balls, fours, sixes,

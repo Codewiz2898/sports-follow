@@ -27,7 +27,8 @@ the same ("Kim Junho", "Kim Jinho").
 Never by a handle alone: handles collide ("Faker" is also a band; "Zeus" a god, a rapper and two pros). A
 pro two people could be, or a person two pros could be, is matched to no one; birth dates known to the day
 that differ rule a person out. A run that read everyone also takes back a match that no longer holds (an
-edit on Wikidata), with its photo; one that didn't only adds.
+edit on Wikidata), with its photo and what that person's Wikidata and Wikipedia said on the pro's page; one
+that didn't only adds.
 
 An operator who finds a wrong match takes it back with `players unmatch <pro> [Q…]` (athlete_unmatch):
 the pro loses the Wikidata id and photo, and no run matches them to that person again, or to anyone.
@@ -438,10 +439,10 @@ def forget(db: Session, within: Iterable[str], qids: Iterable[str], person: str 
     return list(db.scalars(stmt.returning(Athlete.qid)))
 
 
-def record(db: Session, within: list[str], found: list[Match], complete: bool) -> dict[str, int]:
+def record(db: Session, within: list[str], found: list[Match], complete: bool) -> tuple[dict[str, int], list[str]]:
     """Write each match into its row (their Wikidata id, and photo file or none), and take back the matches
     that no longer hold after a complete read, and those an operator took back (players unmatch) after any.
-    Returns how many rows changed and were taken back."""
+    Returns how many rows changed and were taken back, and the rows taken back."""
     # The vetoes as of now, not as of the read before Wikidata's: one made meanwhile waits for this to
     # commit, and then takes its match back itself.
     db.execute(text("LOCK TABLE athlete_unmatch IN SHARE MODE"))
@@ -457,7 +458,7 @@ def record(db: Session, within: list[str], found: list[Match], complete: bool) -
     gone = [row for row, (wd, _) in have.items() if row not in now and (complete or vetoed(off, row, wd))]
     if gone:
         forget(db, within, gone)
-    return {"changed": changed, "taken_back": len(gone)}
+    return {"changed": changed, "taken_back": len(gone)}, gone
 
 
 def tally(found: list[Match]) -> dict[str, int]:
@@ -473,7 +474,11 @@ def tally(found: list[Match]) -> dict[str, int]:
 
 def match_sport(kind: sports.Sport, within: list[str], write: bool = True) -> tuple[list[Match], dict[str, Any]]:
     """Match the athletes of these roster sports, all of kind's (a group's, or kind itself), to the people
-    kind counts as its own on Wikidata, read once, and unless write is False, record them."""
+    kind counts as its own on Wikidata, read once, and unless write is False, record them. What the person a match
+    is taken back from said on the pages of the players holding those athletes (their About, birth date, country)
+    comes off them then too, as an operator's unmatch takes it off (players.take_profiles_off)."""
+    from .players import take_profiles_off  # operator tooling, which reads this module
+
     everyone, complete = read_people(kind)
     with session() as db:
         athletes, off = rows(db, kind, within), vetoes(db, within)
@@ -481,7 +486,9 @@ def match_sport(kind: sports.Sport, within: list[str], write: bool = True) -> tu
     done: dict[str, Any] = {"people": len(everyone), "athletes": len(athletes), **tally(found), "complete": complete}
     if write:
         with session() as db:
-            done |= record(db, within, found, complete)
+            counts, gone = record(db, within, found, complete)
+        done |= counts
+        take_profiles_off(gone)
     return found, done
 
 

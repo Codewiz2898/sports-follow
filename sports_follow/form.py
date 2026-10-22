@@ -23,9 +23,12 @@ def summarize(sport: str, results: list[tuple[dict[str, Any], Line | None]], tea
     n = len(results)
     one, many = rules.form_games(items)
     note = f"Last {n} {one if n == 1 else many}"
+    # Those its record leaves out as never played (a forfeit, a walkover), so its W–L adds up to what the note says.
+    unplayed = sum(1 for r in items if not rules.played(r.get("result") or ""))
     loading = sum(1 for r, _ in results if r.get("scorecard") is False)
-    if loading:
-        note += f" ({loading} still loading)"
+    said = [f"{unplayed} not played" if unplayed else "", f"{loading} still loading" if loading else ""]
+    if any(said):
+        note += f" ({', '.join(s for s in said if s)})"
     return stats, note
 
 

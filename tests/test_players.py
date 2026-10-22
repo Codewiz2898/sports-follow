@@ -25,7 +25,8 @@ from types import SimpleNamespace
 from sports_follow import adapters, bus, photos, players, registry, sports, starters
 from sports_follow.adapters import Adapter, AdapterError, Fixture, PlayerRef, Roster, Rostered, pubg
 from sports_follow.adapters.budget import RateLimited
-from sports_follow.models import Account, Athlete, AthleteOverride, AthleteUnmatch, Follow, Moment, Photo, Player, PlayerAlias, PlayerCard, PlayerIdentity, Starter
+from sports_follow.models import (Account, Athlete, AthleteOverride, AthleteUnmatch, Clip, Event, EventPlayer, EventState, Follow, MatchFollow, Moment, Photo, Player,
+                                  PlayerAlias, PlayerCard, PlayerIdentity, PlayerLine, Question, Starter)
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -37,7 +38,7 @@ LONG_AGO = datetime.now(timezone.utc) - timedelta(days=30)
 def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE athlete, athlete_override, athlete_unmatch, player, follow, moment, starter, photo, account RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE athlete, athlete_override, athlete_unmatch, player, follow, moment, starter, photo, account, event, clip RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -93,6 +94,53 @@ def test_removing_a_page_takes_everything_with_it_and_blocks_the_athlete(db):
     registry.upsert(db, [athlete("Q213854", "cricket", "Virat Kohli", {"espn_cricket": "253802"}), athlete("Q1", "cricket", "Someone Else")])
     db.commit()
     assert [a.qid for a in db.scalars(select(Athlete))] == ["Q1"]
+
+
+def games(db, **players_in: list[int]) -> dict[str, int]:
+    """Finished games, each named for what it is, with the players in it; each with a score and a line of the first's."""
+    now = datetime.now(timezone.utc)
+    made = {name: Event(key=f"espn_cricket:{name}", sport="Cricket", title=name, status="final") for name in players_in}
+    db.add_all(made.values())
+    db.flush()
+    for name, ids in players_in.items():
+        db.add_all([*(EventPlayer(event_id=made[name].id, player_id=pid) for pid in ids), EventState(event_id=made[name].id, as_of=now, status="final", state={}),
+                    PlayerLine(event_id=made[name].id, player_id=ids[0], as_of=now, stats={})])
+    db.flush()
+    return {name: e.id for name, e in made.items()}
+
+
+def test_removing_a_player_takes_the_games_only_they_were_in_with_them(db):
+    # BUG-226: removing a player left the games only they were in, with every score of them, though nothing polls or
+    # shows them any more: they piled up for good. One another page, a followed game or a question still holds stays.
+    kohli(db)
+    db.add(Player(id=2, slug="rohit-sharma", name="Rohit Sharma", sport="Cricket"))
+    made = games(db, alone=[1], shared=[1, 2], followed=[1], asked=[1], **{"clipped:2": [1]})
+    db.add_all([MatchFollow(fan_id="c", event_id=made["followed"], keys=["espn_cricket:followed"]),
+                Question(game="espn_cricket:asked", ask="result", keys=["espn_cricket:asked"], sport="cricket", match="espn_cricket/asked", title="Who wins?"),
+                Clip(slug="c1", match="espn_cricket/clipped:2", source="file", seconds=5.0, width=1, height=1, players=[1])])
+    db.commit()
+    assert players.main(["remove", "1", "--yes"]) == 0
+    db.expire_all()
+    assert sorted(e.title for e in db.scalars(select(Event))) == ["asked", "clipped:2", "followed", "shared"]
+    assert made["alone"] not in {s.event_id for s in db.scalars(select(EventState))} and len(db.scalars(select(EventState)).all()) == 4
+    assert [(e.event_id, e.player_id) for e in db.scalars(select(EventPlayer))] == [(made["shared"], 2)]
+
+
+def test_a_page_folded_into_another_takes_the_games_only_it_was_in_with_it(db):
+    # BUG-226: a typed name's page folded into the player who holds their athlete left the games its research found
+    # for it, which no page is in any more; one the player is in too stays theirs.
+    from sports_follow import pipeline
+
+    db.add_all([Player(id=7, slug="virat-kohli", name="Virat Kohli", sport="Cricket"), Player(id=8, slug="kohli", name="Kohli", sport="Cricket")])
+    db.flush()
+    made = games(db, researched=[8], both=[8, 7])
+    folded, into = db.get(Player, 8), db.get(Player, 7)
+    assert folded is not None and into is not None
+    assert pipeline._fold(db, folded, into) == 8  # pyright: ignore[reportPrivateUsage]
+    db.commit()
+    db.expire_all()
+    assert [e.title for e in db.scalars(select(Event))] == ["both"] and {s.event_id for s in db.scalars(select(EventState))} == {made["both"]}
+    assert [(e.event_id, e.player_id) for e in db.scalars(select(EventPlayer))] == [(made["both"], 7)]
 
 
 def test_removing_a_player_takes_their_photo_off_the_credits_page_at_once(db):
@@ -200,6 +248,25 @@ def test_a_pick_with_a_removed_players_name_and_birth_date_is_refused(db, monkey
     # Restored, he can be followed again.
     assert players.main(["restore", "Q101095505"]) == 0
     assert not registry.removed(db, "Cricket", shutte_elsewhere("9990001"))
+
+
+def test_a_removed_athletes_new_years_birthday_blocks_only_them(db, monkeypatch):
+    """BUG-292: a removed athlete's 1 January birth date counted as the year alone, and a name inside theirs as
+    theirs, so removing an Ahmed Hassan born on New Year's Day blocked every namesake born that year, and a
+    Mohammad Ali the one-name Ali."""
+    monkeypatch.setattr(registry, "ALL", ())  # no other source to ask
+    registry.upsert(db, [athlete("Q1", "football", "Ahmed Hassan", birth_date=date(1993, 1, 1), birth_precision=registry.DAY),  # a real New Year's Day
+                         athlete("Q2", "cricket", "Mohammad Ali", birth_date=date(1990, 1, 1), birth_precision=registry.YEAR)])  # the year alone
+    db.commit()
+    assert players.main(["remove", "Q1", "--yes"]) == 0 and players.main(["remove", "Q2", "--yes"]) == 0
+
+    def pick(sport: str, name: str, born: str) -> bool:
+        return registry.removed(db, sport, PlayerRef("sportmonks", f"x{name}{born}", name, [], [], born=born))
+
+    assert pick("Football", "Ahmed Hassan", "1993-01-01") and pick("Football", "A. Hassan", "1993-01-01")  # him, as before
+    assert not pick("Football", "Ahmed Hassan", "1993-11-02") and not pick("Football", "Ahmed Hassan Mahgoub", "1993-03-05")
+    assert pick("Cricket", "Mohammad Ali", "1990-08-30") and pick("Cricket", "Ali Mohammad", "1990-08-30")  # known to the year: maybe him
+    assert not pick("Cricket", "Ali", "1990-05-05") and not pick("Cricket", "Moeen Munir Ali", "1990-05-05")  # but only by his whole name
 
 
 def test_an_added_athlete_is_kept_through_the_weekly_import(db, monkeypatch):
@@ -337,6 +404,25 @@ def test_unmatching_takes_the_persons_profile_off_the_card_at_once(db, monkeypat
     assert published[3]["player"] == shown and shown["name"] == "TenZ"
 
 
+def test_unmatching_takes_the_persons_country_and_role_off_the_page_itself_too(db, monkeypatch):
+    # BUG-297, BUG-255: the card lost the wrong person's country and role, but the page kept them: search showed the
+    # role under the pro's name, and stories were matched to them by that country. The agent's own word stays.
+    from sports_follow import pipeline
+
+    tenz(db)
+    page, card = db.get(Player, 3), db.get(PlayerCard, 3)
+    assert page is not None and card is not None
+    page.nationality, page.role = "Someland", "Duelist"
+    card.card = {**card.card, "player": {**card.card["player"], "nationality": "Someland", "role": "Duelist", "profile_from": {"nationality": "wikidata"}}}
+    db.commit()
+    monkeypatch.setattr(pipeline, "session", players.session)
+    monkeypatch.setattr(bus, "store_card", lambda *_: None)
+    assert players.main(["unmatch", "3"]) == 0
+    db.expire_all()
+    page = db.get(Player, 3)
+    assert page is not None and (page.nationality, page.role) == (None, "Duelist")
+
+
 def test_unmatching_takes_back_only_a_match_to_the_person_named(db, capsys):
     tenz(db)
     assert players.main(["unmatch", "pandascore:20401", "Q1"]) == 0  # he's matched to Q113450352
@@ -470,6 +556,63 @@ def test_a_turned_off_sports_registry_row_isnt_found_by_its_id_alone(db, monkeyp
     monkeypatch.setattr(sports, "ENABLED", sports.ALL)
     djokovic, chahal = server._registry_athlete(db, {"qid": "Q5812"}), server._registry_athlete(db, {"qid": "Q2"})  # pyright: ignore[reportPrivateUsage]
     assert djokovic is not None and djokovic.name == "Novak Djokovic" and chahal is not None and chahal.sport == "chess"
+
+
+def test_a_turned_off_sports_page_isnt_followed_or_previewed_by_registry_id_or_by_name(db, monkeypatch):
+    # BUG-097 (reopened): with no sport said, whoever held a registry id was followed and previewed, a turned-off sport's
+    # page too; and a typed name found that page by its alias.
+    import asyncio
+
+    from sports_follow import pipeline, server
+
+    class Cards(dict):
+        async def get(self, key: str):
+            return super().get(key)
+
+        async def set(self, key: str, value: str, **kwargs) -> bool:
+            self[key] = value
+            return True
+
+    @contextmanager
+    def unit():
+        s = sessionmaker(bind=db.get_bind(), expire_on_commit=False)()
+        try:
+            yield s
+            s.commit()
+        finally:
+            s.close()
+
+    async def no_source(*args):
+        return None
+
+    for module in (server, pipeline):
+        monkeypatch.setattr(module, "session", unit)
+    monkeypatch.setitem(server.state, "redis", Cards())
+    monkeypatch.setattr(server, "_source_lookup", no_source)
+    monkeypatch.setattr(server, "_resolve", no_source)  # chess Chahal is in no live source here
+    registry.upsert(db, [athlete("Q2", "cricket", "Yuzvendra Chahal", {"espn_cricket": "430246"}, sitelinks=5),
+                         athlete("Q2", "chess", "Yuzvendra Chahal", {"lichess_chess": "yuzi"}, sitelinks=9)])
+    db.add(Player(id=1, slug="yuzvendra-chahal", name="Yuzvendra Chahal", sport="Cricket", wikidata_qid="Q2"))
+    db.flush()
+    db.add_all([PlayerCard(player_id=1, status="ready", card={"player_id": 1, "player": {"name": "Yuzvendra Chahal", "sport": "Cricket"}}),
+                PlayerIdentity(player_id=1, system="wikidata", external_id="Q2", confidence=1.0), PlayerAlias(alias="yuzvendra-chahal", player_id=1)])
+    db.commit()
+    request = SimpleNamespace(client=None)
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "cricket"))
+    for body in ({"qid": "Q2"}, {"query": "Yuzvendra Chahal"}):
+        with pytest.raises(server.HTTPException) as off:
+            asyncio.run(server.follow(request, body, "fan"))  # pyright: ignore[reportArgumentType]
+        assert off.value.status_code == 404
+    assert "player_id" not in asyncio.run(server.registry_preview(request, "Q2", None, "fan"))  # pyright: ignore[reportArgumentType]: chess Chahal, as the registry has him
+    db.expire_all()
+    assert db.scalars(select(Follow.player_id)).all() == []
+    # Cricket on: the page is theirs to follow either way, as before.
+    monkeypatch.setattr(sports, "ENABLED", sports.ALL)
+    assert asyncio.run(server.registry_preview(request, "Q2", None, "fan")) == {"player_id": 1}  # pyright: ignore[reportArgumentType]
+    assert [asyncio.run(server.follow(request, body, "fan"))["player_id"] for body in ({"qid": "Q2"}, {"query": "Yuzvendra Chahal"})] == [1, 1]  # pyright: ignore[reportArgumentType]
+    # BUG-328: a fan with all the players they may follow was refused even one they follow already (a page's Retry).
+    monkeypatch.setattr("sports_follow.follows.MAX", 1)
+    assert asyncio.run(server.follow(request, {"qid": "Q2", "sport": "cricket"}, "fan"))["player_id"] == 1  # pyright: ignore[reportArgumentType]
 
 
 def test_removing_a_starter_or_the_athlete_takes_the_starter_out(db, capsys):

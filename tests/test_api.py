@@ -35,7 +35,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
-from sports_follow import alerts, bus, db as db_module, feed, league, live, logs, match, notify, pipeline, registry, server, sports, starters, structured, web_errors
+from sports_follow import alerts, bus, db as db_module, feed, follows, league, live, logs, match, notify, pipeline, registry, server, sports, starters, structured, web_errors
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef, Snapshot
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -300,7 +300,7 @@ def api(monkeypatch):
     monkeypatch.setitem(server.state, "arq", fake.queue)
     monkeypatch.setattr(server, "cookie_key", lambda: KEY)
     # A typed name nobody has followed: a new placeholder player, so following it counts as a research.
-    monkeypatch.setattr(pipeline, "resolve_or_create", lambda db, query: SimpleNamespace(id=7, name=query))
+    monkeypatch.setattr(pipeline, "resolve_or_create", lambda db, query: SimpleNamespace(id=7, name=query, sport=""))
     return fake
 
 
@@ -310,6 +310,32 @@ def test_health_says_which_commit_the_image_was_built_from(api, monkeypatch):
     assert api.call("GET", "/api/health").json()["commit"] == "e511e300f75e19bde25601d9a5cbcc1b69859943"
     monkeypatch.setattr(server, "COMMIT", "")  # running from a checkout
     assert api.call("GET", "/api/health").json()["commit"] is None
+
+
+def test_health_answers_while_every_request_thread_is_busy(api, monkeypatch):
+    """BUG-324: health's database check waited for one of the request threads like any route, so a CPU-bound burst that
+    kept all of them busy (a herd of phones opening the Feed) held its answer, the proxy's and the uptime check's, for
+    seconds. It has threads of its own."""
+
+    class Answers:
+        def execute(self, statement):
+            return SimpleNamespace(scalar=lambda: 1)
+
+    @contextmanager
+    def session():
+        yield Answers()
+
+    async def ping():
+        return True
+
+    async def busy(fn, *args):
+        raise TimeoutError("waited for a request thread until the burst was over")
+
+    monkeypatch.setattr(server, "session", session)
+    monkeypatch.setattr(api.redis, "ping", ping, raising=False)
+    monkeypatch.setattr(server, "run_in_threadpool", busy)
+    answer = api.call("GET", "/api/health")
+    assert answer.status_code == 200 and answer.json() | {"commit": None} == {"ok": True, "db": True, "redis": True, "commit": None}
 
 
 # ---------------------------------------------------------------- AI research (BUG-011)
@@ -435,6 +461,60 @@ def test_searches_that_reach_the_live_sources_are_limited_per_fan_and_per_addres
     assert allowed[4:] == [False, True]
 
 
+class Clocked(Redis):
+    """The fake Redis, its keys expiring by a test's clock."""
+
+    def __init__(self, clock: list[float]):
+        super().__init__()
+        self.clock, self.ends = clock, {}
+
+    def _expired(self) -> None:
+        for key, end in list(self.ends.items()):
+            if end <= self.clock[0]:
+                self.data.pop(key, None)
+                del self.ends[key]
+
+    async def incr(self, key):
+        self._expired()
+        return await super().incr(key)
+
+    async def mget(self, keys):
+        self._expired()
+        return await super().mget(keys)
+
+    async def expire(self, key, seconds, nx=False):
+        if not (nx and key in self.ends):
+            self.ends[key] = self.clock[0] + seconds
+        return True
+
+
+def test_a_minutes_source_searches_hold_across_the_edge_of_the_minute(api, monkeypatch):
+    # BUG-134: a fan's minute started at their first search and its count went with it, so searches spent just before
+    # it ended were there again just after: up to twice the limit in a few seconds, for each fan and each address.
+    monkeypatch.setattr(server, "SOURCE_SEARCHES_PER_MINUTE", 3)
+    clock = [1_792_000_000.0]
+    monkeypatch.setattr(server, "time", SimpleNamespace(time=lambda: clock[0], monotonic=time.monotonic, perf_counter=time.perf_counter))
+    monkeypatch.setitem(server.state, "redis", Clocked(clock))
+    allowed: list[bool] = []
+
+    def run(db, q, sport, fan, may_ask):
+        allowed.append(may_ask())
+        return {"query": q, "results": [], "partial": []}
+
+    monkeypatch.setattr(server.player_search, "run", run)
+
+    def searches(at: float, n: int) -> list[bool]:
+        clock[0], before = 1_792_000_000.0 + at, len(allowed)
+        for _ in range(n):
+            assert api.call("GET", "/api/search?q=someone", fan="script", address=PUBLIC).status_code == 200
+        return allowed[before:]
+
+    assert searches(0, 1) == [True]
+    assert searches(40, 2) == [True, True]
+    assert searches(70, 3) == [True, False, False]  # the two from half a minute ago still count
+    assert searches(110, 3) == [True, True, False]  # a minute after them, they don't
+
+
 @pytest.fixture
 def a_source(api, monkeypatch):
     """ESPN soccer has every athlete id; the ids it was asked for. A pick makes a new player each time."""
@@ -516,15 +596,8 @@ def test_a_previews_league_doesnt_make_it_a_new_one(monkeypatch):
 
 def test_a_fan_follows_at_most_so_many_players(api, a_source, monkeypatch):
     # BUG-090: one fan could follow every athlete a source has, each polled every half hour for good.
-    monkeypatch.setattr(server, "PLAYERS_MAX", 2, raising=False)
-    plain = Db.scalar
-
-    def scalar(self, stmt):  # how many players a fan follows
-        if stmt.column_descriptions[0]["name"] == "count":
-            return sum(fan == _param(stmt, "fan_id") for fan, _ in api.follows)
-        return plain(self, stmt)
-
-    monkeypatch.setattr(Db, "scalar", scalar)
+    monkeypatch.setattr(follows, "MAX", 2)
+    monkeypatch.setattr(follows, "counted", lambda db, fan: sum(f == fan for f, _ in api.follows))  # how many players a fan follows
     api.follows |= {("fan", 1), ("fan", 2)}
     refused = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"system": "espn_soccer", "athlete_id": "231388"})
     assert (refused.status_code, refused.json()["detail"]) == (429, "You follow 2 players already: unfollow one to follow another.")
@@ -534,6 +607,11 @@ def test_a_fan_follows_at_most_so_many_players(api, a_source, monkeypatch):
     assert api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"player_id": 1}).status_code == 200  # one followed already: no new follow
     assert api.call("POST", "/api/follows", fan="another", address=PUBLIC, body={"player_id": 1}).status_code == 200
     assert not [s for s in api.statements if isinstance(s, Insert) and s.table.name == "follow" and _param(s, "fan_id") == "fan" and _param(s, "player_id") != 1]
+    # BUG-328: one picked in search that the fan follows already is no new follow, so it isn't refused (a page's Retry).
+    monkeypatch.setattr(server, "_holder", lambda db, system, external_id: 1 if (system, external_id) == ("espn_soccer", "231388") else None)
+    monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: (1, False))
+    again = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"system": "espn_soccer", "athlete_id": "231388"})
+    assert (again.status_code, again.json().get("player_id")) == (200, 1)
 
 
 def test_follows_are_limited_per_fan_and_per_address_and_a_refused_one_isnt_counted(api, monkeypatch):

@@ -185,6 +185,30 @@ def test_a_pick_from_a_fan_the_request_made_up_is_theirs_but_counts_in_nobody_el
     assert scored == {**{f"crowd-draw-{i}": 67 for i in range(7)}, **{fan: 67 for fan in made_up}}
 
 
+def test_a_right_call_scores_when_none_of_its_questions_picks_count_and_its_preview_shows_no_share(db, redis):  # noqa: F811
+    """BUG-314: with none of a question's picks counting (each from a fan a request made up), a right call scored 0, as
+    there were no picks that count to take a share of, and the question's preview said "Only 0% of fans called it". Then
+    the picks it has are what a right one scores by, and the preview says the answer without a share."""
+    now = datetime.now(timezone.utc)
+    q = open_question(db, now + timedelta(hours=3))
+    predictions.pick(db, "made-up-1", q.id, "w", counted=False)
+    predictions.pick(db, "made-up-2", q.id, "b", counted=False)
+    db.commit()
+    later = now + timedelta(hours=5)
+    db.get_one(Question, q.id).locks_at = now - timedelta(minutes=1)
+    db.commit()
+    [closed] = predictions.shown(db, "made-up-1", [db.get_one(Question, q.id)], now)
+    assert closed["worth"] is None  # not "0 points": none count yet
+    predictions.score(db, db.get_one(Question, q.id), "w", later)
+    db.commit()
+    db.expire_all()
+    assert {p.fan_id: p.points for p in db.scalars(select(Pick))} == {"made-up-1": 50, "made-up-2": 0}
+    shown = predictions.public(db, q.id, later)
+    assert shown is not None
+    preview = share.of_question(shown)
+    assert "%" not in preview.title + preview.picture.word + preview.picture.name + " ".join(preview.picture.lines)
+    assert preview.picture.lines == ("Carlsen vs Lazavik", "Answer: Carlsen")
+
 
 def test_cookies_from_one_address_count_only_a_few_picks_a_question_however_they_were_got(db, redis, monkeypatch):  # noqa: F811
     """The app's page gives any device a fan cookie (BUG-152), so a cookie is no proof of a fan: a script could fetch

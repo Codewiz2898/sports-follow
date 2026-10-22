@@ -331,6 +331,18 @@ def test_a_leagues_invite_says_join_it_who_asked_and_how_many_are_in_it_and_neve
     assert alone.picture.lines == ("You're asked to call the games together", "1 in it so far")
 
 
+def test_an_invite_to_a_league_named_in_a_script_no_typeface_has_still_says_join_it():
+    """BUG-313: a league named in Hindi, by a maker named in it, previewed as an empty blue card: the typefaces have no
+    Devanagari, so its name and who asked were left out of the picture (BUG-196). The picture says "Join the league"
+    then, and that you're asked, without the name it can't draw; the words keep both."""
+    p = share.of_invite({"code": "ABCDEF", "name": "दोस्तों की लीग", "members": 4, "by": "आशा"})
+    assert p.title == f"Join दोस्तों की लीग on {APP_NAME}" and p.description.startswith("आशा asked you to call the games together")
+    assert (p.picture.word, p.picture.lines) == ("Join the league", ("You're asked to call the games together", "4 in it so far"))
+    mixed = share.of_invite({**INVITE, "by": "आशा"})  # a name it can draw keeps its place
+    assert (mixed.picture.word, mixed.picture.lines[0]) == ("Chess gang", "You're asked to call the games together")
+    assert share.png(p.picture) != share.png(share.Picture(share.BRAND, "#ffffff", "You're invited", "", "", ("4 in it so far",)))  # not the empty card
+
+
 def test_a_teams_page_says_who_and_its_game_on_now_else_its_last_result_else_its_next():
     p = share.of_team(TEAM)
     assert p is not None

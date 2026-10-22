@@ -30,6 +30,7 @@ import { TermsPage } from './pages/TermsPage'
 import { FriendLeaguePage, InvitePage, LeaguesPage } from './pages/LeaguesPage'
 import { InstallButton, PwaNotices, PwaProvider } from './pwa'
 import { SearchPage } from './pages/SearchPage'
+import { buildReplaced } from './staleBuild'
 import { loadSports, useSports } from './sports'
 import { TodayPage } from './pages/TodayPage'
 import { WelcomePage } from './pages/WelcomePage'
@@ -306,17 +307,43 @@ function failedRender(error: unknown, info: { componentStack?: string }) {
   report({ kind: 'render', componentStack: info.componentStack }, error)
 }
 
-// A build replaced while this tab still runs it (another tab took the new one: sw.js drops the old build's files): a
-// page this tab hadn't opened yet is gone from the server and the cache, so loading it fails. The tab reloads onto the
-// new build, at most once in a while, so a failure that isn't that can't reload it over and over.
+// The service worker this tab started under: another one in charge since (another tab's Reload) is a newer build's.
+const startedUnder = navigator.serviceWorker?.controller ?? null
+
+/** Whether a newer build than this tab's is waiting, on its way (the browser asks for the worker again now), or took
+ * over from another tab since this one started. */
+async function newerBuild(): Promise<boolean> {
+  const sw = navigator.serviceWorker
+  if (!sw) return false
+  if (startedUnder && sw.controller !== startedUnder) return true
+  const reg = await sw.getRegistration()
+  if (!reg) return false
+  if (reg.waiting) return true
+  await reg.update()
+  return Boolean(reg.installing ?? reg.waiting)
+}
+
+// A build replaced while this tab still runs it (another tab took the new one: sw.js drops the old build's files; a
+// deploy since it loaded): a page this tab hadn't opened yet is gone from the server and the cache, so loading it
+// fails. The tab reloads onto the new build, but only once the server says the file is gone (staleBuild.ts): a
+// failure offline or on a flaky network is the page's to show ("couldn't open the board"), which it hears of, rather
+// than the whole app reloading (BUG-308). At most once in a while, so a failure that isn't that can't reload it over
+// and over.
 window.addEventListener('vite:preloadError', (event) => {
-  try {
-    const last = Number(sessionStorage.getItem('sf-reloaded-for-build') || 0)
-    if (Date.now() - last < 60_000) return
-    sessionStorage.setItem('sf-reloaded-for-build', String(Date.now()))
-  } catch { /* no storage: reload all the same */ }
-  event.preventDefault()
-  window.location.reload()
+  const look = buildReplaced(event.payload, {
+    online: navigator.onLine,
+    status: (file) => fetch(file, { method: 'HEAD', cache: 'no-store' }).then((r) => r.status),
+    newer: newerBuild,
+  })
+  void look.then((replaced) => {
+    if (!replaced) return
+    try {
+      const last = Number(sessionStorage.getItem('sf-reloaded-for-build') || 0)
+      if (Date.now() - last < 60_000) return
+      sessionStorage.setItem('sf-reloaded-for-build', String(Date.now()))
+    } catch { /* no storage: reload all the same */ }
+    window.location.reload()
+  })
 })
 
 // The sports this app knows come from the server; the first render waits for them (from this device's

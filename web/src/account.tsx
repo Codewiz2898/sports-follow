@@ -105,14 +105,14 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   })
 
   useEffect(() => {
-    // Back from Google (/account?welcome=N, with &teams_dropped=M if some didn't fit: server.google_callback): the
-    // server signed this device in.
+    // Back from Google (/account?welcome=N, with &teams_dropped=M, &players_dropped and &games_dropped if some didn't
+    // fit: server.google_callback): the server signed this device in.
     const query = new URLSearchParams(window.location.search)
     const back = query.get('welcome')
     if (back !== null) {
       forgetCachedAnswers()
       forgetKept()
-      const said = welcome(Number(back) || 0, Number(query.get('teams_dropped')) || 0)
+      const said = welcome(Number(back) || 0, Number(query.get('teams_dropped')) || 0, Number(query.get('players_dropped')) || 0, Number(query.get('games_dropped')) || 0)
       // Signed in from a page that asked to be come back to (a league's invite): there, saying so.
       const after = takeAfterSignIn()
       if (after) {
@@ -167,7 +167,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   const dismissNotice = useCallback(() => setNotice(null), [])
   const signedIn = useCallback((account: Account, back?: string) => {
     leaving.current = true
-    startOver(ownPage(back) ?? '/account', welcome(account.players_added ?? 0, account.teams_dropped ?? 0), false)
+    startOver(ownPage(back) ?? '/account', welcome(account.players_added ?? 0, account.teams_dropped ?? 0, account.players_dropped ?? 0, account.games_dropped ?? 0), false)
   }, [])
   /** Sign out or delete the account (`end`), then start over saying `said`. If that fails, the app is as it was, and
    * who it is is asked again: the server may have ended the session all the same. */

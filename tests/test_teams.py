@@ -21,7 +21,7 @@ import pytest
 from sqlalchemy import create_engine, func, select, text, update
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import accounts, bus, notify, pipeline, server, sports, structured, teams
+from sports_follow import accounts, bus, follows, notify, pipeline, server, sports, structured, teams
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, Fixture, Line, PlayerRef, Provider, Snapshot, SourceTeam, budget, espn_basketball, espn_cricket
 from sports_follow.adapters.base import DIGITS
 from sports_follow.alerts import Item, Watch, plan
@@ -692,7 +692,7 @@ def followed_game(db, monkeypatch, fixture_id: str, sport: str, title: str, side
     phone; polled all along, its pushes sent at once and dropped, so what each fan was sent is its notification rows,
     and no live card goes anywhere."""
     monkeypatch.setattr(structured, "_polled", lambda event_id, cadence: True)
-    monkeypatch.setattr(structured.livecards, "polled", lambda event, snap: None)
+    monkeypatch.setattr(structured.livecards, "polled", lambda event, snap, out=(): None)
     monkeypatch.setattr(notify, "dispatch", notify.send)
     monkeypatch.setattr(notify, "push", lambda *args, **kwargs: None)
     monkeypatch.setattr(notify.bus, "publish", lambda player_id, event: None)
@@ -889,6 +889,39 @@ def test_a_sport_turned_off_is_out_of_reach_and_its_hidden_follows_take_no_room(
 
 
 @needs_db
+def test_a_turned_off_sports_hidden_players_take_none_of_the_fans_room(db, monkeypatch):
+    # BUG-291: a turned-off sport's follows, out of sight, still filled the players a fan may follow, and they couldn't
+    # see them to unfollow. As its teams (teams.counted), they take no room, and back on, the fan is over until under.
+    class Cards(dict):
+        async def get(self, key: str):
+            return super().get(key)
+
+        async def set(self, key: str, value: str, **kwargs) -> bool:
+            self[key] = value
+            return True
+
+    monkeypatch.setitem(server.state, "redis", Cards())
+    people = [Player(id=i, slug=f"p{i}", name=name, sport=sport) for i, (name, sport) in enumerate([("Magnus Carlsen", "Chess"), ("Gukesh D", "Chess"),
+                                                                                                    ("Bukayo Saka", "Football"), ("Cole Palmer", "Football"),
+                                                                                                    ("Declan Rice", "Football")], 1)]
+    db.add_all(people)
+    db.flush()
+    db.add_all([PlayerCard(player_id=p.id, status="ready", card={"player_id": p.id, "player": {"name": p.name, "sport": p.sport}}) for p in people])
+    db.add_all([Follow(fan_id="fan", player_id=i, alert_rules={}) for i in (1, 2)])
+    db.commit()
+    monkeypatch.setattr(follows, "MAX", 2)
+    monkeypatch.setattr(sports, "ENABLED", [s for s in sports.ALL if s.key != "chess"])
+    assert [asyncio.run(server.follow(None, {"player_id": i}, "fan"))["player_id"] for i in (3, 4)] == [3, 4]  # pyright: ignore[reportArgumentType]
+    monkeypatch.setattr(sports, "ENABLED", sports.ALL)
+    assert follows.counted(db, "fan") == 4
+    assert asyncio.run(server.follow(None, {"player_id": 4}, "fan"))["player_id"] == 4  # pyright: ignore[reportArgumentType]: one followed already
+    # BUG-295: over the cap, the fan is told how many to unfollow for another.
+    with pytest.raises(server.HTTPException) as over:
+        asyncio.run(server.follow(None, {"player_id": 5}, "fan"))  # pyright: ignore[reportArgumentType]
+    assert (over.value.status_code, over.value.detail) == (429, "You follow 4 players, more than the 2 you can: unfollow 3 to follow another.")
+
+
+@needs_db
 def test_a_followed_team_with_no_game_soon_is_read_again_less_often(db, redis, source, monkeypatch):
     # BUG-227: every followed team was read again every half hour, game or not, and once most teams have a follower
     # that's the source's background allowance: a team with nothing in the next two days is read every few hours.
@@ -995,3 +1028,14 @@ def test_a_devices_teams_of_a_sport_turned_off_come_into_the_account_without_tak
     assert teams.merge(db, "phone", "account") == 0
     db.commit()
     assert set(db.scalars(select(TeamFollow.team_id).where(TeamFollow.fan_id == "account"))) == {team(db, ARS).id, team(db, CHE).id, lakers.id}
+    # BUG-295: back on, the account follows more than MAX. It keeps them all, and is told how many to unfollow for another.
+    monkeypatch.setattr(sports, "ENABLED", sports.ALL)
+    assert teams.counted(db, "account") == 3
+    with pytest.raises(teams.Refused) as over:
+        teams.follow(db, "account", team(db, TOT).id)
+    assert (over.value.status, over.value.message) == (429, "You follow 3 teams, more than the 2 you can: unfollow 2 to follow this.")
+    db.rollback()
+    teams.unfollow(db, "account", lakers.id)
+    with pytest.raises(teams.Refused) as full:
+        teams.follow(db, "account", team(db, TOT).id)
+    assert (full.value.status, full.value.message) == (429, "You follow 2 teams already: unfollow one to follow this.")

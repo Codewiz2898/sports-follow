@@ -8,17 +8,20 @@ throwaway database at alembic head and are skipped without one (see tests/test_p
 
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, select, text, update
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import accounts, feed, server
 from sports_follow.feed import Candidate, Item, Post, Video
 from sports_follow.models import FeedFeedback, Follow, Moment, Player, PlayerCard
+
+from .test_api import api  # noqa: F401  (a fixture)
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 needs_db = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -285,3 +288,61 @@ def test_feedback_goes_with_its_player_and_follows_the_fan_into_an_account(db):
     accounts.delete_account(db, account_id)
     db.commit()
     assert db.scalars(select(FeedFeedback)).all() == []
+
+
+@needs_db
+@pytest.mark.parametrize("verdict", ["not_interested", "report", feed.UNPLAYABLE])
+def test_a_video_a_fan_hid_under_one_player_is_hidden_under_a_teammate_too_but_not_about_them_is_theirs(db, monkeypatch, verdict):
+    # BUG-283: a fan's "not interested", report or "won't play" under one player hid the video on that player's page
+    # alone: a teammate's page and Today's rail still served it (the fan's own Feed already hid it whoever's it was).
+    kohli, rohit = player(db, "kohli", {"player": {"name": "Kohli"}, "news": []}), player(db, "rohit", {"player": {"name": "Rohit"}, "news": []})
+    both, theirs = video("https://youtu.be/both", "Kohli and Rohit put on 200"), video("https://youtu.be/r", "Rohit's pull shot", days_ago=2)
+    kept = {kohli: [Candidate(both, score=0.9, channel="icc")], rohit: [Candidate(both, score=0.9, channel="icc"), Candidate(theirs, score=0.5, channel="bcci")]}
+    monkeypatch.setattr(feed, "judged", lambda db, ids, now=None: {i: kept[i] for i in ids if i in kept})
+    for who in (kohli, rohit):
+        db.add(Follow(fan_id="fan", player_id=who, alert_rules={}))
+    db.commit()
+    db.add(FeedFeedback(fan_id="fan", player_id=kohli, item_id=both.id, verdict=verdict))  # as the sheet or the app keeps it
+    db.commit()
+
+    def rohits_page() -> list[str]:
+        shown = feed.feed_for(db, rohit, "fan", NOW)
+        assert shown is not None
+        return [i.title for g in shown.groups for i in g.items]
+
+    assert rohits_page() == ["Rohit's pull shot"]
+    assert [(s.player_id, s.item.title) for s in feed.shares_for(db, "fan")] == [(rohit, "Rohit's pull shot")]
+    assert [e.item.title for e in feed.page(db, "fan", now=NOW).items] == ["Rohit's pull shot"]
+    # "Not about this player" is about that player alone: under the other it's still theirs to see.
+    db.execute(update(FeedFeedback).values(verdict="not_about_player"))
+    db.commit()
+    assert rohits_page() == ["Kohli and Rohit put on 200", "Rohit's pull shot"]
+
+
+def test_what_fans_say_about_feed_items_is_limited_by_address_and_a_signed_in_fans_by_their_account(api, monkeypatch):  # noqa: F811
+    """BUG-127: a fan's word on a Feed item from its sheet is a row, and a request with no cookie is a new fan each
+    time, so one address could keep adding rows without end. Fans without an account have their address's hour
+    (an IPv6 /64's, and its /48's together), as picks do; a signed-in fan has an hour of their own wherever they are."""
+    import json
+
+    from .test_api import PUBLIC
+
+    said: list[str] = []
+    monkeypatch.setattr(feed, "feedback", lambda db, fan, player_id, item, verdict: said.append(fan))
+    monkeypatch.setattr(server, "FEEDBACK_PER_ADDRESS", 2, raising=False)
+    monkeypatch.setattr(server, "FEEDBACK_PER_IPV6_48", 3, raising=False)
+    monkeypatch.setattr(server, "FEEDBACK_PER_ACCOUNT", 3, raising=False)
+
+    def say(fan: str | None, address: str, headers: dict[str, str] | None = None) -> int:
+        return api.call("POST", "/api/players/5/feed/0123456789abcdef/feedback", fan=fan, address=address, body={"verdict": "report"}, headers=headers).status_code
+
+    assert [say(None, PUBLIC) for _ in range(3)] == [200, 200, 429]  # new fans, no cookie, one address
+    assert say("someone", "81.2.69.143") == 200  # another address isn't held up
+    assert [say(f"v6-{n}", "2a00:1450:4009:1::1") for n in range(3)] == [200, 200, 429]  # a /64's two
+    assert [say("v6-x", "2a00:1450:4009:2::1"), say("v6-y", "2a00:1450:4009:3::1")] == [200, 429]  # its /48's three
+    # Signed in, behind the address whose hour is spent: their own hour.
+    signed = {"account_id": 1, "fan_id": "acct-asha", "session_id": 1}
+    asyncio.run(api.redis.set(f"session:{accounts.token_hash('asha-token')}", json.dumps(signed)))
+    mine = {"Cookie": f"{accounts.SESSION_COOKIE}=asha-token"}
+    assert [say(None, PUBLIC, mine) for _ in range(4)] == [200, 200, 200, 429]
+    assert said.count("acct-asha") == 3 and len(said) == 2 + 1 + 2 + 1 + 3

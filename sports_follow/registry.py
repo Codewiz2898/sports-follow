@@ -63,6 +63,10 @@ NAME_LANGS = ("en", "mul")
 # A star has many (MS Dhoni 18, 14 that search tells apart): room for every name fans type ("MSD" is Wikidata's
 # tenth of his). search_text's only index is a trigram one (GIN), with no limit on a row's length.
 MAX_ALIASES = 16
+# Anyone can add an alias on Wikidata, and some write a sentence ("next virat kholi best Australian batter"): an
+# alias of more than two words is kept only written as a name, every word of four letters or more capitalised
+# ("Neymar da Silva Santos Júnior"), and of ALIAS_WORDS words at most (is_name).
+ALIAS_WORDS = 5
 
 # The sports this build runs that are imported from Wikidata (sports.Sport.wikidata: who counts as one of their athletes, and the
 # ids kept), smallest first, so a first import has most sports searchable long before football is done;
@@ -113,6 +117,12 @@ def search_text(name: str, aliases: Iterable[str]) -> str:
     so "% koh%" finds a word start and named("virat kohli") a whole name."""
     names = [" ".join(words(n)) for n in [name, *aliases]]
     return " " + " | ".join(dict.fromkeys(n for n in names if n)) + " |"
+
+
+def is_name(alias: str) -> bool:
+    """Whether an alias reads as a name fans would type, not a sentence (ALIAS_WORDS)."""
+    written = alias.split()
+    return len(written) <= 2 or (len(written) <= ALIAS_WORDS and not any(len(w) > 3 and w[:1].islower() for w in written))
 
 
 def named(key: str):
@@ -297,7 +307,8 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
         # after "M.S. Dhoni") takes no place.
         spelled: dict[str, str] = {}
         for _, alias in sorted(aliases.get(qid, []), key=lambda la: NAME_LANGS.index(la[0]) if la[0] in NAME_LANGS else len(NAME_LANGS)):
-            spelled.setdefault(" ".join(words(alias)), alias)
+            if is_name(alias):
+                spelled.setdefault(" ".join(words(alias)), alias)
         extra = [a for f, a in spelled.items() if f not in ("", folded)][:MAX_ALIASES]
         stints = sorted(current_teams.get(qid, []), key=lambda t: t[0], reverse=True)
         birth: date | None = p.get("birth")
@@ -364,17 +375,21 @@ def blocked(db: Session) -> set[tuple[str, str]]:
 def removed(db: Session, sport: str | None, ref: PlayerRef) -> bool:
     """Whether a source's athlete, in this sport, is one an operator removed (players.py): by their id in that
     source (blocked), or, in a source that had no id for them then (one switched to or added since, or one that
-    didn't answer), by the same name and birth date. A pick with no birth date isn't taken for anyone: a
-    namesake can still be followed."""
+    didn't answer), by the same name and birth date: as far as the registry knew the date (a real New Year's Day
+    is that day), and a date it knew only to the month or year by their whole name, in any order ("Ahmed Hassan",
+    not every Ahmed Hassan Mahgoub born that year, nor the one-name "Ali" for Mohammad Ali). A pick with no birth
+    date isn't taken for anyone: a namesake can still be followed."""
     if (ref.system, str(ref.athlete_id)) in blocked(db):
         return True
     if not ref.born:
         return False
     key = sports.family(sport)
     within = [key, *([group] if (group := sports.of(key).group) else [])]  # removed as "esports": every game's
-    gone = db.execute(select(AthleteOverride.name, AthleteOverride.birth_date).where(
+    gone = db.execute(select(AthleteOverride.name, AthleteOverride.birth_date, AthleteOverride.birth_precision).where(
         AthleteOverride.action == "remove", AthleteOverride.sport.in_(within), AthleteOverride.birth_date.is_not(None))).all()
-    return any(same_day(born, ref.born) and naming.names_match(name, ref.name) for name, born in gone)
+    picked = sorted(words(ref.name))
+    return any(same_day(born, ref.born, known) and (naming.names_match(name, ref.name) if date_precision(born, known) == DAY else sorted(words(name)) == picked)
+               for name, born, known in gone)  # fmt: skip
 
 
 def db_now() -> datetime:

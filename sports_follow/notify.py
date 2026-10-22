@@ -586,8 +586,9 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
     shared = {e for e, n in Counter(e for _, e in {(i.player_id, i.event_id) for i in items if i.player_id is not None and i.event_id}).items() if n > 1}
     if shared:
         named = {i.player_id for i in items if i.event_id in shared and i.player_id is not None}
-        names = {pid: name for pid, name in db.execute(select(Player.id, Player.name).where(Player.id.in_(named)))}
-        items = [replace(i, who=names.get(i.player_id, "")) if i.event_id in shared and i.player_id is not None else i for i in items]
+        names = {pid: (name, sport or "") for pid, name, sport in db.execute(select(Player.id, Player.name, Player.sport).where(Player.id.in_(named)))}
+        items = [replace(i, who=names.get(i.player_id, ("", ""))[0], sport=names.get(i.player_id, ("", ""))[1]) if i.event_id in shared and i.player_id is not None else i
+                 for i in items]
     levels: dict[str, dict[int, str]] = {}
     for fan, player_id, rules in db.execute(select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(players))) if players else []:
         levels.setdefault(fan, {})[player_id] = (rules or {}).get("level", DEFAULT_LEVEL)

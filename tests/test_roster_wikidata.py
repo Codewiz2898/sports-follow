@@ -18,7 +18,7 @@ from sqlalchemy.orm import sessionmaker
 
 from sports_follow import photos, players, registry, roster_wikidata as rw, sports
 from sports_follow.adapters import KNOWN, PlayerRef, Rostered
-from sports_follow.models import Athlete, AthleteUnmatch, Follow, Player, PlayerIdentity
+from sports_follow.models import Athlete, AthleteUnmatch, Follow, Player, PlayerCard, PlayerIdentity
 
 WD = "http://www.wikidata.org/entity/"
 FILE = "http://commons.wikimedia.org/wiki/Special:FilePath/"
@@ -310,6 +310,38 @@ def test_a_match_is_written_kept_by_the_weekly_roster_and_taken_back_when_it_no_
 
 
 @needs_db
+def test_a_match_a_weekly_run_takes_back_takes_that_persons_profile_off_the_page(db, monkeypatch):
+    # BUG-297: a complete run that no longer matched a pro to their person took back the Wikidata id and photo, but
+    # the birth date, country and About that person's Wikidata and Wikipedia gave the page stayed until its monthly
+    # profile read; only an operator's unmatch took them off.
+    from sports_follow import bus, pipeline
+
+    registry.upsert(db, registry.roster_rows(KNOWN["pandascore_esports"], [pro("20401", "TenZ", "Tyson Ngo")]), photos=False)
+    db.add(Player(id=3, slug="tenz", name="TenZ", sport="Valorant", nationality="Someland"))
+    db.flush()
+    theirs = {"born": "2001-05-05", "nationality": "Someland", "summary": "Someone.", "about": {"source": "Wikipedia"},
+              "profile_from": {"born": "wikidata", "nationality": "wikidata", "summary": "wikipedia"}}
+    db.add_all([PlayerIdentity(player_id=3, system="wikidata", external_id="pandascore:20401", confidence=1.0),
+                PlayerCard(player_id=3, status="ready", card={"player": {"name": "TenZ", **theirs}}, version=1)])
+    db.commit()
+    read = {"people": ([wikidata_tenz()], True)}
+    monkeypatch.setattr(rw, "read_people", lambda kind: read["people"])
+    for module in (players, pipeline):
+        monkeypatch.setattr(module, "session", rw.session)
+    published: dict[int, dict] = {}
+    monkeypatch.setattr(bus, "store_card", published.__setitem__)
+    assert rw.match_sport(ESPORTS, GAMES)[1]["changed"] == 1 and published == {}  # a match made takes nothing off
+
+    read["people"] = ([], True)  # Wikidata no longer says he's them
+    assert rw.match_sport(ESPORTS, GAMES)[1]["taken_back"] == 1
+    db.expire_all()
+    card, page = db.get(PlayerCard, 3), db.get(Player, 3)
+    assert card is not None and page is not None
+    assert not {"born", "nationality", "summary", "about"} & set(card.card["player"]) and page.nationality is None
+    assert published[3]["player"] == card.card["player"]
+
+
+@needs_db
 def test_a_dry_run_writes_nothing(db, monkeypatch):
     registry.upsert(db, registry.roster_rows(KNOWN["pandascore_esports"], [pro("20401", "TenZ", "Tyson Ngo")]), photos=False)
     db.commit()
@@ -371,12 +403,12 @@ def test_a_match_found_before_the_operator_unmatched_isnt_written_and_one_held_i
     [(_, now, _)] = players.unmatch(db, players.find(db, "pandascore:20401"), "Q113450352")
     db.commit()
     assert not now  # he wasn't matched to them yet
-    assert rw.record(db, GAMES, found, complete=False) == {"changed": 0, "taken_back": 0}
+    assert rw.record(db, GAMES, found, complete=False) == ({"changed": 0, "taken_back": 0}, [])
     db.commit()
     assert _row(db, "pandascore:20401").image is None
     # A match to them the row holds anyway (written by hand) is taken back, even by a run that didn't read everyone.
     db.execute(update(Athlete).where(Athlete.qid == "pandascore:20401").values(ids=Athlete.ids.op("||")(func.jsonb_build_object("wikidata", "Q113450352")), image="x.jpg"))
     db.commit()
-    assert rw.record(db, GAMES, [], complete=False) == {"changed": 0, "taken_back": 1}
+    assert rw.record(db, GAMES, [], complete=False) == ({"changed": 0, "taken_back": 1}, ["pandascore:20401"])
     db.commit()
     assert _row(db, "pandascore:20401").image is None

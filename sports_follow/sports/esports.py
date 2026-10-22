@@ -252,6 +252,7 @@ class Esports(Sport):
         "more": ("", ""),
     }
     kind_words = {"map": "Map"}
+    priorities = {"map": 30, "kda": 30, "game": 30, "dinner": 90, "lead": 75}
     stats_title = "Overview"
     keeps_names = True
 
@@ -315,6 +316,12 @@ class Esports(Sport):
 
     def final(self, who: str, now: Seen) -> Found:
         return _lobby_final(who, now) if _lobby(now) else _series(who, now)
+
+    def told_by_several(self, kind: str, detail: str, title: str, who: str, names: str) -> str:
+        """A squad starting a lobby together: "TenZ and zekken are playing"."""
+        if kind == "start" and title == f"{who} is playing":
+            return f"{names} are playing"
+        return super().told_by_several(kind, detail, title, who, names)
 
     def during(self, who: str, athlete_id: str, before: Seen, now: Seen) -> list[Found]:
         return _lobby_games(who, before, now) if _lobby(now) else _maps(who, before, now) + _dota(who, athlete_id, before, now)

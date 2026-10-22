@@ -61,15 +61,21 @@ do_deploy() {
   # Migrations on their own first: `up` would stop the old API and worker before running them, so a
   # failed migration would leave nothing running. This way the old code keeps serving.
   if ! c run --rm --no-TTY migrate; then
-    if [ -n "$was" ] && docker image inspect "sports-follow:$was" >/dev/null 2>&1; then
-      docker tag "sports-follow:$was" sports-follow:latest
-      git checkout --quiet --detach "$was"
+    if [ -n "$was" ]; then
+      git checkout --quiet --detach "$was"   # Caddy's and Alloy's config, as after a failed build
+      if docker image inspect "sports-follow:$was" >/dev/null 2>&1; then
+        docker tag "sports-follow:$was" sports-follow:latest
+      else
+        say "there's no image of ${was:0:7} here, so sports-follow:latest is still ${sha:0:7}'s: deploy again before recreating any container"
+      fi
     fi
-    die "the migrations failed, so nothing was replaced${was:+ (${was:0:7} is still live)}"
+    die "the migrations failed, so nothing was replaced${was:+ (${was:0:7} is still live)}; after a lock timeout, deploy again once the job holding the table is done"
   fi
   # From here a rollback goes back to what was live before this deploy, whatever happens next.
   if [ -n "$was" ] && [ "$was" != "$sha" ]; then echo "$was" >"$STATE/previous"; fi
-  echo "$sha" >"$STATE/live"
+  # A first deploy is named live only once it's healthy: until then a new server can still be set up again
+  # (migrate-to-server.sh refuses one that names a live commit).
+  [ -z "$was" ] || echo "$sha" >"$STATE/live"
   if ! c up -d --remove-orphans || ! wait_healthy || ! pick_up_files; then
     # Its migrations are in by now, so going back is no riskier than a rollback by hand, and it's sooner.
     [ -n "$was" ] && [ "$was" != "$sha" ] || die "${sha:0:7} didn't start, and there's no earlier deploy to go back to"
@@ -77,6 +83,7 @@ do_deploy() {
     do_rollback
     die "${sha:0:7} failed to start, so ${was:0:7} is live again"
   fi
+  echo "$sha" >"$STATE/live"
 
   # Keep the live image and the previous one; older ones go.
   local keep tag
@@ -101,11 +108,14 @@ do_rollback() {
   say "rolling back from ${was:0:7} to $(git log -1 --format='%h %s' "$to")"
   git checkout --quiet --detach "$to"
   docker tag "sports-follow:$to" sports-follow:latest
+  # From here its image is the one any start runs, healthy or not, and whether or not this `up` works: status, the
+  # deploy summary and the next deploy go by what's written here. Its previous stays until it runs, so a rollback
+  # whose containers didn't start can be tried again.
+  echo "$to" >"$STATE/live"
   # Not the migrate service: the older code doesn't know the newer migrations, and the database keeps them.
   # The curator too, where that commit has one; one from before it had none, and --remove-orphans stops this one's.
-  c up -d --no-build --no-deps --remove-orphans caddy api worker gateway backup $(c config --services | grep -x curator || true)
-  # Its image runs now, healthy or not: status, the deploy summary and the next deploy go by what's written here.
-  echo "$to" >"$STATE/live"
+  c up -d --no-build --no-deps --remove-orphans caddy api worker gateway backup $(c config --services | grep -x curator || true) \
+    || die "${to:0:7} is tagged live, but its containers didn't start; a rollback tries again"
   rm -f "$STATE/previous"   # a second rollback would only go back to the bad deploy
   wait_healthy || die "${to:0:7} isn't healthy either; see: docker compose -f deploy/compose.yaml logs api"
   pick_up_files || die "${to:0:7} is live again, but Caddy or the backup container didn't take its files"

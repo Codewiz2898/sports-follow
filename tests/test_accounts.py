@@ -38,6 +38,7 @@ class Accounts:
         self.bumped = False
         self.blocked_ids: set[int] = set()  # blocked by an admin (admin.py)
         self.dropped = 0  # the device's teams that don't fit in the account (teams.merge)
+        self.dropped_players = self.dropped_games = 0  # and its players and games (accounts.adopt)
         self.fresh: set[int] = set()  # accounts made today; the rest stood a day before (accounts.standing)
 
     def find_or_create(self, db, email):
@@ -56,7 +57,8 @@ class Accounts:
         self.sessions[accounts.token_hash(token)] = signed
         if anon:
             self.adopted.append((anon, account_id))
-        return accounts.SignedIn(token=token, session_id=signed.session_id, fan_id=signed.fan_id, players=2 if anon else 0, teams_dropped=self.dropped if anon else 0)
+        return accounts.SignedIn(token=token, session_id=signed.session_id, fan_id=signed.fan_id, players=2 if anon else 0, teams_dropped=self.dropped if anon else 0,
+                                 players_dropped=self.dropped_players if anon else 0, games_dropped=self.dropped_games if anon else 0)
 
     def session_for(self, db, token_hash):
         self.lookups += 1
@@ -515,6 +517,29 @@ def test_signing_in_brings_this_devices_fan_and_counts_its_researches(api, store
     assert api.queue.options == {"_defer_by": 60, "trace": {"rid": answer.headers["x-request-id"]}}  # logged under the sign-in's id
 
 
+def test_what_a_sign_in_brings_shows_in_the_accounts_apps_open_on_other_devices(api, store, outbox):
+    """The players, teams and games a device brought as it signed in showed in the account's apps open elsewhere only
+    at their stream's next connect (BUG-165): once they're in, the sign-in says so on the account's own channel, which
+    each of its open streams answers by sending the list again (tests/test_streams.py)."""
+    said: list[tuple[str, list]] = []
+
+    async def publish(channel, message):
+        said.append((channel, list(store.adopted)))
+        return 1
+
+    api.redis.publish = publish
+    sign_in(api, outbox)  # a device with nothing of its own to bring
+    assert said == []
+    assert sign_in(api, outbox, headers=cookies(fan="anon-1")).status_code == 200
+    assert said == [("follows:acct-1", [("anon-1", 1)])]  # said once they're in
+
+    async def down(channel, message):
+        raise ConnectionError("Redis is restarting")
+
+    api.redis.publish = down  # the sign-in stands all the same: the apps catch up as their streams connect again
+    assert sign_in(api, outbox, headers=cookies(fan="anon-2")).json()["players_added"] == 2
+
+
 def test_an_accounts_fan_id_is_never_taken_from_a_fan_cookie(api, store, monkeypatch):
     """Ids from before cookies were signed are taken unsigned if they hold something; an account's never is."""
     monkeypatch.setattr(server, "_owns_anything", lambda db, fan: True)
@@ -744,6 +769,16 @@ def test_the_fan_is_told_how_many_of_the_devices_teams_didnt_fit_in_the_account(
     store.dropped = 0
     _, back = go_to_google(api, google, fan="anon-h")
     assert back.headers["location"] == "/account?welcome=2"
+
+
+def test_the_fan_is_told_how_many_of_the_devices_players_and_games_didnt_fit_in_the_account(api, store, outbox, google):
+    """BUG-328: an account follows at most follows.MAX players and matches.MAX games, and the device's that didn't fit
+    went without a word. The answer says how many of each, and so does Google's way back to the app."""
+    store.dropped_players, store.dropped_games = 4, 2
+    answer = sign_in(api, outbox, headers=cookies(fan="anon-1")).json()
+    assert (answer["players_added"], answer["teams_dropped"], answer["players_dropped"], answer["games_dropped"]) == (2, 0, 4, 2)
+    _, back = go_to_google(api, google)
+    assert back.headers["location"] == "/account?welcome=2&players_dropped=4&games_dropped=2"
 
 
 @pytest.mark.parametrize("claims", [

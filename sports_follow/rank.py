@@ -390,7 +390,8 @@ def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again:
     time. A row the judge couldn't answer for now is unjudged still: the model declined it or answered off the
     schema, and it waits days before it's asked again, then is held back for good (SPOILT); for any other reason,
     it's asked again at the next run. So are the rows left when the run has taken `within` seconds or the curator
-    is stopping. With again, every row is asked, held back or waiting.
+    is stopping. With again, every row is asked, held back or waiting. Never one of a video an admin hid or fans'
+    apps took out (FeedCandidate.served): it's never served, so not paid for, until it's back.
 
     A video found for several players as their team's (about_team) is one share about the team: the judge reads it
     once, for the first of them, and its verdict is theirs too; one judged so before (not again) is theirs as it is."""
@@ -399,6 +400,7 @@ def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again:
     with db.session() as session:
         query = select(FeedCandidate.id, FeedCandidate.player_id, FeedCandidate.source, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate,
                        FeedCandidate.features, FeedCandidate.judge_tries)  # fmt: skip
+        query = query.where(FeedCandidate.review.is_distinct_from("hidden"), FeedCandidate.unplayable_at.is_(None))  # never served: never paid for
         if not again:
             query = query.where(FeedCandidate.verdict.is_(None), or_(FeedCandidate.judge_after.is_(None), FeedCandidate.judge_after <= now))
         rows = session.execute(query.order_by(FeedCandidate.fetched_at.desc(), FeedCandidate.id).limit(limit)).all()
@@ -601,14 +603,14 @@ def _stories(session: Session, rows: Sequence[Any], published: dict[int, datetim
     return out
 
 
-def cards(now: datetime | None = None) -> dict[str, int]:
+def cards(now: datetime | None = None, players: Iterable[int] | None = None) -> dict[str, int]:
     """After ranking: each player's served stories (news.py) onto their card as "stories" (feed.news_for), so every
     card that leaves the server carries them, a page's, a stream's or the Android app's, beside the research agent's
     news, which stays under "news"; taken off once none is served. A player a live source has has the publishers'
     news alone (BHA-334): the agent's that a build before they were bound left on the card goes here too, without
     waiting for an agent run that never comes for them (pipeline.agent_due). A card is written only where it
     changes, under its row's lock, its version moved on, and published as any card is; one another writer replaced
-    meanwhile is put right at the next run."""
+    meanwhile is put right at the next run. Given players, only theirs (an admin's word on a story: admin.py)."""
     from . import bus
     from .feed import news_for  # feed.py reads this module's helpers; this one of its, here only
 
@@ -620,6 +622,9 @@ def cards(now: datetime | None = None) -> dict[str, int]:
             select(PlayerCard.player_id).join(SourceBinding, SourceBinding.player_id == PlayerCard.player_id)
             .where(SourceBinding.purpose == "fixtures", SourceBinding.adapter.in_(list(ADAPTERS)), PlayerCard.card["news"] != literal([], JSONB))
         ))  # fmt: skip
+        if players is not None:
+            only = set(players)
+            ids, bound = ids & only, bound & only
         served = news_for(session, sorted(ids), now, strict=True)  # a failed read is an error, not every story gone
         for pid in sorted(ids | bound):
             row = session.get(PlayerCard, pid, with_for_update=True)

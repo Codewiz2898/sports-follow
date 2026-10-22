@@ -9,12 +9,14 @@ changed: at once when the score (its sides) has, else at most every THROTTLE sec
 ticks every poll doesn't send a card each time; a change that waited goes with a later poll, as polls go on
 while the game does. A card that hasn't changed goes again every REFRESH seconds, as the phone takes down a card
 nothing has come for in a while (a chess player's long think, a cricket innings break); one stopped for the day (a Test
-at stumps: Sport.paused) is taken down instead, as at its end, and goes up afresh as play resumes. When a game whose
+at stumps, a limited-overs match rained off past its day's play: Sport.paused) is taken down instead, as at its end, and
+goes up afresh as play resumes. When a game whose
 card went out is over (a final poll, or the schedule closing it without one: structured.finish), its end goes, once.
 Redis keeps what each game's card last showed, and when.
 
 Who gets a game's card: the fans who'd hear its key moments (a level of key or everything, not results only or
-off) by a player in it they follow, by the game itself (matches.py, not lapsed) or by a team in it (teams.py),
+off) by a player in it they follow (not one its team sheet leaves out: Sport.left_out), by the game itself
+(matches.py, not lapsed) or by a team in it (teams.py),
 and haven't muted it; on their Android devices only (a browser's push can't be updated in place), the newest
 notify.MAX_DEVICES each, as a moment's push goes, less a phone with live cards off (Alerts' Live scores) or that
 stopped this game's (Stop live card on it): the app would throw its cards away (android). Each card names the
@@ -40,8 +42,10 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Collection
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import select
@@ -73,7 +77,8 @@ OVER = ("final", "postponed")  # a poll's statuses that end a game's card (a gam
 # an end is never sent before the card it takes down, nor a score that's been passed. Each card's pushes go at once
 # (_wire). The worker gives each a connection.
 _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="livecard")
-_waiting: dict[int, tuple[str, dict[str, Any] | None, dict[str, str]]] = {}  # each game's newest card or end not yet sent, and its board
+# Each game's newest card or end not yet sent, its board, and the players in it its team sheet leaves out.
+_waiting: dict[int, tuple[str, dict[str, Any] | None, dict[str, str], frozenset[int]]] = {}
 _sending: set[int] = set()  # the games a thread is sending for
 _lock = threading.Lock()
 # One card to one device: apart from a moment's pushes (notify._wire), so a goal never waits behind a card.
@@ -143,16 +148,17 @@ def boards(db: Session, event_ids: set[int] | list[int]) -> dict[int, Board]:
 # ---------------------------------------------------------------- live cards
 
 
-def polled(event: Event, snap: Snapshot) -> None:
+def polled(event: Event, snap: Snapshot, out: Collection[int] = ()) -> None:
     """A game's poll, committed (structured.apply_poll): its live card goes out if it's live and what the card shows
     has changed (at once for the score, else at most every THROTTLE seconds), or its end if it's over and a card
     went out. Decided here, against what Redis keeps of the game's last card; sent in the background, so the poll
-    never waits on FCM. Never raises: a card is worth less than the poll."""
+    never waits on FCM. `out` is the followed players in it its team sheet leaves out (Sport.left_out): not in the
+    game, so its card isn't theirs (audience). Never raises: a card is worth less than the poll."""
     if not fcm.enabled():
         return
     try:
         if snap.status == "live":
-            _live(event, snap)
+            _live(event, snap, out)
         elif snap.status in OVER:
             ended([event.id])
     except Exception:
@@ -185,24 +191,25 @@ def _key(event_id: int) -> str:
     return f"livecard:{event_id}"
 
 
-def _live(event: Event, snap: Snapshot) -> None:
+def _live(event: Event, snap: Snapshot, out: Collection[int] = ()) -> None:
     """Send a live game's card if what it shows has changed since the last one: at once if its sides (the score)
     have, else once THROTTLE seconds have passed since the last. One stopped for the day (Sport.paused: a Test at
-    stumps) has its card taken down instead, as at its end, and a fresh one goes up as play resumes (BUG-186)."""
-    if sport_of(event.sport, snap.state).paused(snap.state, snap.score_label, snap.clock_label):
+    stumps, a limited-overs match rained off for the night) has its card taken down instead, as at its end, and a
+    fresh one goes up as play resumes (BUG-186, BUG-302)."""
+    now = time.time()
+    if sport_of(event.sport, snap.state).paused(snap.state, snap.score_label, snap.clock_label, event.start_utc, datetime.fromtimestamp(now, timezone.utc)):
         ended([event.id])
         return
     made = card(event, snap)
     shows = json.dumps([made[k] for k in ("sides", "status", "title", "progress", "marks")], ensure_ascii=False)
     redis = bus.sync_redis()
     last = json.loads(cast(str, redis.get(_key(event.id))) or "null") or {}
-    now = time.time()
     if last.get("shows") == shows and now - float(last.get("at") or 0) < REFRESH:
         return  # nothing new to show, and the phone still has it
     if last.get("sides") == made["sides"] and now - float(last.get("at") or 0) < THROTTLE:
         return  # only the clock moved, and a card went out a moment ago: a later poll sends it
     redis.set(_key(event.id), json.dumps({"at": now, "sides": made["sides"], "shows": shows}), ex=KEEP)
-    _queue(event.id, "live", made, on_board(event, snap))
+    _queue(event.id, "live", made, on_board(event, snap), out)
 
 
 def on_board(event: Event, snap: Snapshot) -> dict[str, str]:
@@ -228,10 +235,10 @@ def ended(event_ids: list[int]) -> None:
         log.exception("ending live cards for events %s failed", event_ids)
 
 
-def _queue(event_id: int, kind: str, made: dict[str, Any] | None, board: dict[str, str] | None = None) -> None:
+def _queue(event_id: int, kind: str, made: dict[str, Any] | None, board: dict[str, str] | None = None, out: Collection[int] = ()) -> None:
     """Send a game's card or end once its last one has gone, in place of any of its own still waiting."""
     with _lock:
-        _waiting[event_id] = (kind, made, board or {})
+        _waiting[event_id] = (kind, made, board or {}, frozenset(out))
         if event_id in _sending:
             return  # the thread sending this game's last one sends this one next
         _sending.add(event_id)
@@ -249,18 +256,18 @@ def _drain(event_id: int) -> None:
         _send_safely(event_id, *job)
 
 
-def _send_safely(event_id: int, kind: str, made: dict[str, Any] | None, board: dict[str, str] | None = None) -> None:
+def _send_safely(event_id: int, kind: str, made: dict[str, Any] | None, board: dict[str, str] | None = None, out: Collection[int] = ()) -> None:
     try:
-        send(event_id, kind, made, board)
+        send(event_id, kind, made, board, out)
     except Exception:
         log.exception("sending event %s's %s card failed", event_id, kind)
 
 
-def send(event_id: int, kind: str, made: dict[str, Any] | None = None, board: dict[str, str] | None = None) -> int:
+def send(event_id: int, kind: str, made: dict[str, Any] | None = None, board: dict[str, str] | None = None, out: Collection[int] = ()) -> int:
     """A game's live card ("live", as polled: card()) or its end ("end", its board read back) to the Android devices
     of every fan who should have it (the module docstring); each live card with the fan's own players' lines, the
-    board's players (on_board) where it's under several fixtures. Each device's health is settled as after a moment's
-    push. Returns how many devices took it."""
+    board's players (on_board) where it's under several fixtures, none its team sheet leaves `out`. Each device's
+    health is settled as after a moment's push. Returns how many devices took it."""
     live = kind == "live"
     with session() as db:
         if made is None:
@@ -272,7 +279,7 @@ def send(event_id: int, kind: str, made: dict[str, Any] | None = None, board: di
             made = {**made, "live": "0"}  # it's over, or no longer polled live, whatever its last poll said
         found = structured.boards(db, [event_id]).get(event_id) if live and board else None
         on = _players_on(event_id, board or {}, found) if found else {}
-        fans = audience(db, event_id, live, on, set(found.events.values()) if found else set())
+        fans = audience(db, event_id, live, on, set(found.events.values()) if found else set(), out)
         theirs = lines(db, event_id, fans, on) if live else {}
         devices = android(db, list(fans), event_id)
         # The fans whose phones this game's last card went to and who don't hear it now (they muted it, stopped
@@ -319,11 +326,14 @@ def _players_on(event_id: int, board: dict[str, str], found: structured.Fixtures
     return {player_id: board.get(external, "") for external, player_id in found.players.items() if found.events.get(player_id) == event_id or found.events.get(player_id) in lately}
 
 
-def audience(db: Session, event_id: int, live: bool = True, on: dict[int, str] | None = None, fixtures: set[int] | None = None) -> dict[str, list[int]]:
+def audience(db: Session, event_id: int, live: bool = True, on: dict[int, str] | None = None, fixtures: set[int] | None = None,
+             out: Collection[int] = ()) -> dict[str, list[int]]:
     """The fans who should have a game's live card (live), or its end (the module docstring), each with the players
-    they follow in it, those set to off left out: whom their card names. Where the game is under several fixtures,
-    `on` is the players on its board (_players_on), some of them under its other `fixtures`, and muting any of them
-    mutes its card; a fan who has it from another of them isn't here."""
+    they follow in it, those set to off left out: whom their card names. A player its team sheet leaves `out` (a
+    cricketer not in the XI: Sport.left_out) isn't in it, though their next fixtures read hasn't yet taken them out
+    (structured.unpicked): their fans don't have its card for them (BUG-303). Where the game is under several
+    fixtures, `on` is the players on its board (_players_on), some of them under its other `fixtures`, and muting any
+    of them mutes its card; a fan who has it from another of them isn't here."""
     from . import teams  # a team's games are followed games (teams reads the poller that calls here)
 
     levels: dict[str, set[str]] = {}
@@ -331,6 +341,8 @@ def audience(db: Session, event_id: int, live: bool = True, on: dict[int, str] |
     hearing: dict[str, list[int]] = {}  # theirs here at a level that has the card
     for fan, player_id, rules in db.execute(select(Follow.fan_id, Follow.player_id, Follow.alert_rules).join(EventPlayer, EventPlayer.player_id == Follow.player_id)
                                             .where(EventPlayer.event_id == event_id).order_by(Follow.id)):
+        if player_id in out:
+            continue
         level = (rules or {}).get("level", DEFAULT_LEVEL)
         levels.setdefault(fan, set()).add(level)
         if level != "off":

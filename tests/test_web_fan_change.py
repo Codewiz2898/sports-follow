@@ -22,7 +22,8 @@ SCRIPT = """
 import { PHONE_KEPT, WEB_KEPT, welcome } from %(module)s
 
 const said = [[0, 0], [1, 0], [3, 0], [3, 1], [0, 15], [2, 15]].map(([players, teams]) => welcome(players, teams))
-console.log(JSON.stringify({ said, web: WEB_KEPT, phone: PHONE_KEPT }))
+const dropped = [[2, 0, 1, 0], [2, 0, 4, 0], [0, 0, 0, 1], [2, 15, 4, 0], [2, 1, 1, 3]].map(([added, teams, players, games]) => welcome(added, teams, players, games))
+console.log(JSON.stringify({ said, dropped, web: WEB_KEPT, phone: PHONE_KEPT }))
 """
 
 
@@ -46,6 +47,21 @@ def test_a_sign_in_says_what_came_over_and_how_many_teams_didnt_fit():
     ]
 
 
+def test_a_sign_in_says_how_many_players_and_games_didnt_fit():
+    # BUG-328: an account follows at most so many players and games too, and the device's that didn't fit went unsaid.
+    assert run()["dropped"] == [
+        "Signed in. The 2 players you followed on this device are in your account now. "
+        "One player you followed on this device didn't fit: your account follows as many players as it can.",
+        "Signed in. The 2 players you followed on this device are in your account now. "
+        "4 players you followed on this device didn't fit: your account follows as many players as it can.",
+        "Signed in. One game you followed on this device didn't fit: your account follows as many games as it can.",
+        "Signed in. The 2 players you followed on this device are in your account now. "
+        "4 players and 15 teams you followed on this device didn't fit: your account follows as many as it can.",
+        "Signed in. The 2 players you followed on this device are in your account now. "
+        "One player, one team and 3 games you followed on this device didn't fit: your account follows as many as it can.",
+    ]
+
+
 def kept(path: str, name: str) -> str:
     """The storage key a module of the app keeps something of the fan's under (its `const NAME = '…'`)."""
     found = re.search(rf"const {name} = '([^']+)'", (ROOT / path).read_text())
@@ -55,10 +71,15 @@ def kept(path: str, name: str) -> str:
 
 def test_every_key_a_device_keeps_of_its_fan_is_forgotten_as_it_becomes_another():
     found = run()
-    # The fan's last look at Alerts, at the Feed tab and at each player's circle, and the address a code went to.
+    # The fan's last look at Alerts, at the Feed tab and at each player's circle, and the address a code went to; on
+    # the web too, the save nudge they put away and the link they came by, told (BUG-281): the next fan on the device
+    # is offered the nudge, and where they came from is counted.
     assert set(found["web"]) == {kept("web/src/activity.tsx", "SEEN"), kept("web/src/feedSeen.ts", "OPENED"), kept("web/src/feedSeen.ts", "SEEN"),
-                                 kept("web/src/pages/AccountPage.tsx", "PENDING")}
+                                 kept("web/src/pages/AccountPage.tsx", "PENDING"), kept("web/src/pages/TodayPage.tsx", "NUDGE"), kept("web/src/visit.ts", "NOTED")}
     assert set(found["phone"]) == {kept("mobile/src/activity.tsx", "SEEN"), kept("mobile/src/feedSeen.ts", "OPENED"), kept("mobile/src/feedSeen.ts", "SEEN"),
-                                   kept("mobile/src/app/account.tsx", "PENDING")}
+                                   kept("mobile/src/app/account.tsx", "PENDING"),
+                                   # Today's save nudge dismissed, and the link the fan came from told (BUG-281): the next
+                                   # fan on the phone is offered the one and counted from the other.
+                                   kept("mobile/src/app/index.tsx", "NUDGE"), kept("mobile/src/visit.ts", "NOTED")}
     # Both apps forget them all as they start over, not one of them.
     assert "WEB_KEPT" in (ROOT / "web/src/account.tsx").read_text() and "PHONE_KEPT" in (ROOT / "mobile/src/account.tsx").read_text()

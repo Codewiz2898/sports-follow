@@ -70,9 +70,10 @@ def test_a_cursor_keeps_its_time_and_place_and_one_never_made_is_refused():
     # One from days ago carries on in today's order, from its last item.
     old = feed._write_cursor(NOW - timedelta(days=5), 20, ["0123456789abcdef"])  # pyright: ignore[reportPrivateUsage]
     assert feed._read_cursor(old, NOW) == (NOW, 20, ("0123456789abcdef",))  # pyright: ignore[reportPrivateUsage]
-    # It keeps a page's last few, and one made before it did (its last item alone) is still read.
-    assert len(feed._read_cursor(feed._write_cursor(NOW, 20, ["0123456789abcdef"] * 9), NOW)[2]) == feed.CURSOR_TAIL  # pyright: ignore[reportPrivateUsage]
-    assert len(feed._write_cursor(NOW, 100_000, ["0123456789abcdef"] * 9)) <= 200  # pyright: ignore[reportPrivateUsage]  # the route's limit
+    # It keeps the last few served, and one made before it did (its last item alone) is still read.
+    many = ["0123456789abcdef"] * (feed.CURSOR_TAIL + 4)
+    assert len(feed._read_cursor(feed._write_cursor(NOW, 20, many), NOW)[2]) == feed.CURSOR_TAIL  # pyright: ignore[reportPrivateUsage]
+    assert len(feed._write_cursor(NOW + timedelta(days=36500), 100_000, many)) <= feed.CURSOR_LENGTH  # pyright: ignore[reportPrivateUsage]  # the route's limit
     before = base64.urlsafe_b64encode(json.dumps([int(NOW.timestamp()), 20, "0123456789abcdef"]).encode()).decode().rstrip("=")
     assert feed._read_cursor(before, NOW) == (NOW, 20, ("0123456789abcdef",))  # pyright: ignore[reportPrivateUsage]
     for bad in ("", "not base64!", "W10", "WzEsMiwzXQ", feed._write_cursor(NOW, 1, ["x"]).replace("A", "B"),  # pyright: ignore[reportPrivateUsage]
@@ -192,6 +193,53 @@ def test_a_page_carries_on_after_the_last_item_still_there_when_the_page_ended_o
     legacy = base64.urlsafe_b64encode(json.dumps([int(NOW.timestamp()), 3, v4]).encode()).decode().rstrip("=")
     kept[gukesh] = [c for c in kept[gukesh] if c.item.title != "v4"]  # v1, v2, v7, v8
     assert [e.item.title for e in feed.page(db, "fan", now=NOW + timedelta(minutes=6), limit=3, cursor=legacy).items] == ["v7", "v8"]
+
+
+@needs_db
+def test_a_page_serves_what_the_players_turns_moved_up_when_an_item_before_it_left_every_feed(db, monkeypatch):  # noqa: F811
+    # BUG-121, reopened: with one item gone from every feed, the players' turns closed up round the gap, so the next
+    # page, read on from where the last one ended, skipped the item that moved up into the last page's span (and the
+    # one after that page served an earlier page's item again).
+    rohit = player(db, "rohit", {"player": {"name": "Rohit Sharma", "sport": "cricket"}, "news": []})
+    kohli = player(db, "kohli", {"player": {"name": "Virat Kohli", "sport": "cricket"}, "news": []})
+    # Best first: r1, k2, r2, k3, r3, k4, ...: the two take turns down it.
+    kept = {rohit: [Candidate(item(f"r{i}"), score=1 - (2 * i - 1) / 100, channel=f"r{i}") for i in range(1, 7)],
+            kohli: [Candidate(item(f"k{i}"), score=1 - (2 * i - 2) / 100, channel=f"k{i}") for i in range(2, 8)]}
+    monkeypatch.setattr(feed, "judged", lambda db, ids, now=None: {i: list(kept[i]) for i in ids if i in kept})
+    follow(db, "fan", rohit, kohli)
+
+    def gone(*titles: str) -> None:  # an admin hid it, the weekly check dropped it: out of every fan's feed
+        for pid in kept:
+            kept[pid] = [c for c in kept[pid] if c.item.title not in titles]
+
+    one = feed.page(db, "fan", now=NOW, limit=3)
+    assert [e.item.title for e in one.items] == ["r1", "k2", "r2"]
+    gone("k2")  # now r1, k3, r2, k4, ...: k3 moved up between the last page's two
+    two = feed.page(db, "fan", now=NOW + timedelta(minutes=2), limit=3, cursor=one.cursor)
+    assert [e.item.title for e in two.items] == ["k3", "k4", "r3"]
+    three = feed.page(db, "fan", now=NOW + timedelta(minutes=4), limit=3, cursor=two.cursor)
+    assert [e.item.title for e in three.items] == ["k5", "r4", "k6"]  # not r2 again
+    gone("r1")  # from the first page: each of Rohit's moves up a place
+    four = feed.page(db, "fan", now=NOW + timedelta(minutes=6), limit=3, cursor=three.cursor)
+    assert [e.item.title for e in four.items] == ["r5", "r6", "k7"] and four.cursor is None
+    served = [e.item.title for p in (one, two, three, four) for e in p.items]
+    assert sorted(served) == sorted({*served}) and {*served} == {"r1", "k2", *(f"r{i}" for i in range(2, 7)), *(f"k{i}" for i in range(3, 8))}
+
+
+@needs_db
+def test_a_page_serves_what_moved_up_into_the_place_of_the_last_pages_first_item_since_gone(db, monkeypatch):  # noqa: F811
+    # The last page's first item gone, the next of its player's takes its place, ahead of everything that page served.
+    rohit = player(db, "rohit", {"player": {"name": "Rohit Sharma", "sport": "cricket"}, "news": []})
+    kohli = player(db, "kohli", {"player": {"name": "Virat Kohli", "sport": "cricket"}, "news": []})
+    kept = {rohit: [Candidate(item("r1"), score=0.9, channel="r1"), Candidate(item("r2"), score=0.8, channel="r2")],
+            kohli: [Candidate(item("k1"), score=0.7, channel="k1"), Candidate(item("k2"), score=0.6, channel="k2")]}
+    monkeypatch.setattr(feed, "judged", lambda db, ids, now=None: {i: list(kept[i]) for i in ids if i in kept})
+    follow(db, "fan", rohit, kohli)
+    one = feed.page(db, "fan", now=NOW, limit=2)
+    assert [e.item.title for e in one.items] == ["r1", "k1"]
+    kept[rohit] = kept[rohit][1:]  # r1 gone: now r2, k1, k2, r2 ahead of the k1 the last page served
+    two = feed.page(db, "fan", now=NOW + timedelta(minutes=2), limit=2, cursor=one.cursor)
+    assert [e.item.title for e in two.items] == ["r2", "k2"] and two.cursor is None
 
 
 @needs_db

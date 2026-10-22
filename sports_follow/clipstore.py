@@ -1,6 +1,7 @@
 """Where clips' videos and poster frames are kept (clips.py): an S3-compatible bucket, Cloudflare R2 in
 production, read by fans through a CDN domain in front of it. The server never carries a video itself: it
-hands the uploader a short-lived signed URL to put the file straight into the bucket, then checks it's there.
+hands the uploader a short-lived signed URL to put the file straight into the bucket, then checks it's there and
+copies it, in the bucket, to the name fans are served (clips.upload_key): a signed URL can't be taken back.
 
 Settings, all from the environment (README):
 

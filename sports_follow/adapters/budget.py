@@ -247,7 +247,7 @@ def _store_call(method: str, *args: Any) -> Any:
         return getattr(_fallback, method)(*args)
 
 
-# The fans' share is counted under its bucket's name and this (budget:pubg::fan:60:<n>): not a bucket of its own.
+# The fans' share is counted under its bucket's name and this (budget:pubg::fan:60:s<n>): not a bucket of its own.
 FAN = ":fan"
 
 
@@ -324,7 +324,9 @@ def take(budget: Budget, bucket: str = "", lane_name: str | None = None, cost: i
     if lane_name == "fan" and budget.fan is not None and budget.windows:
         w = budget.windows[0]
         why = f"{budget.name}: fans' share ({budget.fan} {per(w.seconds)}) is spent"
-        counts.append((f"budget:{budget.name}:{bucket}{FAN}:{w.seconds}:{_start(w, now)}", _ttl(w), budget.fan, why, []))
+        # Counted as its window is: under an hour, over the last span of it, so it holds across a minute's edge (BUG-275).
+        key, *before = _keys(budget, f"{bucket}{FAN}", w, now)
+        counts.append((key, _ttl(w), budget.fan, why, before))
     for w in budget.windows:
         where = f"{budget.name}{f' ({bucket})' if bucket else ''}"
         why = f"{where}: the {lane_name} share of its {w.requests} requests {per(w.seconds)} is spent" if keep else f"{where}: its {w.requests} requests {per(w.seconds)} are spent"

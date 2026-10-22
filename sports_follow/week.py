@@ -27,13 +27,13 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import Select, and_, exists, or_, select, tuple_
+from sqlalchemy import Select, and_, exists, or_, select
 from sqlalchemy.orm import Session, aliased
 
-from . import news, rank, registry, sports
+from . import feed, news, notify, rank, registry, sports
 from .adapters import ADAPTERS, NEWS, source_name
 from .moments import Found
-from .models import Event, EventPlayer, FeedCandidate, Follow, Moment, NewsItem, Player, PlayerIdentity, PlayerLine, Sidelined, Team, TeamFollow
+from .models import Event, EventPlayer, FeedCandidate, FeedFeedback, Follow, Moment, NewsItem, Player, PlayerIdentity, PlayerLine, Sidelined, Team, TeamFollow
 from .naming import team_key
 
 DAYS = 7
@@ -81,9 +81,10 @@ def mine(db: Session, fan: str) -> dict[str, Any]:
 def posters(db: Session, fan: str, now: datetime | None = None) -> list[dict[str, Any]]:
     """The fan's players' big moments since a week ago, one poster per player and game, the biggest first
     (the priority of the moment it's read from), then the newest. A game of theirs that finished in the week
-    with no moment that makes a poster is read off its result instead (_finished)."""
+    with no moment that makes a poster is read off its result instead (_finished). None of a sport turned off
+    (_seen)."""
     since = (now or datetime.now(timezone.utc)) - timedelta(days=DAYS)
-    rows = db.execute(_highs(Moment.created_at >= since).join(Follow, and_(Follow.player_id == Moment.player_id, Follow.fan_id == fan))).all()
+    rows = _seen(db, db.execute(_highs(Moment.created_at >= since).join(Follow, and_(Follow.player_id == Moment.player_id, Follow.fan_id == fan))).all())
     games: dict[tuple[int, int | str], list[tuple[Moment, Player, str | None]]] = {}
     for m, player, title in rows:
         games.setdefault((player.id, m.event_id if m.event_id is not None else f"m{m.id}"), []).append((m, player, title))
@@ -97,9 +98,9 @@ def posters(db: Session, fan: str, now: datetime | None = None) -> list[dict[str
 def game(db: Session, player_id: int, event_id: int) -> dict[str, Any] | None:
     """One player's game as This week makes it a poster, however long ago it was: its biggest moment that
     makes one, or, with none, its result's once it's over. A shared link to the game previews it (share.py).
-    The poster also carries the game's title and competition. None for a game without a poster, or one
-    the player isn't in."""
-    rows = db.execute(_highs(Moment.player_id == player_id, Moment.event_id == event_id)).all()
+    The poster also carries the game's title and competition. None for a game without a poster, one the
+    player isn't in, or one of a sport turned off."""
+    rows = _seen(db, db.execute(_highs(Moment.player_id == player_id, Moment.event_id == event_id)).all())
     made = _of_moments(rows) if rows else None
     if made is None:
         made = next((p for row in db.execute(_results(EventPlayer.player_id == player_id, EventPlayer.event_id == event_id)) if (p := _of_result(*row))), None)
@@ -120,6 +121,15 @@ def _highs(*where: Any) -> Select[Moment, Player, str]:
         .where(Moment.level == "key", Moment.corrects.is_(None), ~exists().where(correction.corrects == Moment.id), *where)
         .order_by(Moment.id)
     )
+
+
+def _seen(db: Session, rows: Sequence[Any]) -> list[tuple[Moment, Player, str | None]]:
+    """The key moments (_highs) a poster may be read from: none of a sport turned off, and of a game called off and
+    played again under its fixture, only the replay's, since it began (notify.editions): the goals of the game
+    abandoned are no poster of the one played again."""
+    began = notify.editions(db, [m.event_id for m, _, _ in rows])
+    return [(m, player, title) for m, player, title in rows
+            if sports.on(player.sport) and not (m.event_id in began and m.created_at < began[m.event_id])]
 
 
 def _of_moments(game: Sequence[Any]) -> tuple[int, datetime, dict[str, Any]] | None:
@@ -159,7 +169,9 @@ def _of_result(event: Event, result: dict[str, Any] | None, player: Player, last
     """A finished game as a poster, as the player's sport words their line in it (Sport.finished_poster): the
     line from their stored result ("112 (98)"), with the stats of the last line stored for them, and the
     result from their side ("Won 2–1"). With its priority and the game's start, which dates it; it has no
-    moment (id None). None for a game without a high, or without a start."""
+    moment (id None). None for a game without a high, without a start, or of a sport turned off."""
+    if not sports.on(player.sport):
+        return None
     result, last = result or {}, last or {}
     line = {"headline": result.get("player_contribution") or last.get("headline") or "", "stats": last.get("stats") or []}
     poster = sports.of(player.sport).finished_poster(line, result.get("result") or "", versus(event.title, [*(player.teams or []), player.name]))
@@ -219,7 +231,8 @@ def wire(db: Session, fan: str, now: datetime | None = None) -> list[dict[str, A
 
 def _news(db: Session, fan: str, now: datetime) -> list[Row]:
     """The fan's players' line-ups and stories, newest first, none of a sport turned off. A player's line-up for a
-    game is its latest (a late change: "now on the bench"), and a story about two of the fan's players is one row."""
+    game is its latest (a late change: "now on the bench"), and a story about two of the fan's players is one row.
+    None the fan hid from their Feed (_hidden)."""
     rows = db.execute(
         select(Moment, Player, Event.title)
         .join(Follow, and_(Follow.player_id == Moment.player_id, Follow.fan_id == fan))
@@ -231,7 +244,8 @@ def _news(db: Session, fan: str, now: datetime) -> list[Row]:
         ))
         .order_by(Moment.id.desc())
     ).all()
-    found, linked = _stories(db, fan, now)
+    hidden = _hidden(db, fan)
+    found, linked = _stories(db, fan, now, hidden)
     ids = {int(m[1]) for moment, _, _ in rows if (m := _NEWS_KEY.search(moment.key))}
     stories = {n.id: n for n in db.scalars(select(NewsItem).where(NewsItem.id.in_(ids)))} if ids else {}
     told: set[tuple[str, int | None, int | None]] = set()  # line-ups by player and game, stories by id: newest first
@@ -251,8 +265,8 @@ def _news(db: Session, fan: str, now: datetime) -> list[Row]:
         # The kind the moment was told as: the story's row keeps the kind of whichever report stored it first.
         said = _NEWS_KIND.search(moment.title)
         kind = said[1] if said else story.kind if story else None
-        if story is None or kind not in NEWS_TAGS or not story.url or ("news", story.id, None) in told or story.url in linked:
-            continue  # gone, not a story the Wire tells, or on it already
+        if story is None or kind not in NEWS_TAGS or not story.url or ("news", story.id, None) in told or story.url in linked or feed.item_id(story.url) in hidden:
+            continue  # gone, not a story the Wire tells, on it already, or one the fan hid
         told.add(("news", story.id, None))
         found.append((moment.created_at, moment.id, row | {"tag": NEWS_TAGS[kind], "text": _plain(story.headline), "source": story.source or None, "url": story.url}))
     # When each reached us, as the Alerts list dates them: a story's own date is often a day with no time.
@@ -260,11 +274,18 @@ def _news(db: Session, fan: str, now: datetime) -> list[Row]:
     return [(at, row) for at, _, row in found]
 
 
-def _stories(db: Session, fan: str, now: datetime) -> tuple[list[tuple[datetime, int, dict[str, Any]]], set[str]]:
+def _hidden(db: Session, fan: str) -> set[str]:
+    """The items the fan hid from their Feed (not interested, not about the player, a report), by feed.item_id: a
+    story is one card, whichever player it was hidden from, and it's off the Wire too."""
+    return set(db.scalars(select(FeedFeedback.item_id).where(FeedFeedback.fan_id == fan)))
+
+
+def _stories(db: Session, fan: str, now: datetime, hidden: set[str]) -> tuple[list[tuple[datetime, int, dict[str, Any]]], set[str]]:
     """Each of the fan's players' best story of the last NEWS_DAYS that the curator served (news.py), and their
-    addresses: a story naming two of them once, with the first, and the other's next best in its place. Rows are
-    dated when the story was published, or reached us if that's earlier, as the agent's are: one linked to a player
-    only when a fan followed them, days after it ran, is as old as it is."""
+    addresses: a story naming two of them once, with the first, and the other's next best in its place, as in the
+    place of one the fan hid (`hidden`, by feed.item_id). Rows are dated when the story was published, or reached us
+    if that's earlier, as the agent's are: one linked to a player only when a fan followed them, days after it ran,
+    is as old as it is."""
     since = now - timedelta(days=NEWS_DAYS)
     rows = db.execute(
         select(FeedCandidate, Player)
@@ -279,7 +300,7 @@ def _stories(db: Session, fan: str, now: datetime) -> tuple[list[tuple[datetime,
     urls: set[str] = set()
     for row, player in rows:
         kept, verdict = row.candidate or {}, row.verdict or {}
-        if player.id in told or row.url in urls or verdict.get("kind") in NOT_ON_THE_WIRE or not kept.get("title") or not sports.on(player.sport):
+        if player.id in told or row.url in urls or verdict.get("kind") in NOT_ON_THE_WIRE or not kept.get("title") or not sports.on(player.sport) or feed.item_id(row.url) in hidden:
             continue
         published = rank.when(kept.get("published"))
         at = min(published, row.fetched_at) if published else row.fetched_at
@@ -302,15 +323,18 @@ def _facts(db: Session, fan: str, now: datetime) -> tuple[list[Row], list[Row]]:
     page names them. A fact opens their page here, or the source's athlete page if nobody
     follows them yet. Only the running sources' facts, and none about a player an operator removed."""
     since = now - timedelta(hours=FACT_HOURS)
-    spells = db.scalars(select(Sidelined).where(Sidelined.system.in_(list(ADAPTERS)), or_(Sidelined.out_at >= since, Sidelined.back_at >= since))).all()
+    recent = and_(Sidelined.system.in_(list(ADAPTERS)), or_(Sidelined.out_at >= since, Sidelined.back_at >= since))
+    spells = db.scalars(select(Sidelined).where(recent)).all()
     if not spells:
         return [], []
-    pairs = list({(s.system, s.athlete_id) for s in spells})
+    # The players bound by the spells' ids, joined in the query: a list of every spell's ids was more than the
+    # database would read once some thousands fell in the window (BUG-323).
+    listed = select(Sidelined.system, Sidelined.athlete_id).where(recent).distinct().subquery()
     held = {(system, xid): (player, followed) for system, xid, player, followed in db.execute(
         select(PlayerIdentity.system, PlayerIdentity.external_id, Player, Follow.id.is_not(None))
+        .join(listed, and_(listed.c.system == PlayerIdentity.system, listed.c.athlete_id == PlayerIdentity.external_id))
         .join(Player, Player.id == PlayerIdentity.player_id)
         .outerjoin(Follow, and_(Follow.player_id == Player.id, Follow.fan_id == fan))
-        .where(tuple_(PlayerIdentity.system, PlayerIdentity.external_id).in_(pairs))
     )}
     teams = {(system, xid) for system, xid in db.execute(select(Team.system, Team.external_id).join(TeamFollow, TeamFollow.team_id == Team.id).where(TeamFollow.fan_id == fan))}
     blocked = registry.blocked(db)

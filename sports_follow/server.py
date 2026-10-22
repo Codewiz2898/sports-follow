@@ -18,6 +18,7 @@ import re
 import secrets
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, MutableMapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -42,7 +43,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, controls, credits as credits_page, fansports, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
+from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, controls, credits as credits_page, fansports, fcm, feed, follows, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget, served
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, API_DOCS, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_LOOKUPS_PER_ADDRESS, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE
@@ -470,7 +471,7 @@ async def _tell_devices(fan: str = Depends(fan_id)) -> AsyncIterator[None]:
 TellsDevices = [Depends(_tell_devices, scope="function")]  # its word goes once the route's work is done, before the answer
 
 # Follows (of a player, a team or a game) one fan, and one client address, make an hour. A cookie is free, and a follow
-# without one is a new fan's, so a fan's own caps (PLAYERS_MAX, teams.MAX, matches.MAX) don't bound a script's
+# without one is a new fan's, so a fan's own caps (follows.MAX, teams.MAX, matches.MAX) don't bound a script's
 # (BUG-325). An IPv6 /64 is a household, and its /48 (_network) a home's or an office's every /64 at once; an IPv4
 # address can be a phone network's, shared by thousands of its fans (carrier-grade NAT), so it holds more, as with
 # STREAMS_PER_IPV4, and so does a /48, which a phone network may share among its subscribers too.
@@ -549,13 +550,23 @@ def _fan(request: Request, response: Response, signed_in: accounts.Signed | None
 # ---------------------------------------------------------------- health
 
 
+# Health's own threads for its database check, not the request threads in_db uses: a burst that kept all of those busy
+# (a herd of phones opening the Feed) held its answer, the proxy's and the uptime check's, for seconds (BUG-324).
+_health_threads = ThreadPoolExecutor(max_workers=2, thread_name_prefix="health")
+
+
 @app.get("/api/health")
 async def health(response: Response) -> dict[str, Any]:
     """For the proxy's and an uptime monitor's checks: the database and Redis answer. 503 if either doesn't.
     Also the commit this image was built from (null outside a deployed one), which the deploy workflow checks."""
     checks = {"db": False, "redis": False}
+
+    def db_answers() -> bool:
+        with session() as db:
+            return db.execute(select(1)).scalar() == 1
+
     try:
-        checks["db"] = await in_db(lambda db: db.execute(select(1)).scalar() == 1)
+        checks["db"] = await asyncio.get_running_loop().run_in_executor(_health_threads, db_answers)
     except Exception:  # noqa: BLE001 — any failure is "down"
         pass
     try:
@@ -1417,21 +1428,20 @@ async def research(fan: str = Depends(fan_id)) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- following
 
-# Players a fan follows at once: a few whole squads from campaign pages and their favourites besides, as teams
-# (teams.MAX, 30) and games (matches.MAX, 20) have theirs. Each followed player is read every half hour for good.
-PLAYERS_MAX = 100
-
 
 def _room_to_follow(db: Session, fan: str, player_id: int | None = None) -> None:
-    """Refuse (429) a follow past PLAYERS_MAX. A player the fan follows already is no new follow. With the player,
-    in the follow's transaction: one at a time per fan, so two follows at once can't both pass the count; without,
-    before anything is asked of a source."""
+    """Refuse (429) a follow past follows.MAX, of the follows that count (follows.counted: not a turned-off sport's).
+    A player the fan follows already is no new follow. With the player, in the follow's transaction: one at a time
+    per fan, so two follows at once can't both pass the count; without, before anything is asked of a source."""
     if player_id is not None:
         db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"follow:{fan}", 0))))
         if db.scalar(select(Follow.id).where(Follow.fan_id == fan, Follow.player_id == player_id)) is not None:
             return
-    if (db.scalar(select(func.count()).select_from(Follow).where(Follow.fan_id == fan)) or 0) >= PLAYERS_MAX:
-        raise HTTPException(429, f"You follow {PLAYERS_MAX} players already: unfollow one to follow another.")
+    n = follows.counted(db, fan)
+    if n > follows.MAX:  # a sport turned back on (follows.py)
+        raise HTTPException(429, f"You follow {n} players, more than the {follows.MAX} you can: unfollow {n - follows.MAX + 1} to follow another.")
+    if n == follows.MAX:
+        raise HTTPException(429, f"You follow {follows.MAX} players already: unfollow one to follow another.")
 
 
 def _registry_athlete(db: Session, body: dict) -> registry.Person | None:
@@ -1441,6 +1451,21 @@ def _registry_athlete(db: Session, body: dict) -> registry.Person | None:
     # Of the sports that run: with no sport given, a row of a turned-off one isn't taken for them.
     athlete = registry.get(db, qid, sport or None, only_running=True)
     return registry.Person.of(athlete) if athlete else None
+
+
+def _registry_holder(db: Session, person: registry.Person, said: bool) -> int | None:
+    """The player already here for a registry athlete (pipeline.registry_holder) of a sport that runs. With no sport
+    said, whoever holds their qid, unless that's their player in a sport turned off: then their player in the sport
+    _registry_athlete took, as if it had been said. Still one of a sport turned off, a 404 (BUG-097)."""
+    def runs(player_id: int) -> bool:
+        return sports.on(db.scalar(select(Player.sport).where(Player.id == player_id)))
+
+    holder = pipeline.registry_holder(db, person.qid, person.sport if said else None)
+    if holder is not None and not said and not runs(holder):
+        holder = pipeline.registry_holder(db, person.qid, person.sport)
+    if holder is not None and not runs(holder):
+        raise HTTPException(404, "No such athlete.")
+    return holder
 
 
 LEAGUE = re.compile(r"[a-z0-9][a-z0-9._-]{0,39}")  # "nba", "wta", "cs-go", "pubgmobile"
@@ -1494,20 +1519,20 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
     A registry athlete is found in their sport's live source by the id Wikidata has, or by name and a
     matching birth date; one no source confirms is built by the research agent, which counts as an
     AI research, and without research (config.RESEARCH) can't be followed. Asking a source counts against
-    the fan's and their address's minute (_source_lookup), and a fan follows at most PLAYERS_MAX players.
+    the fan's and their address's minute (_source_lookup), and a fan follows at most follows.MAX players.
     """
     from .config import RESEARCH
 
     person = await in_db(_registry_athlete, body) if body.get("qid") else None
     if body.get("qid") and person is None:
         raise HTTPException(404, "That athlete isn't in the player registry.")
-    await in_db(_room_to_follow, fan)
     taken: list[str] = []
     if person and not body.get("system"):
-        holder = await in_db(pipeline.registry_holder, person.qid, person.sport if body.get("sport") else None)
+        holder = await in_db(_registry_holder, person, bool(body.get("sport")))
         if holder is not None:
             player_id, created, ref = holder, False, None
         else:
+            await in_db(_room_to_follow, fan)  # past the cap, refused before a source is asked (save counts again)
             await _source_lookup(fan, address)
             found = await _resolve(person)
             if found is None and not RESEARCH:
@@ -1539,6 +1564,8 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
             raise HTTPException(400, "Pick an athlete from the search results.")
         if (system, athlete_id) in await in_db(registry.blocked):
             raise HTTPException(404, f"That athlete isn't on {APP_NAME}.")  # removed by an operator (players.py)
+        # Past the cap, refused before the source is asked, unless the fan follows them already (a page's Retry: BUG-328).
+        await in_db(_room_to_follow, fan, await in_db(_holder, system, athlete_id))
         await _source_lookup(fan, address)
         try:
             ref = await asyncio.to_thread(adapter.player, athlete_id, league)
@@ -1621,6 +1648,8 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
             target = pipeline.resolve_or_create(db, query) if query is not None else player
         except ValueError:
             return None
+        if not sports.on(cast(Player, target).sport):
+            raise HTTPException(404, "No such player.")  # a turned-off sport's page, by its name (by id: above)
         _room_to_follow(db, fan, cast(Player, target).id)  # (a player asked for by id was found above)
         db.execute(insert(Follow).values(fan_id=fan, player_id=target.id, alert_rules={}).on_conflict_do_nothing())
         card_row = db.get(PlayerCard, target.id)
@@ -1745,10 +1774,21 @@ async def _tell_signed_out(fan: str | None) -> None:
         log.warning("accounts: couldn't tell the account's open apps it was signed out: %s", exc)
 
 
+async def _tell_brought(fan: str) -> None:
+    """A device's players, teams and games came into the account as it signed in: a word on the account's own channel,
+    and each of its open streams sends its list again (my_stream), so its apps open on other devices show them at
+    once, not at their stream's next connect (BUG-165). A courtesy, as _tell_devices's word is."""
+    try:
+        await state["redis"].publish(bus.follows_channel(fan), "{}")
+    except Exception as exc:  # noqa: BLE001 — what came stays the account's either way
+        log.warning("accounts: couldn't tell the account's open apps what a sign-in brought: %s", exc)
+
+
 async def _sign_in(request: Request, response: Response, account_id: int, signed: accounts.Signed | None) -> dict[str, Any]:
     """Sign this device in to the account, bringing what its anonymous fan had (accounts.adopt). A
     session this device already had (signing in again, or as someone else) ends. The answer says how many
-    players came, and how many of the device's teams didn't fit in the account (teams.MAX), so the fan is told."""
+    players came, and how many of the device's teams, players and games didn't fit in the account (teams.MAX,
+    follows.MAX, matches.MAX), so the fan is told."""
     anon = await asyncio.to_thread(_cookie_fan, request)
     done = await in_db(accounts.sign_in, account_id, anon, signed.session_id if signed else None)
     if signed:
@@ -1763,9 +1803,11 @@ async def _sign_in(request: Request, response: Response, account_id: int, signed
         await state["redis"].delete(mine)
         # A follow or a device sent just before this, still under way, lands on the anonymous fan: move it too.
         await enqueue("adopt_stragglers", anon, account_id, done.session_id, _defer_by=60)
+        await _tell_brought(done.fan_id)
     _set_session(request, response, done.token)
     response.delete_cookie(FAN_COOKIE, httponly=True, samesite="lax", secure=_secure(request))
-    return {**(await in_db(accounts.describe, account_id) or {}), "players_added": done.players, "teams_dropped": done.teams_dropped}
+    return {**(await in_db(accounts.describe, account_id) or {}), "players_added": done.players, "teams_dropped": done.teams_dropped,
+            "players_dropped": done.players_dropped, "games_dropped": done.games_dropped}
 
 
 @app.get("/api/me/account")
@@ -1936,7 +1978,7 @@ async def google_callback(request: Request, state: str = "", code: str = "", err
         return back("/account?error=blocked")
     response = back("/account")
     done = await _sign_in(request, response, account_id, signed)
-    dropped = f"&teams_dropped={done['teams_dropped']}" if done["teams_dropped"] else ""
+    dropped = "".join(f"&{kind}={done[kind]}" for kind in ("teams_dropped", "players_dropped", "games_dropped") if done[kind])
     response.headers["location"] = f"/account?welcome={done['players_added']}{dropped}"
     return response
 
@@ -2780,10 +2822,28 @@ def player_feed(player_id: RowId, response: Response, fan: str = Depends(fan_id)
     return found
 
 
-@app.post("/api/players/{player_id}/feed/{item_id}/feedback")
+FEEDBACK_PER_ADDRESS = 300  # words on Feed items from one client address in an hour, by fans without an account: a request with no cookie is a new fan each time
+FEEDBACK_PER_IPV6_48 = 1200  # an hour, from one IPv6 /48's /64s together (_address_limits)
+FEEDBACK_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
+FEEDBACK_PER_ACCOUNT = 300  # a signed-in fan's in an hour, wherever from: fans behind one carrier address don't use up each other's
+
+
+async def _feedback_counted(request: Request, fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of)) -> None:
+    """For the Feed's feedback route: one word on an item, counted before it's kept (each is a row), against a
+    signed-in fan's own hour (FEEDBACK_PER_ACCOUNT), else their address's (FEEDBACK_PER_ADDRESS, and an IPv6 /48's
+    ceiling: _address_limits), as picks are. Past it, a 429."""
+    hour = int(time.time() // 3600)
+    if signed is not None:
+        await _take(f"feed-feedback:fan:{fan}:{hour}", FEEDBACK_PER_ACCOUNT, 7200, "That's a lot of feedback for one hour. Try again in a while.")
+    else:
+        await _take_address("feed-feedback", _address_limits(client_address(request), FEEDBACK_PER_ADDRESS, FEEDBACK_PER_IPV6_48, FEEDBACK_UNKNOWN_ADDRESS), str(hour),
+                            7200, "That's a lot of feedback from your network. Try again in a while.")  # fmt: skip
+
+
+@app.post("/api/players/{player_id}/feed/{item_id}/feedback", dependencies=[Depends(_feedback_counted)])
 def feed_feedback(player_id: RowId, item_id: str, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """What the fan said about an item from its "…" sheet ({"verdict": one of feed.VERDICTS}): it leaves
-    their feed at once, and the judge learns from it later."""
+    their feed at once, and the judge learns from it later. So many an hour (_feedback_counted)."""
     verdict = body.get("verdict")
     try:
         feed.feedback(db, fan, player_id, item_id, verdict if isinstance(verdict, str) else "")
@@ -2869,7 +2929,7 @@ def my_feed(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[s
 @app.get("/api/me/feed/items")
 def my_feed_items(
     response: Response,
-    cursor: Annotated[str | None, Query(max_length=200)] = None,
+    cursor: Annotated[str | None, Query(max_length=feed.CURSOR_LENGTH)] = None,
     player: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None,
     limit: Annotated[int, Query(ge=0, le=feed.MAX_PAGE)] = feed.PAGE,
     tz: Annotated[int, Query(ge=-12 * 60, le=14 * 60)] = 0,
@@ -3008,13 +3068,25 @@ def _search(q: str, sport: str | None, fan: str, may_ask: Callable[[], bool]) ->
         return {**found, "teams": teams.find(db, found.get("query") or q, found.get("sport"), fan)}
 
 
+MINUTE_SLOTS = 12  # a minute's requests are counted in twelve five-second slots (_in_minute)
+
+
 async def _in_minute(kind: str, fan: str, address: str | None, per_fan: int, per_address: int) -> bool:
-    """Count one of a fan's requests of a kind against their minute and their address's; False when either is
-    over. A minute starts at its first such request."""
+    """Count one of a fan's requests of a kind against their last minute and their address's; False when either is
+    over, and then it isn't counted. The last minute wherever it starts: counted in the five-second slot now and the
+    twelve before (one a slot longer, as adapters/budget.py counts a source's minute), so a burst across the end of
+    one minute gets no more than the limit (BUG-134: a minute that started at its first request let twice through)."""
+    slot = int(time.time() // (60 // MINUTE_SLOTS))
+    counted: list[str] = []
     for key, limit in [(f"{kind}:fan:{fan}", per_fan), *([(f"{kind}:address:{address}", per_address)] if address else [])]:
-        used = await state["redis"].incr(key)
-        await state["redis"].expire(key, 60, nx=True)  # the minute's end, set once (a count without one would never end)
-        if used > limit:
+        now = f"{key}:{slot}"
+        counted.append(now)
+        used = await state["redis"].incr(now)
+        await state["redis"].expire(now, 70, nx=True)  # past the last minute it's counted in (a count without one would never end)
+        before = await state["redis"].mget([f"{key}:{n}" for n in range(slot - MINUTE_SLOTS, slot)])
+        if used + sum(int(n or 0) for n in before) > limit:
+            for refused in counted:
+                await state["redis"].decr(refused)
             return False
     return True
 
@@ -3056,7 +3128,7 @@ async def registry_preview(request: Request, qid: str, sport: str | None = None,
     person = await in_db(_registry_athlete, {"qid": qid, "sport": sport})
     if person is None:
         raise HTTPException(404, "No such athlete.")
-    holder = await in_db(pipeline.registry_holder, person.qid, person.sport if sport else None)
+    holder = await in_db(_registry_holder, person, bool(sport))
     if holder is not None:
         return {"player_id": holder}
     await _source_lookup(fan, client_address(request))

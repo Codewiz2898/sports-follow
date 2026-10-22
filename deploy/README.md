@@ -453,10 +453,12 @@ the site.
   to you at once, and every morning at 09:00 (India) whatever is waiting then is (`deploy-summary.yml`;
   Actions → Deploy summary → Run workflow sends it now). Several merges in a day make one waiting
   deploy, one message when it starts and the morning's.
-- **Without a required reviewer** on `production`, nothing deploys by itself: the run fails and says so.
+- **Without a required reviewer** on `production`, no run deploys or rolls back, after CI or started by hand: it
+  fails and says so.
 - **Claude sessions never approve.** `gh` there runs as you, so GitHub would count their approval as yours; a hook
-  (`.claude/hooks/deploy_gate.py`) blocks approving or rejecting a deploy, changing the environment, and running
-  `deploy.sh deploy` or `rollback`. A session can start a run and send you its link.
+  (`.claude/hooks/deploy_gate.py`) blocks approving or rejecting a deploy, changing the environment, running
+  `deploy.sh deploy` or `rollback`, and deploying by hand over ssh (a checkout, a build or tag, the migrations).
+  A session can start a run and send you its link.
 
 **From GitHub, by hand:** Actions → Deploy → Run workflow, with `deploy` (the tip of main) or `rollback`.
 It waits for your approval too. A deploy goes ahead only if the CI workflow passed for that commit. A run
@@ -480,7 +482,10 @@ new worker starts them again as soon as it's up.
   server's checkout goes back to its commit. Each migration commits on its own (`migrations/env.py`), so
   when the second of three fails, the first stays applied: the old code keeps running on it, which is why
   a migration only adds (a column, a table, an index) and a later release takes away. Deploy the fix, which
-  carries on from there; or undo the applied one by hand (`c run --rm migrate alembic downgrade -1`).
+  carries on from there; or undo the applied one by hand (`c run --rm migrate alembic downgrade -1`). A
+  migration gives up after waiting 5 seconds for a lock (`SPORTS_FOLLOW_MIGRATION_LOCK_TIMEOUT`), so an
+  ALTER never holds a table's queries up longer, nor a `CONCURRENTLY` build the deploy: "lock timeout" means
+  a long job held the table. Deploy again once it's done; a build that stopped part way is made again.
 - **The new version doesn't get healthy, or Caddy refuses its Caddyfile:** the previous one comes back
   by itself, with its Caddyfile and backup script, and the deploy fails. Caddy keeps serving its old
   config until then. If the previous one doesn't get healthy in time either, it still runs, and
