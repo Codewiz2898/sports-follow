@@ -23,10 +23,11 @@ settles again.
 
 Fans see how everyone split once they've picked, or once the question's closed; friends' picks in a league once
 it's closed (before, only who has). While it's open the split shows as it stood when last refreshed, once SPLIT_FROM
-had picked and again each time SPLIT_EVERY more have, so it never moves with one friend's pick. Only picks that count
-are in it and in what a right pick scores: an account's, or a fan's whose cookie came with it, not one from a fan the
-request itself made up, which is theirs and scored but moves nobody else's numbers (Pick.counted). A league's table
-is its members' points on the questions settled since it was made.
+had picked and again each time SPLIT_EVERY more have, so it never moves with one friend's pick; and it's of fans in no
+league, so a friend who made the rest of a batch can't read one off it either (_refresh). Only picks that count are in
+it and in what a right pick scores: an account's, or a fan's whose cookie came with it, not one from a fan the request
+itself made up, which is theirs and scored but moves nobody else's numbers (Pick.counted). A league's table is its
+members' points on the questions settled since it was made.
 """
 
 from __future__ import annotations
@@ -432,19 +433,25 @@ def _to_come(db: Session, q: Question) -> bool:
     return all(s is None or s in TO_COME for s in (status, polled, read))
 
 
-def _counts(db: Session, ids: list[int]) -> dict[int, dict[str, int]]:
-    """How many picks that count (Pick.counted) each answer of these questions has."""
+def _counts(db: Session, ids: list[int], unleagued: bool = False) -> dict[int, dict[str, int]]:
+    """How many picks that count (Pick.counted) each answer of these questions has; `unleagued`, only those of fans
+    in no league (an open question's split: _refresh)."""
+    where = [Pick.question_id.in_(ids), Pick.counted]
+    if unleagued:
+        where.append(~exists().where(LeagueMember.fan_id == Pick.fan_id))
     out: dict[int, dict[str, int]] = {}
-    for qid, option, n in db.execute(select(Pick.question_id, Pick.option, func.count()).where(Pick.question_id.in_(ids), Pick.counted).group_by(Pick.question_id, Pick.option)):
+    for qid, option, n in db.execute(select(Pick.question_id, Pick.option, func.count()).where(*where).group_by(Pick.question_id, Pick.option)):
         out.setdefault(qid, {})[option] = n
     return out
 
 
 def _refresh(db: Session, q: Question) -> None:
     """An open question's split as fans see it (Question.split), taken once SPLIT_FROM have picked and again each time
-    SPLIT_EVERY more have (a tenth more, from a hundred on): a friend's pick only ever moves it among others', never by
-    itself. A pick changed or taken back moves it no sooner."""
-    counts = _counts(db, [q.id]).get(q.id, {})
+    SPLIT_EVERY more have (a tenth more, from a hundred on). Of fans in no league: a league member's pick is in no open
+    split, so a member who made every other pick of a batch (fans of their own) can't read a friend's off how it moved
+    when their league's page said the friend had picked. Theirs join it as it closes (shown). A pick changed or taken
+    back moves it no sooner."""
+    counts = _counts(db, [q.id], unleagued=True).get(q.id, {})
     total, last = sum(counts.values()), sum((q.split or {}).values())
     if total >= (last + max(SPLIT_EVERY, last // 10) if q.split else SPLIT_FROM):
         q.split = counts

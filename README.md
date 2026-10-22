@@ -315,10 +315,12 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   The split shows to a fan once they've picked and at least 20 have, and to everyone once the question's closed.
   While it's open it's shares of the split as it stood when last refreshed (at 20 picks, then each 10 more, a tenth
   more past a hundred: `Question.split`), with that count, never the exact one: else its moves would tell a fan a
-  friend's pick. Only picks from an account, or from a fan whose cookie came with the pick, count in the split and
-  in what a right pick scores (`Pick.counted`): a request without a cookie is a new fan, whose pick is theirs and
-  scored but moves nobody else's numbers. Picks on questions still open move into an account on sign-in, those
-  already under way stay the device's (no calling a game three ways and signing in on the right browser). A game
+  friend's pick. And it's of fans in no league, whose picks join it as it closes: a member who made the rest of a
+  batch with fans of their own can't read a friend's off it. Only picks from an account, or from a fan whose cookie
+  came with the pick, count in the split and in what a right pick scores (`Pick.counted`): a request without a
+  cookie is a new fan, whose pick is theirs and scored but moves nobody else's numbers. Picks on questions still
+  open move into an account on sign-in, those already under way stay the device's (no calling a game three ways and
+  signing in on the right browser). A game
   whose source is off asks nothing, and picks are limited per address. In the app: "Call it" on a match page (beside the
   game on a wide screen, in the side column) and on a campaign page (its players' games); on Today and in the side
   column, a game's card says "Call it" until the fan has, then their pick, then "You called it · +38" or what they said
