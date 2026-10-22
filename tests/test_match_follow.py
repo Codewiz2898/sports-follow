@@ -17,12 +17,13 @@ import pytest
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import accounts, bus, live, match, matches, metrics, notify, pipeline, server, sports, structured
+from sports_follow import accounts, bus, controls, live, livecards, match, matches, metrics, notify, pipeline, server, sports, structured
 from sports_follow import db as db_module
-from sports_follow.adapters import ADAPTERS, KNOWN, Line, LiveGame, Snapshot, budget, lichess_chess
+from sports_follow.adapters import ADAPTERS, KNOWN, Fixture, Line, LiveGame, Snapshot, budget, lichess_chess
 from sports_follow.adapters.base import DIGITS
 from sports_follow.alerts import Item, Watch, plan
-from sports_follow.models import Account, Event, EventPlayer, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerIdentity, PushSubscription
+from sports_follow.models import (Account, Event, EventPlayer, EventState, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerCard, PlayerIdentity,
+                                  PushSubscription, SourceBinding)
 from sports_follow.sports.base import Played
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
@@ -558,6 +559,51 @@ def test_a_followed_game_of_a_source_polled_together_joins_its_lane_and_one_poll
     due = pipeline.due_work(NOW)
     assert (due.lanes, due.polls) == (["pitch"], [])  # a source that fetches many games at once: its lane
     assert structured.lane_events("pitch") == [event_id]
+
+
+@needs_db
+def test_a_game_whose_sport_is_turned_off_mid_game_stops_saying_live_and_comes_back_with_it(db, redis, source, monkeypatch):
+    # BUG-203 (H16): a game turned off in the panel mid-series stayed live, never polled: its fans' cards said LIVE with a
+    # frozen score for up to six days, no end card came down their phones, and its follow counted toward the cap.
+    ended: list[int] = []
+    monkeypatch.setattr(livecards, "ended", lambda ids: ended.extend(ids))
+    named(source)
+    event_id = matches.follow(db, "fan", "pitch", "100")
+    saka_followed_by(db, event_id, "saka")
+    fresh = {"fixtures": NOW.isoformat()}
+    db.add_all([SourceBinding(player_id=5, purpose="fixtures", adapter="pitch", priority=10, health={},
+                              locator={"system": "pitch", "athlete_id": "7", "name": "Bukayo Saka", "team_ids": [HOME], "team_names": ["Arsenal"]}),
+                PlayerCard(player_id=5, status="ready", version=1, is_live=True, freshness=fresh,
+                           card={"live": {"is_live": True, "event_id": event_id, "score": "Arsenal 1 – 0 Chelsea", "clock": "23'"}, "upcoming": [], "recent_results": [], "freshness": fresh}),
+                EventState(event_id=event_id, as_of=NOW, status="live", score_label="Arsenal 1 – 0 Chelsea", clock_label="23'", state=football(1, 0))])
+    db.commit()
+    assert pipeline.due_work(NOW).polls == [event_id]
+    moments_before = db.scalar(select(func.count()).select_from(Moment))
+
+    controls.turn_sport("football", False)
+    due = pipeline.due_work(NOW)
+    db.expire_all()
+    card = db.get(PlayerCard, 5)
+    assert card is not None and db.get(Event, event_id).status == "postponed"  # type: ignore[union-attr]  # put off, not over
+    assert due.polls == [] and ended == [event_id]  # its live card comes down the phones
+    assert (card.is_live, card.card["live"]["is_live"]) == (False, False)
+    [mine] = matches.mine(db, "fan")
+    assert mine["live"]["is_live"] is False and mine["live"]["score"] == "Arsenal 1 – 0 Chelsea"  # Today's board: no longer LIVE
+    pipeline.due_work(NOW + timedelta(minutes=1))
+    assert ended == [event_id]  # once
+
+    # Back on: Saka's games are read again at the next tick, and that read brings the game back as its source has it.
+    controls.turn_sport("football", True)
+    due = pipeline.due_work(NOW + timedelta(minutes=5))
+    assert due.polls == [] and due.refreshes == [5]
+    over = Fixture("100", "Arsenal vs Chelsea", "Premier League", NOW, None, "final", [HOME, AWAY], {"fixture": "100"}, ["Arsenal", "Chelsea"])
+    structured.upsert_game(db, source.fake, "Football", over)
+    db.commit()
+    # Over meanwhile: final, with nothing told for it (its result is old news by now: BUG-259), and its follow lapses.
+    assert db.get(Event, event_id).status == "final"  # type: ignore[union-attr]
+    pipeline.due_work(NOW + timedelta(minutes=6))
+    db.expire_all()
+    assert db.scalar(select(func.count()).select_from(Moment)) == moments_before and matches.mine(db, "fan") == []
 
 
 @needs_db

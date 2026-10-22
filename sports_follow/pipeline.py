@@ -27,7 +27,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import bus, matches, metrics, moments, notify, photos, predictions, shutdown, sports, structured, wiki
+from . import bus, livecards, matches, metrics, moments, notify, photos, predictions, shutdown, sports, structured, wiki
 from .agent import AgentError, follow_player, gateway, live_update
 from .config import AGENT_LIVE
 from .db import session
@@ -1067,9 +1067,11 @@ def due_work(now: datetime | None = None) -> Due:
     poll job, shared by every player in it, or, from a source that fetches many events in one
     request, a place in that source's lane; players without a binding get agent live checks.
     Events nobody closed are closed: after 12 hours from the agent, after 6 days from a source
-    (a Test match runs five), and a card still showing one live stops. A bound player whose refreshes
-    keep failing waits longer each time (structured.retry_at), and none is refreshed while their
-    source is down to what its live games need (structured.spare).
+    (a Test match runs five), and a card still showing one live stops; those of a sport turned off in the
+    admin panel are put off till it's on again (structured.put_off), and their cards and phones' live cards
+    stop showing them live. A bound player whose refreshes keep failing waits longer each time
+    (structured.retry_at), and none is refreshed while their source is down to what its live games need
+    (structured.spare).
     """
     from . import teams  # it reads search, which reads this
     from .config import FIXTURES_MAX_AGE, LIVE_CHECK_INTERVAL
@@ -1095,8 +1097,10 @@ def due_work(now: datetime | None = None) -> Due:
             .values(status="final")
             .returning(Event.id)
         ).all()
-        # Closed without a final poll (the source stopped returning the game): its cards stop saying LIVE.
-        unstuck = structured.close_live(db, list(closed))
+        # Games of a sport turned off in the admin panel aren't polled: put off, not closed, so they come back with it.
+        put_off = structured.put_off(db)
+        # Closed without a final poll (the source stopped returning the game), or put off: its cards stop saying LIVE.
+        unstuck = structured.close_live(db, [*closed, *put_off])
         # Games followed by themselves that are over: nothing more of them is sent. The rest settle on the event
         # of a player their fan follows, where the game's here as several.
         matches.lapse(db, now)
@@ -1185,6 +1189,7 @@ def due_work(now: datetime | None = None) -> Due:
                 due.lives.append(pid)
     for pid, card in unstuck:
         bus.store_card(pid, card)
+    livecards.ended(put_off)  # and their live cards on Android phones come down
     return due
 
 

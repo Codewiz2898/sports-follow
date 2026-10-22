@@ -315,7 +315,8 @@ def mine(db: Session, fan: str) -> list[dict[str, Any]]:
     out = []
     for rules_, keys, event in rows:
         s = latest.get(event.id)
-        live = board(event, s.status, s.score_label, s.clock_label, s.state or {}, s.source_url, s.as_of) if s is not None else None
+        # A game put off (called off, or its sport turned off: structured.put_off) isn't live, whatever its last poll said.
+        live = board(event, "postponed" if event.status == "postponed" else s.status, s.score_label, s.clock_label, s.state or {}, s.source_url, s.as_of) if s is not None else None
         out.append(item(event, live, (rules_ or {}).get("level", DEFAULT_LEVEL), keys, held(db, event)))
     return out
 

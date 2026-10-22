@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from sqlalchemy import and_, delete, func, or_, select, tuple_
+from sqlalchemy import and_, delete, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import distinct_on, insert
 from sqlalchemy.orm import Session
 
@@ -30,7 +30,7 @@ from . import bus, engine, livecards, matches, metrics, moments, naming, notify,
 from .adapters import ADAPTERS, KNOWN, NOT_FOUND, Adapter, AdapterError, Fixture, Line, NotFound, PlayerRef, Snapshot, budget, for_sport, providers, source_name
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
-from .models import Event, EventPlayer, EventState, Follow, Player, PlayerCard, PlayerIdentity, PlayerLine, SourceBinding
+from .models import Event, EventPlayer, EventState, EventTeam, Follow, Player, PlayerCard, PlayerIdentity, PlayerLine, SourceBinding, Team
 
 log = logging.getLogger("sports_follow.structured")
 
@@ -648,6 +648,26 @@ def finish(unfinished: dict[int, Snapshot | None]) -> None:
     for player_id, card in cleared:
         bus.store_card(player_id, card)
     livecards.ended(unseen)  # and their live cards on Android phones come down
+
+
+def put_off(db: Session) -> list[int]:
+    """Armed and live games of a sport turned off in the admin panel, which isn't polled (_watching): put off, as a
+    game called off is ("postponed"), so they aren't polled or armed again, and once committed nothing of them
+    stays LIVE on a card (close_live) or a phone (livecards.ended), and a follow of one lapses as a postponed
+    game's does (matches.lapse). Not final, which no read undoes (_refresh's seen_final): their players' and teams'
+    games are read again at the first tick their sport is on, which brings each back as its source has it then
+    (next_status): under way, polled again from a fresh look; over, final with nothing told, its result old news.
+    Returns the games put off."""
+    playing = db.scalars(select(Event.sport).where(Event.status.in_(("armed", "live"))).distinct()).all()
+    off = [sport for sport in playing if not sports.on(sport)]
+    if not off:
+        return []
+    ids = list(db.scalars(update(Event).where(Event.status.in_(("armed", "live")), Event.sport.in_(off)).values(status="postponed").returning(Event.id)))
+    for card_row in db.scalars(select(PlayerCard).where(PlayerCard.player_id.in_(select(EventPlayer.player_id).where(EventPlayer.event_id.in_(ids))))):
+        card_row.freshness = {**(card_row.freshness or {}), "fixtures": None}  # the tick skips them while their sport is off
+    db.execute(update(Team).where(Team.id.in_(select(EventTeam.team_id).where(EventTeam.event_id.in_(ids)))).values(fetched_at=None))
+    log.info("put off %d game(s) of %s, turned off: %s", len(ids), ", ".join(sorted(off)), ids)
+    return ids
 
 
 def close_live(db: Session, event_ids: list[int]) -> list[tuple[int, dict[str, Any]]]:
