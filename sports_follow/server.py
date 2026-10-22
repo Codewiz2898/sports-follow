@@ -914,9 +914,11 @@ async def starter_players(fan: str = Depends(fan_id)) -> dict[str, Any]:
 
 
 def _campaign_slug(slug: str) -> str:
-    if not campaigns.SLUG.fullmatch(slug):
+    """The campaign at a link's address, whatever its case (stann.in/Gukesh is /gukesh); a 404 for one no campaign can have."""
+    found = campaigns.address(slug)
+    if found is None:
         raise HTTPException(404, "No such page.")
-    return slug
+    return found
 
 
 @app.get("/api/campaigns/{slug}")
@@ -2731,9 +2733,9 @@ def _site(request: Request) -> str:
 async def _page_preview(path: str, request: Request) -> share.Preview | None:
     """The link preview of the page at `path`: a player's, a game of theirs, a campaign's, a question's (a game's page
     with ?q=), or None for the app's own."""
-    if campaigns.SLUG.fullmatch(path.rstrip("/")) and path.rstrip("/") not in campaigns.TAKEN:
+    if (slug := campaigns.address(path.rstrip("/"))) and slug not in campaigns.TAKEN:
         try:
-            shown = await in_db(campaigns.page, path.rstrip("/"), None)
+            shown = await in_db(campaigns.page, slug, None)
         except Exception:  # noqa: BLE001 — the page is the app: it opens with the app's own preview instead
             log.warning("link preview of /%s", path, exc_info=True)
             return None

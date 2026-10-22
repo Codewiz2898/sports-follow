@@ -471,7 +471,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   that doesn't answer keeps the roster last read. Its players are registry athletes a running source has
   (checked as a starter is), so following never needs AI research. A campaign is a row in `campaign`, set
   with a command; a later one (the WPL, the IPL) is a new row. Its address is any one word the app doesn't
-  have (`campaigns.TAKEN`, which `tests/test_campaigns.py` holds to the app's routes). A campaign of a sport
+  have (`campaigns.TAKEN`, which `tests/test_campaigns.py` holds to the app's routes), in lower case; a link
+  typed with capitals (`stann.in/Gukesh`, from a poster) is the same page, its preview and the Android app's
+  too, and the web app moves it to `/gukesh`. A campaign of a sport
   that's turned off has no page, and a player removed with `players remove` leaves every campaign.
 
       python -m sports_follow.campaigns set gukesh --sport chess --title "Gukesh v Sindarov" --event "World Chess Championship" --line "…"
@@ -1188,8 +1190,8 @@ needs a new app build, not only new JavaScript. Removing chess removes the modul
 **stann.in links open the app** when it's installed (Android App Links), at the same page: a player
 shared on WhatsApp, a campaign's link in a launch post. The app claims the addresses it has a page for,
 which `mobile/app.config.ts` reads from its routes (`mobile/src/app`): `/`, `/player/…`, `/match/…`,
-`/search` and the rest, and any one-word address for a campaign (Android 12 and later; older phones open
-campaigns in the browser). The admin panel's `/admin` is one-word too, so a tapped link to it opens the
+`/search` and the rest, and any one-word address for a campaign, capitals and all, since Android matches a
+path as it's typed (Android 12 and later; older phones open campaigns in the browser). The admin panel's `/admin` is one-word too, so a tapped link to it opens the
 app's "Not found"; typed into Chrome, it stays there. Android trusts the claim only once
 `https://stann.in/.well-known/assetlinks.json` names the package and the SHA-256 fingerprint of the
 certificate that signed the installed app: on the server, `SPORTS_FOLLOW_ANDROID_PACKAGE=io.slam.app` and

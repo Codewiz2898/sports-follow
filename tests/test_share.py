@@ -279,3 +279,22 @@ def test_a_crawler_gets_a_campaign_page_with_its_preview_and_picture(built, monk
     assert built.call("GET", "/api/campaigns/nothing-here/share.png").status_code == 404
     assert built.call("GET", "/api/campaigns/Not%20One/share.png").status_code == 404
     assert asked == [("gukesh", None), ("gukesh", None), ("nothing-here", None), ("nothing-here", None)]  # never a fan's rows in a preview
+
+
+def test_a_campaign_link_typed_with_capitals_previews_as_its_page(built, monkeypatch):
+    """BUG-191: stann.in/Gukesh, retyped from a poster or a bio with the name capitalised, is /gukesh: its preview and
+    picture, at the address as campaigns have it. An address the app has is the app's whatever its case, and a
+    letter that only lower-cases to a-z from another script (K, the Kelvin sign) is no campaign's."""
+    asked = []
+    monkeypatch.setattr(campaigns, "page", lambda db, slug, fan: asked.append(slug) or (GUKESH if slug == "gukesh" else None))
+    tags = meta(built.call("GET", "/Gukesh?utm_source=instagram").text)
+    assert tags["og:title"] == "Gukesh v Sindarov · World Chess Championship" and tags["og:url"] == "http://test/gukesh"
+    assert tags["og:image"].startswith("http://test/api/campaigns/gukesh/share.png?v=")
+    got = built.call("GET", "/api/campaigns/GUKESH/share.png")
+    assert got.status_code == 200 and got.content == share.png(share.of_campaign(GUKESH).picture)
+    for path in ("/Search", "/ADMIN", "/\u212aukesh"):
+        assert meta(built.call("GET", path).text)["og:title"] == APP_NAME, path
+    assert built.call("GET", "/api/campaigns/\u212aukesh/share.png").status_code == 404
+    assert asked == ["gukesh", "gukesh"]
+
+

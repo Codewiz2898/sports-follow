@@ -76,6 +76,13 @@ class Refused(ValueError):
     """What an operator asked for can't be done as asked; the message says why."""
 
 
+def address(typed: str) -> str | None:
+    """The campaign address a link names, whatever its case: stann.in/Gukesh, retyped from a poster, is /gukesh. None
+    for one no campaign can have. Only a-z is lower-cased (a K from another script never becomes a "k")."""
+    slug = typed.lower() if typed.isascii() else ""
+    return slug if SLUG.fullmatch(slug) else None
+
+
 def get(db: Session, slug: str) -> Campaign | None:
     return db.scalar(select(Campaign).where(Campaign.slug == slug.strip().lower()))
 

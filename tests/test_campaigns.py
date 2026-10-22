@@ -9,6 +9,7 @@ skipped without one (SPORTS_FOLLOW_TEST_DATABASE_URL).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from contextlib import contextmanager
@@ -19,7 +20,7 @@ import pytest
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import adapters, campaigns, players, registry, share, sports
+from sports_follow import adapters, campaigns, players, registry, server, share, sports
 from sports_follow.adapters import AdapterError, PlayerRef, SourceTeam
 from sports_follow.adapters.pandascore_esports import parse_team
 from sports_follow.config import APP_NAME
@@ -53,6 +54,16 @@ def test_no_campaign_can_take_an_address_the_android_app_has():
     # address it has no folder for, such as /match/<source>/<game>, isn't claimed and stays in the browser.
     web = set(re.findall(r'<Route path="/([a-z]+)(?:/\*)?"', (WEB / "main.tsx").read_text()))
     assert web - pages == {"admin"}, web - pages
+
+
+def test_a_campaign_link_typed_with_capitals_opens_the_android_app():
+    """BUG-191: Android matches a link's path as it's typed, so the campaign pages' pattern takes capitals too (the
+    server finds /Gukesh as /gukesh). It's still one word: /match/<source>/<game> isn't claimed by it."""
+    pattern = re.search(r"pathAdvancedPattern: '([^']+)'", (APP_ROUTES.parent.parent / "app.config.ts").read_text())[1]
+    for path in ("/gukesh", "/Gukesh", "/IPL-2027"):
+        assert re.fullmatch(pattern, path), path
+    for path in ("/", "/match/x/1", "/sw.js", "/a b"):
+        assert not re.fullmatch(pattern, path), path
 
 
 def test_a_games_time_is_typed_and_shown_in_india_time_unless_said():
@@ -268,3 +279,17 @@ def test_an_esports_campaign_takes_any_games_teams(db, teams, monkeypatch):
     assert [(t["game"], len(t["players"])) for t in campaigns.page(db, "ewc", None)["teams"]] == [("League of Legends", 1), ("Valorant", 1)]
     monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "valorant"))
     assert [(t["game"], len(t["players"])) for t in campaigns.page(db, "ewc", None)["teams"]] == [("League of Legends", 1), ("Valorant", 0)]
+
+
+@needs_db
+def test_a_campaign_link_typed_with_capitals_opens_its_page(db, monkeypatch):
+    """BUG-191: /Gukesh, retyped from a poster with the name capitalised, is /gukesh's page and picture, not Not found."""
+    campaigns.main(["set", "gukesh", "--sport", "chess", "--title", "Gukesh v Sindarov"])
+    monkeypatch.setattr(server, "session", campaigns.session)  # the fixture's sessions
+    for typed in ("gukesh", "Gukesh", "GUKESH"):
+        assert asyncio.run(server.campaign(typed, "fan"))["slug"] == "gukesh"
+        assert asyncio.run(server.campaign_picture(typed)).status_code == 200
+    for other in ("nope", "Gu kesh", "\u212aukesh"):  # K: the Kelvin sign, which lower-cases to "k"
+        with pytest.raises(server.HTTPException) as missing:
+            asyncio.run(server.campaign(other, "fan"))
+        assert missing.value.status_code == 404

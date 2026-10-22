@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, Navigate, useLocation, useParams } from 'react-router-dom'
 import { api, ApiError, type Campaign, type SearchResult } from '../api'
 import { APP_NAME } from '../app'
 import { allFollowed, campaignLive, campaignRows, followAllFailed, followAllWords, keyAlertsLine, schedule } from '../campaign'
@@ -23,20 +23,27 @@ const here = () => Intl.DateTimeFormat().resolvedOptions().timeZone
  * A campaign page, /<slug> (campaigns.py): the page a launch post links to. Its event in a block of the sport's
  * colour; the games on now, when one is; its players, or whole teams, to follow with a tap, with key alerts;
  * then turning alerts on, and on a phone how; and its games, in the home audience's time. `notFound` for an
- * address that isn't a campaign.
+ * address that isn't a campaign. One typed with capitals (/Gukesh, from a poster) moves to its own (/gukesh), its
+ * tags with it, so the bar, a share and a reload say the address as the campaign has it.
  */
 export function CampaignPage({ notFound }: { notFound: ReactNode }) {
   const { slug = '' } = useParams()
+  const { search, hash } = useLocation()
+  const own = slug.toLowerCase()
   const [campaign, setCampaign] = useState<Campaign | null>(null)
   const [missing, setMissing] = useState(false)
   const [failed, setFailed] = useState(false)
 
-  const load = useCallback(() => api.campaign(slug).then((c) => { setCampaign(c); setFailed(false) }, (e) => {
+  const load = useCallback(() => api.campaign(own).then((c) => { setCampaign(c); setFailed(false) }, (e) => {
     if (e instanceof ApiError && e.status === 404) setMissing(true)
     else setFailed(true)
-  }), [slug])
-  useEffect(() => { setCampaign(null); setMissing(false); void load() }, [load])
+  }), [own])
+  useEffect(() => {
+    if (own !== slug) return // moving to its own address first
+    setCampaign(null); setMissing(false); void load()
+  }, [load, own, slug])
 
+  if (own !== slug) return <Navigate to={`/${own}${search}${hash}`} replace />
   if (missing) return notFound
   if (!campaign) {
     return failed
