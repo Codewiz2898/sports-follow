@@ -1,9 +1,9 @@
 import { Link } from 'react-router-dom'
-import { api, type Card, type LiveGame, type LiveSport } from '../api'
+import { api, type LiveGame, type LiveSport } from '../api'
 import { shortName } from '../format'
 import { sharedLook, useShared } from '../shared'
 import { Backdrop } from '../sports'
-import { gamesOn, moreOn } from '../today'
+import { moreOn, type GameOn } from '../today'
 import { GameBoard, PlainScore } from './Blocks'
 import { BlockError, ErrorBoundary } from './ErrorBoundary'
 import { CheckIcon, ChevronIcon, PlusIcon } from './Icons'
@@ -117,19 +117,19 @@ export function OtherGame({ game, label, follow }: { game: LiveGame & { sport: s
 }
 
 /**
- * The games on anywhere (GET /api/live) that none of the fan's players are in (gamesOn), in the order the
- * server ranks them, after the fan's own live boards (`mine`, their live cards): titled "Also live" under the
+ * The games on anywhere (GET /api/live) that none of the fan's players are in (gamesOn's others: `games`), in
+ * the order the server ranks them, after the fan's own live boards (`theirsOn`): titled "Also live" under the
  * fan's own; with none of theirs on, it's the whole of "Live now". Today shows it to a fan who follows nobody
- * yet, to pick players from; a fan with players gets MoreLive's link instead. Nothing when nothing else is on.
+ * yet, to pick players from (narrowed to the game picked there); a fan with players gets MoreLive's link
+ * instead. Nothing when nothing else is on.
  */
-export function AlsoLive({ mine }: { mine: Card[] }) {
-  const sports = useLive()
+export function AlsoLive({ games, theirsOn = false }: { games: GameOn[]; theirsOn?: boolean }) {
   const follow = useFollowToggle()
-  const games = gamesOn(sports, mine).others
   if (!games.length) return null
+  const shownKey = games.map((x) => x.game.key).join(',')  // `games` is new each render: a card that failed tries again on another game
   return (
-    <ErrorBoundary fallback={<BlockError />} resetKey={sports}>
-      <Rail title={mine.length ? 'Also live' : 'Live now'} note={`${games.length} on`} all="Every game on now" max={SHOWN} className="also-live">
+    <ErrorBoundary fallback={<BlockError />} resetKey={shownKey}>
+      <Rail title={theirsOn ? 'Also live' : 'Live now'} note={`${games.length} on`} all="Every game on now" max={SHOWN} className="also-live">
         {games.map(({ game, label }) => <OtherGame key={game.key} game={game} label={label} follow={follow} />)}
       </Rail>
       {follow.error && <div className="error-box">{follow.error}</div>}
@@ -138,16 +138,15 @@ export function AlsoLive({ mine }: { mine: Card[] }) {
 }
 
 /**
- * Today's way to every other game on now, under the fan's own live boards (`mine`, their live cards): a quiet
- * link to the Live page, "12 other games on now", or with none of theirs on, "12 games on now". A game of
- * theirs isn't counted (gamesOn). Nothing when nothing else is on.
+ * Today's way to every other game on now, under the fan's own live boards (`theirsOn`): a quiet link to the Live
+ * page, "12 other games on now", or with none of theirs on, "12 games on now". `games` are gamesOn's others (a
+ * game of theirs isn't counted), narrowed to the game picked on Today. Nothing when nothing else is on.
  */
-export function MoreLive({ mine }: { mine: Card[] }) {
-  const others = gamesOn(useLive(), mine).others.length
-  if (!others) return null
+export function MoreLive({ games, theirsOn }: { games: GameOn[]; theirsOn: boolean }) {
+  if (!games.length) return null
   return (
     <Link to="/live" className="eyebrow more-live">
-      {moreOn(others, mine.length > 0)}<ChevronIcon width={16} height={16} strokeWidth={2.6} />
+      {moreOn(games.length, theirsOn)}<ChevronIcon width={16} height={16} strokeWidth={2.6} />
     </Link>
   )
 }

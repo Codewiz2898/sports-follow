@@ -461,6 +461,29 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 .strip-pill .spinner { width: 14px; height: 14px; border-color: color-mix(in srgb, var(--on-sport) 25%, transparent); border-top-color: var(--on-sport); }
 .strip-pill.add { background: transparent; color: var(--text); box-shadow: inset 0 0 0 2px var(--text); }
 
+/* Today's game filter (TodayPage.tsx), under its header: All, then a chip per game on the page, one row that
+   scrolls sideways out to the page's edge, no scrollbar; room above and below for a focus ring. The game picked
+   is a block of its colour; the rest are outlined, a dot of their colour saying which; All picked is ink. */
+.game-filter { display: flex; align-items: center; gap: 8px; }
+.game-chips {
+  display: flex; gap: 8px; flex: 0 1 auto; min-width: 0; overflow-x: auto;  /* as wide as its chips, the search after them; narrower, it scrolls */ overscroll-behavior-x: contain; scrollbar-width: none;
+  margin: -6px 0 -6px calc(-1 * var(--page-x)); padding: 6px 4px 6px var(--page-x);
+}
+.game-chips::-webkit-scrollbar { display: none; }
+/* With the search, the chips fade out under it, and the last one scrolls clear of the fade. */
+.game-filter:has(.find) .game-chips { padding-right: 20px; mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent); }
+.game-chip { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px; border: 0; border-radius: 999px; background: transparent; box-shadow: inset 0 0 0 2px var(--text); color: var(--text); font-weight: 800; font-size: 14px; white-space: nowrap; flex-shrink: 0; cursor: pointer; }
+.game-chip:hover { background: rgba(13, 13, 13, 0.06); }
+.game-chip:focus-visible { border-radius: 999px; }
+.game-chip .dot { width: 9px; height: 9px; border-radius: 3px; background: var(--sport); }
+.game-chip[aria-pressed='true'] { background: var(--text); color: var(--bg); }
+.game-chip[data-sport][aria-pressed='true'] { background: var(--sport); color: var(--on-sport); box-shadow: none; }
+.game-chip[aria-pressed='true'] .dot { background: currentColor; }
+/* Its search, at the row's end and outside its scroll: a round outline with the magnifier, opening the other
+   games on Today. */
+.game-chip.find { width: 40px; padding: 0; justify-content: center; }
+.find-game .game-list { display: flex; flex-wrap: wrap; gap: 8px; }
+
 /* The Following page's way back to Today. */
 .back-link { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; min-height: 32px; }
 .back-link:hover { color: var(--text); }

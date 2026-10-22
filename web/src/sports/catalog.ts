@@ -103,3 +103,9 @@ export function sportName(sport?: string | null): string {
 export function runningSports(): SportInfo[] {
   return sports.running()
 }
+
+/** Every sport the app lists, in its order, then the groups that stand for several of them (an esports pro whose
+ * game can't be told is esports'): Today's game chips, of the ones on it. */
+export function listedSports(): SportInfo[] {
+  return [...sports.catalog.sports, ...(sports.catalog.groups ?? [])]
+}
