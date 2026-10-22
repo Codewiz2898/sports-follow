@@ -6,21 +6,21 @@ second run in the day only does what a missed first one didn't):
 
 - The gap search: each followed player with nothing the Feed would serve published in the last week
   (feedstats.covered), searched for by the name fans write (candidates.search_name) and their sport's words
-  (Sport.video_words), for videos of the last GAP_DAYS, most watched first. The most followed go first, up to FEED_GAP_SEARCHES in any 24 hours; one
+  (Sport.video_words), for videos of the last GAP_DAYS, most watched first. The most followed go first, up to FEED_GAP_SEARCHES a DAY; one
   whose last gap search kept nothing waits GAP_BACKOFF before the next, so a cap that binds moves on to others.
 - The wide sweep: every followed player, gaps or not, for videos of the last WIDE_DAYS (six months), most watched
   first: what fans watched this season, which the ranking weighs for its age (rank.py) and the Feed fades only as it
   serves it (feed.py). Each player at most once in WIDE_EVERY, a seventh of them a day (so the week's
-  searches spread over it), up to FEED_WIDE_SEARCHES in any 24 hours, the longest unswept first (never, first),
+  searches spread over it), up to FEED_WIDE_SEARCHES a DAY, the longest unswept first (never, first),
   the most followed of those: when the cap binds it gets round everyone before anyone's searched again. A player
   the same run gap-searches waits for a later day (the two would find much the same), a week at most.
 - The famous sweep: each followed player's most watched videos ever, with no date limit, for "The ones everyone's
-  seen" (rank.evergreen). Each player at most once in FAMOUS_EVERY, and FEED_FAMOUS_SEARCHES in any 7 days, no
+  seen" (rank.evergreen). Each player at most once in FAMOUS_EVERY, and FEED_FAMOUS_SEARCHES a WEEK, no
   more than a seventh of them a day: the players due are spread over the week, the longest unswept first (never,
   first), the most followed of those. When the cap binds it gets round everyone before anyone's swept again.
 - The pool sweep (BHA-382): each pool player nobody follows (feedpool.py: their sport's best known, whose videos
   fill For you), for videos of the last POOL_DAYS (For you's window for them, feed.OTHERS_WINDOW), most watched
-  first. Each at most once in POOL_EVERY, up to FEED_POOL_SEARCHES in any 24 hours, after the followed players'
+  first. Each at most once in POOL_EVERY, up to FEED_POOL_SEARCHES a DAY, after the followed players'
   three, the longest unswept first (never, first), the best known of those.
 
 What each finds goes the way a moment search's does: kept where it names the player and passes the hard filters
@@ -31,7 +31,8 @@ is a stream of its own, "gap", "wide", "famous" and "pool". They run in that ord
 
 Moment searches come first: sweeps stop while what's left of a source's searches (VideoSource.search_budgets) is what
 the moment searches' cap may still spend in the day (_room), so however full the sweeps' caps, the day's moment
-searches all have room. With no source that can search running (no key), nothing runs.
+searches all have room. With no source that can search running (no key), nothing runs. The caps count over the last
+DAY and WEEK, each an hour short, so a daily run a little earlier than the day before's still has its own.
 """
 
 from __future__ import annotations

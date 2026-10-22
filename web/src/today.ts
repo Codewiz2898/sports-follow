@@ -5,6 +5,7 @@
 
 import { ahead, countdown, dateOnly, daysAgo, day, lineStats, parseDate, playedOn, shortName, shortWhen } from './format'
 import { highlight, type GameResult } from './lines'
+import { fold } from './search'
 import { drawable } from './sports/facts'
 import type { ActivityItem, Card, FollowedMatch, FollowedTeam, LeagueGame, LiveGame, LiveSport, LiveStatus, Starter, UpcomingEvent, WireRow } from './types'
 
@@ -239,10 +240,10 @@ export function longestWord(word: string): number {
 }
 
 /** A Wire row's line as it reads: with the player's name first ("Saka: …") when it doesn't say it (a story's
- * headline); a fact or a line-up always does. */
+ * headline), however it writes its accents ("Jokic" names Jokić); a fact or a line-up always does. */
 export function wireText(row: WireRow): string {
   const name = shortName(row.player)
-  return row.text.toLowerCase().includes(name.toLowerCase()) ? row.text : `${name}: ${row.text}`
+  return fold(row.text).includes(fold(name)) ? row.text : `${name}: ${row.text}`
 }
 
 /** When a Wire row is from: the time today ("07:40"), the weekday within the week ("Wed"), else the date. */

@@ -111,14 +111,14 @@ FEED_LAYOUT = os.environ.get("SPORTS_FOLLOW_FEED_LAYOUT", "edge").strip().lower(
 # Searches in any 24 hours for fans' videos of followed players' big moments (searches.py), each run counted: a
 # moment's search runs twice. The biggest moments go first when there are more. 0 turns them off.
 FEED_MOMENT_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_MOMENT_SEARCHES", 40)))
-# Searches in any 24 hours for a followed player with nothing to watch this week (sweeps.py: the gap search), the
-# most followed first. 0 turns them off.
+# Searches a day for a followed player with nothing to watch this week (sweeps.py: the gap search), the most followed
+# first; a day is the last 23 hours (sweeps.DAY), so a daily run a little early still has its own. 0 turns them off.
 FEED_GAP_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_GAP_SEARCHES", 20)))
-# Searches in any 24 hours for each followed player's most watched videos of the last six months (sweeps.py: the
+# Searches a day (sweeps.DAY) for each followed player's most watched videos of the last six months (sweeps.py: the
 # wide sweep), each player at most weekly, a seventh of them a day. 0 turns them off.
 FEED_WIDE_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_WIDE_SEARCHES", 14)))
-# Searches in any 7 days for a followed player's most watched videos ever (sweeps.py: the famous sweep), spread
-# over the week's days; each player at most once a month. 0 turns them off.
+# Searches a week (sweeps.WEEK, an hour short of seven days) for a followed player's most watched videos ever
+# (sweeps.py: the famous sweep), spread over the week's days; each player at most once a month. 0 turns them off.
 FEED_FAMOUS_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_FAMOUS_SEARCHES", 35)))
 # The feed's pool of top players (feedpool.py, BHA-382): besides followed players, the curator fetches for this many
 # of each running sport's best known (for a group of sports, each of its running sports' share: esports' games), the
@@ -127,7 +127,7 @@ FEED_POOL_SIZE = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_POOL_SIZE", 50)))
 # Pool players made a day at most, each found in their sport's live source as a fan's follow would (a request or a
 # few each): the pool fills over days, and a source's allowance never pays for it all at once.
 FEED_POOL_ADDS = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_POOL_ADDS", 40)))
-# Searches in any 24 hours for pool players nobody follows (sweeps.py: the pool sweep), after the followed players'
+# Searches a day (sweeps.DAY) for pool players nobody follows (sweeps.py: the pool sweep), after the followed players'
 # sweeps, each player at most every two weeks. 0 turns them off.
 FEED_POOL_SEARCHES = max(0, int(os.environ.get("SPORTS_FOLLOW_FEED_POOL_SEARCHES", 10)))
 

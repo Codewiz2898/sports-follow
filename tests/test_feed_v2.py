@@ -66,6 +66,23 @@ def test_a_title_is_tidied_as_its_served(title, channel, keep, shown):
     assert titles.tidy(title, channel, CRICKET.title_words, keep) == shown
 
 
+@pytest.mark.parametrize(("title", "shown"), [
+    # BUG-254: a shouted title's other side was put in lower case ("Gukesh vs ding", "Ind vs aus", "5-1 aek"), and
+    # HTML escaped twice over was left escaped once ("<b>Kohli</b> out").
+    ("GUKESH VS DING: GAME 14 | WORLD CHESS CHAMPIONSHIP", "Gukesh vs Ding: game 14 · World chess championship"),
+    ("IND vs AUS", "IND vs AUS"),
+    ("IND VS AUS 3RD ODI HIGHLIGHTS", "IND vs AUS 3rd odi highlights"),
+    ("MAN CITY 5-1 AEK", "Man city 5-1 AEK"),
+    ("SALAH'S STUNNER V MAN UTD", "Salah's stunner v Man utd"),
+    ("INDIA BEAT AUS BY 6 WICKETS", "India beat aus by 6 wickets"),  # no "vs" or score beside it: words, as before
+    ("ROHIT AND GILL WIN IT 2-0 AT HOME", "Rohit and gill win it 2-0 at home"),  # small words beside a score stay small
+    ("&lt;b&gt;Kohli&lt;/b&gt; out", "Kohli out"),
+    ("Mbappé &amp;amp; Vinícius star", "Mbappé & Vinícius star"),
+])  # fmt: skip
+def test_a_shouted_titles_sides_keep_their_capitals_and_html_escaped_twice_is_read_as_written(title, shown):
+    assert titles.tidy(title) == shown
+
+
 def test_only_a_title_mostly_in_capitals_is_shouting():
     assert titles.shouted("PRESS CONFERENCE: SHREYAS IYER READY")
     assert not titles.shouted("IND vs AUS 2nd ODI Highlights")  # three of six
@@ -283,3 +300,40 @@ def test_for_yous_others_last_two_months_are_one_list_best_first_whatever_the_da
     mixed = feed.page(db, "fan", now=NOW, limit=50, tab=feed.FOR_YOU)
     assert [e.item.title for e in mixed.items] == ["a0", "a1", "y-strong-3wk", "x-weak-today", "z-old-best"]
     assert [e.day for e in mixed.items][2:] == [feed.THIS_MONTH, feed.TODAY, feed.EARLIER]  # each keeps its own day
+
+
+@needs_db
+def test_for_you_shows_a_video_a_followed_player_holds_as_theirs_in_its_place_not_as_an_others(db, monkeypatch):  # noqa: F811
+    # BUG-122: one video kept for Kohli (followed) and for Rohit (not) came under Rohit, with a Follow button, among
+    # the others, and left Kohli's place: the others' list was made first and took it.
+    kohli = made_player(db, "Virat Kohli", served=False)
+    rohit = made_player(db, "Rohit Sharma", served=False)
+    both = item("both", 2)
+    kept = {
+        kohli: [Candidate(item("k0", 1), score=0.9, channel="k0"), Candidate(both, score=0.5, channel="icc")],
+        rohit: [Candidate(both, score=0.5, channel="icc"), Candidate(item("r1", 3), score=0.4, channel="r1")],
+    }
+    monkeypatch.setattr(feed, "judged", lambda db, ids, now=None: {i: kept[i] for i in ids if i in kept})
+    monkeypatch.setattr(feed, "others", lambda db, followed, now: {p: 0 for p in (rohit,) if p not in followed})
+    follow(db, "fan", kohli)
+    mixed = feed.page(db, "fan", now=NOW, limit=50, tab=feed.FOR_YOU)
+    assert [(e.item.title, e.player.id, e.following) for e in mixed.items] == [("k0", kohli, True), ("both", kohli, True), ("r1", rohit, False)]
+
+
+@needs_db
+def test_a_sport_turned_off_has_its_players_videos_served_nowhere(db):  # noqa: F811
+    # BUG-125: a turned-off sport's videos stayed in Following and on its players' pages (For you already left them out).
+    from sqlalchemy import text
+
+    db.execute(text("TRUNCATE feed_candidates RESTART IDENTITY CASCADE"))
+    gukesh = made_player(db, "Gukesh D", sport="chess")
+    kohli = made_player(db, "Virat Kohli")
+    follow(db, "fan", gukesh, kohli)
+    assert set(feed.judged(db, [gukesh, kohli], NOW)) == {gukesh, kohli}
+    controls.turn_sport("chess", False)
+    assert set(feed.judged(db, [gukesh, kohli], NOW)) == {kohli}
+    assert {e.player.id for e in feed.page(db, "fan", now=NOW).items} == {kohli}
+    page = feed.feed_for(db, gukesh, "fan", NOW)
+    assert page is not None and page.count == 0
+    controls.turn_sport("chess", True)  # back on: served again, nothing lost
+    assert set(feed.judged(db, [gukesh, kohli], NOW)) == {gukesh, kohli}
