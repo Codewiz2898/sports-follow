@@ -2958,13 +2958,15 @@ class _Stream(StreamingResponse):
         try:
             await super().__call__(scope, receive, send)
         finally:
-            # A stream left at a yield (its client gone while a send waited) cleans up now, not when it's collected.
-            with anyio.CancelScope(shield=True):
-                await self.stream.aclose()
-            streaming.subtract(self.places)
-            for key in self.places:
-                if streaming[key] <= 0:
-                    del streaming[key]
+            try:
+                # A stream left at a yield (its client gone while a send waited) cleans up now, not when it's collected.
+                with anyio.CancelScope(shield=True):
+                    await self.stream.aclose()
+            finally:
+                streaming.subtract(self.places)
+                for key in self.places:
+                    if streaming[key] <= 0:
+                        del streaming[key]
 
 
 def _sse(body, places: list[str] | None = None) -> StreamingResponse:

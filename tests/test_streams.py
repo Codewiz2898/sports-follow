@@ -260,9 +260,24 @@ def ended(response) -> None:
     asyncio.run(run())
 
 
+class Socket:
+    """A pubsub's connection, which notes how it was closed: waiting for the close to finish could hold an ended
+    stream's cleanup, which nothing can cancel."""
+
+    def __init__(self, log: list[str]):
+        self.log = log
+
+    async def disconnect(self, nowait: bool = False):
+        self.log.append("closed without waiting" if nowait else "closed, waiting")
+
+
 class OverTheNetwork(PubSub):
     """A stream's pubsub whose every call waits on the network, as a real one's does, and which notes when its
     connection goes back to the pool."""
+
+    def __init__(self, log: list[str]):
+        super().__init__(log)
+        self.connection = Socket(log)
 
     async def get_message(self, ignore_subscribe_messages, timeout):
         await asyncio.sleep(timeout)  # nothing published
@@ -298,7 +313,7 @@ def test_a_stream_whose_client_went_away_gives_its_redis_connection_back(api, mo
     monkeypatch.setattr(api.redis, "pubsub", lambda: OverTheNetwork(api.redis.log))
     for _ in range(3):
         dropped(asyncio.run(server.player_stream(1, Request())), api.redis.log)
-    assert api.redis.log.count("connection back") == 3 and not server.streaming
+    assert api.redis.log.count("connection back") == api.redis.log.count("closed without waiting") == 3 and not server.streaming
 
 
 def test_a_stream_whose_client_went_away_while_a_send_waited_gives_its_connection_back_at_once(api, monkeypatch):
