@@ -300,7 +300,7 @@ def api(monkeypatch):
     monkeypatch.setitem(server.state, "arq", fake.queue)
     monkeypatch.setattr(server, "cookie_key", lambda: KEY)
     # A typed name nobody has followed: a new placeholder player, so following it counts as a research.
-    monkeypatch.setattr(pipeline, "resolve_or_create", lambda db, query: SimpleNamespace(id=7, name=query))
+    monkeypatch.setattr(pipeline, "resolve_or_create", lambda db, query: SimpleNamespace(id=7, name=query, sport=""))
     return fake
 
 

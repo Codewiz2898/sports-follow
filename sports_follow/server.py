@@ -1443,6 +1443,21 @@ def _registry_athlete(db: Session, body: dict) -> registry.Person | None:
     return registry.Person.of(athlete) if athlete else None
 
 
+def _registry_holder(db: Session, person: registry.Person, said: bool) -> int | None:
+    """The player already here for a registry athlete (pipeline.registry_holder) of a sport that runs. With no sport
+    said, whoever holds their qid, unless that's their player in a sport turned off: then their player in the sport
+    _registry_athlete took, as if it had been said. Still one of a sport turned off, a 404 (BUG-097)."""
+    def runs(player_id: int) -> bool:
+        return sports.on(db.scalar(select(Player.sport).where(Player.id == player_id)))
+
+    holder = pipeline.registry_holder(db, person.qid, person.sport if said else None)
+    if holder is not None and not said and not runs(holder):
+        holder = pipeline.registry_holder(db, person.qid, person.sport)
+    if holder is not None and not runs(holder):
+        raise HTTPException(404, "No such athlete.")
+    return holder
+
+
 LEAGUE = re.compile(r"[a-z0-9][a-z0-9._-]{0,39}")  # "nba", "wta", "cs-go", "pubgmobile"
 
 
@@ -1504,7 +1519,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
     await in_db(_room_to_follow, fan)
     taken: list[str] = []
     if person and not body.get("system"):
-        holder = await in_db(pipeline.registry_holder, person.qid, person.sport if body.get("sport") else None)
+        holder = await in_db(_registry_holder, person, bool(body.get("sport")))
         if holder is not None:
             player_id, created, ref = holder, False, None
         else:
@@ -1621,6 +1636,8 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
             target = pipeline.resolve_or_create(db, query) if query is not None else player
         except ValueError:
             return None
+        if not sports.on(cast(Player, target).sport):
+            raise HTTPException(404, "No such player.")  # a turned-off sport's page, by its name (by id: above)
         _room_to_follow(db, fan, cast(Player, target).id)  # (a player asked for by id was found above)
         db.execute(insert(Follow).values(fan_id=fan, player_id=target.id, alert_rules={}).on_conflict_do_nothing())
         card_row = db.get(PlayerCard, target.id)
@@ -3056,7 +3073,7 @@ async def registry_preview(request: Request, qid: str, sport: str | None = None,
     person = await in_db(_registry_athlete, {"qid": qid, "sport": sport})
     if person is None:
         raise HTTPException(404, "No such athlete.")
-    holder = await in_db(pipeline.registry_holder, person.qid, person.sport if sport else None)
+    holder = await in_db(_registry_holder, person, bool(sport))
     if holder is not None:
         return {"player_id": holder}
     await _source_lookup(fan, client_address(request))
