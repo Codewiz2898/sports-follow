@@ -2,8 +2,8 @@
 // "Live now" and an empty Today's, each game with a few of its players to follow with a tap and opening its
 // match page, and Today's link to the Live page (app/live.tsx) for a fan with players.
 
-import { router } from 'expo-router'
-import { useEffect, useState } from 'react'
+import { router, useIsFocused } from 'expo-router'
+import { useEffect, useRef, useState } from 'react'
 import { AppState, Pressable, StyleSheet, Text, View } from 'react-native'
 import { shortName } from '../../../web/src/format'
 import { moreOn, type GameOn } from '../../../web/src/today'
@@ -25,11 +25,15 @@ const NONE: LiveSport[] = []
 /** What the server last said is on: `loaded` once it has answered, `failed` while its last look failed. */
 export interface LiveAnswer { sports: LiveSport[]; loaded: boolean; failed: boolean }
 
-/** What the sources have on, looked at again once a minute while the app is in front (a look only reads
- * what the server last read: more fans looking costs no more of a source's allowance). */
+/** What the sources have on, looked at again once a minute while the app is in front and its page is the one shown
+ * (a look only reads what the server last read: more fans looking costs no more of a source's allowance). Under
+ * another page (Today under a player's) it waits, and looks once it's shown again if a minute has passed (BUG-161). */
 export function useLiveAnswer(): LiveAnswer {
   const [answer, setAnswer] = useState<LiveAnswer>({ sports: NONE, loaded: false, failed: false })
+  const shown = useIsFocused()
+  const at = useRef(-Infinity) // when it last looked
   useEffect(() => {
+    if (!shown) return
     let current = true
     let timer: ReturnType<typeof setTimeout> | undefined
     let latest = 0 // the newest look: an older one's answer starts no second loop
@@ -37,6 +41,7 @@ export function useLiveAnswer(): LiveAnswer {
       clearTimeout(timer)
       if (AppState.currentState !== 'active') return // nobody's looking; coming back looks
       const mine = ++latest
+      at.current = Date.now()
       api.live()
         .then((r) => {
           if (!current || mine !== latest) return
@@ -51,9 +56,11 @@ export function useLiveAnswer(): LiveAnswer {
         })
     }
     const sub = AppState.addEventListener('change', (state) => { if (state === 'active') look(0) })
-    look(0)
+    const since = Date.now() - at.current
+    if (since >= EVERY) look(0)
+    else timer = setTimeout(() => look(0), EVERY - since)
     return () => { current = false; clearTimeout(timer); sub.remove() }
-  }, [])
+  }, [shown])
   return answer
 }
 
