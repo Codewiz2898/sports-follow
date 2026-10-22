@@ -373,9 +373,13 @@ class Cricket(Sport):
 
     def asks(self, state: dict[str, Any]) -> list[Ask]:
         """Who wins, between the board's two sides, each by its id at the source: a limited-overs match only. A Test
-        or a first-class match may be drawn, and lasts longer than a question waits for its answer (predictions.STALE)."""
+        or a first-class match may be drawn, and lasts longer than a question waits for its answer (predictions.STALE).
+        Nothing while a side is still to be decided ("India v TBC", a final before its other semi): the side that
+        comes through would be no answer to it."""
         teams = [t for t in state.get("teams") or [] if isinstance(t, dict)]
         if len(teams) != 2 or overs_a_side(state.get("format")) is None or not all(t.get("id") and t.get("name") for t in teams) or str(teams[0]["id"]) == str(teams[1]["id"]):
+            return []
+        if any(undecided([str(t["name"])]) for t in teams):
             return []
         return [Ask("result", "Who wins?", tuple((str(t["id"]), str(t["name"])) for t in teams))]
 

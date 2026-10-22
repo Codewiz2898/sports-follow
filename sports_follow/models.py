@@ -809,9 +809,9 @@ class Question(Base):
     # When its pushes went (predictions_push.py): "Make your pick" before its game, how each pick went after.
     reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     told_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # Its split as fans see it while it's open: the counted picks of each answer when it was last refreshed, which is
-    # only once enough more have picked that a friend's one pick isn't told by it (predictions.pick). None till
-    # predictions.SPLIT_FROM have.
+    # Its split as fans see it while it's open: the counted picks of each answer, of fans in no league, when it was
+    # last refreshed, which is only once enough more have picked that a friend's one pick isn't told by it
+    # (predictions.pick). None till predictions.SPLIT_FROM have.
     split: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = _now()
 

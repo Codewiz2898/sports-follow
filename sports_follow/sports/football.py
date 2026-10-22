@@ -9,7 +9,7 @@ from collections import Counter
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from .base import DRAW, VOID, Ask, Fact, Fired, Found, Glance, Line, Notable, Played, Poster, Seen, Sport, joined, num, number, ordinal, spaced, stage, stat, values, words
+from .base import DRAW, VOID, Ask, Fact, Fired, Found, Glance, Line, Notable, Played, Poster, Seen, Sport, joined, num, number, ordinal, spaced, stage, stat, undecided, values, words
 
 if TYPE_CHECKING:
     from ..adapters.base import Fixture, Snapshot
@@ -486,9 +486,13 @@ class Football(Sport):
     predicts = True
 
     def asks(self, state: dict[str, Any]) -> list[Ask]:
-        """Who wins, or a draw, once both sides are known: home, a draw, away, each side by its id at the source."""
+        """Who wins, or a draw, once both sides are known: home, a draw, away, each side by its id at the source. Not
+        while one is still to be decided ("TBD", a final before a semi's played): the side that comes through would be
+        no answer to it."""
         home, away = state.get("home") or {}, state.get("away") or {}
         if not (home.get("id") and home.get("name") and away.get("id") and away.get("name")) or str(home["id"]) == str(away["id"]):
+            return []
+        if undecided([str(home["name"])]) or undecided([str(away["name"])]):
             return []
         return [Ask("result", "Who wins?", ((str(home["id"]), str(home["name"])), (DRAW, "Draw"), (str(away["id"]), str(away["name"]))))]
 

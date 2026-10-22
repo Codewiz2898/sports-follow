@@ -110,6 +110,36 @@ def test_friends_picks_cant_be_worked_out_before_it_closes_and_nobody_sees_an_op
     assert shown is not None and split(shown) == [25, 53, 22] and share.of_question(shown).picture.word == "53%"
 
 
+def test_a_member_who_makes_the_rest_of_a_batch_still_cant_read_a_friends_pick_in_the_split(db, redis):  # noqa: F811
+    """Round two: the split is taken at SPLIT_FROM picks and again each SPLIT_EVERY more, and a league's page says
+    when a friend has picked; so a member who made every other pick of a batch (fans of her own, a cookie each) would
+    read a friend's pick off it as it moved. A league member's pick is in no open question's split: it joins the split
+    as the question closes."""
+    now = datetime.now(timezone.utc)
+    q = open_question(db, now + timedelta(hours=3))
+    code = league_of(db, "Asha", "Ravi")
+    crowd(db, q, "ashas", draw=predictions.SPLIT_FROM - 2)  # fans of Asha's own making, every one Draw
+    predictions.pick(db, "acct-asha", q.id, "draw")
+    db.commit()
+    before = call_of(db, "acct-asha", code, q.id)
+    predictions.pick(db, "acct-ravi", q.id, "b")
+    db.commit()
+    after = call_of(db, "acct-asha", code, q.id)
+    # She sees that Ravi has picked, and no split his pick could be read off.
+    assert after["waiting"] == [] and [(f["name"], f.get("option")) for f in after["friends"]] == [("Asha", "draw"), ("Ravi", None)]
+    assert split(after) == split(before) == [None, None, None]
+    # Her own fans make the whole of the split's first batch: it's theirs alone, with nothing of Ravi's in it.
+    crowd(db, q, "ashas-too", draw=2)
+    full = call_of(db, "acct-asha", code, q.id)
+    assert split(full) == [0, 100, 0] and full["picks"] == predictions.SPLIT_FROM
+    # It starts: Ravi's pick shows, and is in the split with hers.
+    db.get_one(Question, q.id).locks_at = now - timedelta(minutes=1)
+    db.commit()
+    closed = call_of(db, "acct-asha", code, q.id)
+    assert [(f["name"], f.get("option")) for f in closed["friends"]] == [("Asha", "draw"), ("Ravi", "b")]
+    assert [o["picks"] for o in closed["options"]] == [0, predictions.SPLIT_FROM + 1, 1]
+
+
 # ---------------------------------------------------------------- BUG-106
 
 
@@ -259,6 +289,28 @@ def test_a_league_page_keeps_its_open_calls_however_many_settled_lately(db, redi
     listed = predictions.league(db, "acct-asha", code)["questions"]
     assert listed[0]["id"] == q.id and listed[0]["waiting"] == [] and {item["sport"] for item in listed} == {"chess"}
     assert len([item for item in listed if item["status"] == "settled"]) >= 1  # and the settled ones after it
+
+
+def test_a_league_page_lists_its_open_calls_before_those_under_way_or_put_back(db, redis):  # noqa: F811
+    """Round two: the calls still to settle are those open and those closed, under way or held for a postponed game's
+    new date (POSTPONED_KEEP), whose start has gone by. The open ones come first, soonest first: twenty of the others
+    don't take tonight's place."""
+    now = datetime.now(timezone.utc)
+    code = league_of(db, "Asha", "Ravi")
+    for i in range(predictions.LEAGUE_CALLS):  # Saturday afternoon: Ravi's twenty calls, kicked off or put back
+        gone = open_question(db, now + timedelta(minutes=5), game=f"on-{i}", event_id=10 + i)
+        predictions.pick(db, "acct-ravi", gone.id, "w")
+        if i % 2:
+            gone.status, gone.closed_at = "closed", now  # under way: closed, to be settled when it ends
+        else:
+            db.get_one(Event, gone.event_id).status = "postponed"  # put back: held open, taking no picks, till its new date
+        gone.locks_at = gone.starts_at = now - timedelta(minutes=30 + i)
+    tonight = open_question(db, now + timedelta(hours=4), game="tonight", event_id=99)
+    predictions.pick(db, "acct-asha", tonight.id, "w")
+    db.commit()
+    listed = predictions.league(db, "acct-asha", code)["questions"]
+    assert (listed[0]["id"], listed[0]["status"], listed[0]["waiting"]) == (tonight.id, "open", ["Ravi"])
+    assert len(listed) == predictions.LEAGUE_CALLS and {item["status"] for item in listed[1:]} == {"closed"}
 
 
 def test_signing_in_counts_a_devices_open_picks_and_leaves_a_closed_ones_split_as_it_stood(db, redis):  # noqa: F811
