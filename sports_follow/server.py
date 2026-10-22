@@ -360,14 +360,20 @@ async def account_of(request: Request) -> accounts.Signed | None:
 
 def fan_id(request: Request, response: Response, signed_in: accounts.Signed | None = Depends(account_of)) -> str:
     """Whose follows, levels, mutes and devices a request reads and writes: the signed-in account's, else
-    the anonymous fan in the cookie this server signed, else a new anonymous fan. The request's log lines
-    name the fan by a hash (logs.fan)."""
+    the anonymous fan in the cookie this server signed, else a new anonymous fan, whose cookie only a write
+    sets (_fan). The request's log lines name the fan by a hash (logs.fan)."""
     fan = _fan(request, response, signed_in)
     logs.bind(fan=logs.fan(fan))
     return fan
 
 
-def _fan(request: Request, response: Response, signed_in: accounts.Signed | None) -> str:
+def _fan(request: Request, response: Response, signed_in: accounts.Signed | None, make: bool | None = None) -> str:
+    """The fan, as fan_id says. A device without a fan of its own keeps a new one (its cookie) only from a request
+    that `make`s one: by default a write, not a read. A read is answered as a new fan who owns nothing, for that
+    request alone, and sets no cookie: an app's first requests go out together, before any cookie is back, and each
+    keeping a fan of its own left the device with whichever answered last, and a follow made in between with a fan
+    no device holds (BUG-152). The app's page makes one (spa), as does the Android app's first request (POST
+    /api/me/start)."""
     if signed_in is not None:
         return signed_in.fan_id
     value = request.cookies.get(FAN_COOKIE) or ""
@@ -376,8 +382,12 @@ def _fan(request: Request, response: Response, signed_in: accounts.Signed | None
         fan, day = signed
         if _today() - day < REFRESH_DAYS:
             return fan
+    elif _unsigned_fan(value):
+        fan = value
     else:
-        fan = value if _unsigned_fan(value) else secrets.token_urlsafe(24)
+        fan = secrets.token_urlsafe(24)
+        if not (request.method not in ("GET", "HEAD") if make is None else make):
+            return fan
     _set_fan(request, response, fan)
     return fan
 
@@ -1418,9 +1428,22 @@ async def my_account(request: Request, response: Response, signed: accounts.Sign
     return about
 
 
+@app.post("/api/me/start")
+async def app_start(request: Request, response: Response, signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
+    """The Android app's first request as it starts (mobile/src/account.tsx): who this device is signed in as,
+    as GET /api/me/account answers, and, signed in to nothing, its anonymous fan, made now if it has none, so
+    the requests the app sends together next are all one fan's (a read makes none: _fan). The web app's page
+    does the same (spa)."""
+    about = await my_account(request, response, signed)
+    if not about.get("signed_in"):
+        await asyncio.to_thread(_fan, request, response, None, True)
+    return about
+
+
 @app.post("/api/auth/email/start")
 async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any]:
-    """Email a 6-digit sign-in code. The answer is the same whether or not the address has an account."""
+    """Email a 6-digit sign-in code. The answer is the same whether or not the address has an account, until
+    the day's codes for addresses without one are spent (KEPT_FOR_ACCOUNTS)."""
     if not mail.configured(_secure(request)):
         raise HTTPException(503, "Signing in by email isn't set up on this server yet.")
     email = accounts.normal_email(body.get("email"))
@@ -2820,7 +2843,11 @@ async def spa(path: str, request: Request) -> Response:
     if isinstance(found, Path):
         cache = "no-cache" if found.name in NO_CACHE else "public, max-age=86400"
         return FileResponse(found, media_type=MEDIA.get(found.suffix), headers={"Cache-Control": cache})
-    return HTMLResponse(share.page(found, await _page_preview(path, request), _site(request)), headers={"Cache-Control": "no-cache", **_not_indexed(path)})
+    response = HTMLResponse(share.page(found, await _page_preview(path, request), _site(request)), headers={"Cache-Control": "no-cache", **_not_indexed(path)})
+    # The app's page is its first request: it makes this device's fan (a read doesn't: _fan), so the calls the app
+    # sends together as it starts are all one fan's (BUG-152).
+    await asyncio.to_thread(_fan, request, response, await account_of(request), True)
+    return response
 
 
 def _not_indexed(path: str) -> dict[str, str]:

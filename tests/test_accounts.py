@@ -372,7 +372,7 @@ def test_signing_in_brings_this_devices_fan_and_counts_its_researches(api, store
 def test_an_accounts_fan_id_is_never_taken_from_a_fan_cookie(api, store, monkeypatch):
     """Ids from before cookies were signed are taken unsigned if they hold something; an account's never is."""
     monkeypatch.setattr(server, "_owns_anything", lambda db, fan: True)
-    taken = server._signed(api.call("GET", "/api/me/research", cookie="acct-AbCdEfGhIjKlMnOpQrStUvWx").cookies["sf_fan"])
+    taken = server._signed(api.call("POST", "/api/me/source", body={}, cookie="acct-AbCdEfGhIjKlMnOpQrStUvWx").cookies["sf_fan"])
     assert taken and not taken[0].startswith("acct-")  # a new anonymous fan instead
     assert server._signed(api.call("GET", "/api/me/research", cookie="an-old-unsigned-id").cookies["sf_fan"])[0] == "an-old-unsigned-id"
 
@@ -481,9 +481,9 @@ def test_a_request_under_way_when_the_session_ends_doesnt_sign_the_device_back_i
         return found
 
     monkeypatch.setattr(accounts, "session_for", under_way)
-    during = api.call("GET", "/api/me/research", headers=cookies(session=token))
+    during = api.call("POST", "/api/me/source", body={}, headers=cookies(session=token))
     assert not pending and "sf_fan" not in set_cookies(during)  # the request under way was still signed in
-    after = api.call("GET", "/api/me/research", headers=cookies(session=token))
+    after = api.call("POST", "/api/me/source", body={}, headers=cookies(session=token))
     assert "sf_fan" in set_cookies(after)  # the next one isn't: a new anonymous fan
 
 
