@@ -471,9 +471,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   player's Feed. Privacy says the Feed uses the YouTube API Services, that YouTube's player may set cookies, and
   links Google's Privacy Policy; Terms (`/terms`, linked wherever Privacy is) says using the app means agreeing to
   YouTube's Terms of Service (III.A.1–2; the links are `web/src/legal.ts`).
-  Titles are tidied as they're served (`sports_follow/titles.py`): HTML's escapes read (a search's titles came
-  escaped before BHA-358 read them as written), emoji, hashtags and the channel's name off,
-  bars as dots, a shouted part in sentence case keeping names (the players', `Sport.title_words`) as written.
+  Titles are shown as YouTube gives them, since its API policies want them unmodified (BHA-652): emoji, hashtags,
+  the channel's name and capitals stay; only HTML's escapes are read as they're served (`sports_follow/titles.py`: a
+  search's titles came escaped before BHA-358 read them as written).
   A video's picture is the biggest YouTube has for it (maxres, then sd, then hq; the sizes come with each read). In the dev server, `?feed-sample` on a player's page
   shows made-up videos and posts (`web/src/dev/feedSample.ts`, never in a build). The Android app has
   it all too: the Feed tab with its dot and circles (`mobile/src/app/feed.tsx`, its own address `/feed`, since
@@ -873,8 +873,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   promo, a rumour or a re-upload looks like to its fans; `restream_after`: how long a video from a channel nobody
   vouches for may run before it's taken for a whole game re-uploaded, or `None` where long videos are normal, as in
   chess), the only channels the feed's videos about its players come from (`video_channels`, official ones and a
-  few top creators, in one block at the end of its class, with `title_words` after it, the names a tidied title
-  keeps in capitals: real channel ids only, each checked to have an uploads playlist the Data API lists
+  few top creators, in one block at the end of its class: real channel ids only, each checked to have an uploads playlist the Data API lists
   (`playlistItems.list` with `playlistId` `UU` and the id after its `UC`); a sport that's off has
   none read; esports' are the `Esports` class's, for every game, and each game's own, its leagues' and teams', given
   with its `Game(..., channels=...)`), the words its videos' titles leave off a team's name (`team_affixes`: "FC",

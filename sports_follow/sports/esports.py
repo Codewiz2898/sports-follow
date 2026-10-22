@@ -528,11 +528,6 @@ restreams; a player's own stream highlights aren't."""
         "UCxo56gzJQ_fhb6svPqTSewg",  # FNATIC
         "UCs9Bi1j5s25Yinhmd-NJvJw",  # G2 Esports
     )
-    title_words = (  # kept as written in a title put in sentence case (titles.py)
-        "VALORANT", "Valorant", "VCT", "LoL", "League of Legends", "CS2", "CS:GO", "Counter-Strike",
-        "Dota 2", "Dota", "BGMI", "MVP", "LCK", "LPL", "LEC", "LCS", "EWC", "TI", "IEM", "ESL", "BLAST",
-        "HLTV", "PGL", "Masters", "Worlds", "NAVI", "G2", "T1", "FNATIC", "Sentinels", "Team Liquid",
-        "Gen.G", "Vitality", "FaZe", "MOUZ", "Paper Rex", "PRX")
     news_feeds = {  # for every game, as the channels are: HLTV is Counter-Strike's, VLR.gg Valorant's
         "https://www.dexerto.com/feed/category/esports/": "Dexerto",
         "https://www.hltv.org/rss/news": "HLTV",

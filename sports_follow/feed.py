@@ -27,8 +27,8 @@ before a weak one of today's.
 Each entry says whether the fan follows its player, and the page which of the two layouts the apps draw (layout:
 a setting, FEED_LAYOUT, that the admin panel changes live).
 
-A video's title is tidied as it's served, never as it's stored (titles.py): emoji, hashtags and the channel's name
-off, a shouted one in sentence case. Its picture is the biggest its source has (VideoSource.picture).
+A video's title is shown as YouTube gives it, its HTML escapes read as it's served (titles.py: YouTube's API policies
+want it unmodified). Its picture is the biggest its source has (VideoSource.picture).
 
 The web app draws it (web/src/components/Feed.tsx): a player page's Feed tab and Overview's "From the fans", the
 Feed tab, and Today's "From your players" (the top two of the fan's Feed). A fan's "…" sheet sends feedback
@@ -248,8 +248,7 @@ def item_id(url: str) -> str:
 
 def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, strict: bool = False) -> dict[int, list[Candidate]]:
     """The judge's kept items for each player, best first: the rows the curator scored and nobody hid (rank.py),
-    their score faded by age, a video's title tidied (titles.tidy, keeping these players' names and its sport's
-    words as written). None for a player whose sport is turned off: their rows stay, served again once it's back on.
+    their score faded by age, a video's title as YouTube gives it (titles.shown). None for a player whose sport is turned off: their rows stay, served again once it's back on.
     {} if they can't be read: a feed is then the news alone, and never an error; with strict, the error is raised
     instead (the curator mustn't take a failed read for nothing served)."""
     if not player_ids:
@@ -257,14 +256,13 @@ def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, 
     now = now or datetime.now(timezone.utc)
     try:
         with db.begin_nested():
-            players = db.execute(select(Player.id, Player.name, Player.sport).where(Player.id.in_(sorted(set(player_ids))))).all()
-            running = sorted(pid for pid, _, sport in players if sports.on(sport))
+            players = db.execute(select(Player.id, Player.sport).where(Player.id.in_(sorted(set(player_ids))))).all()
+            running = sorted(pid for pid, sport in players if sports.on(sport))
             rows = db.execute(
                 select(FeedCandidate.player_id, FeedCandidate.source, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features, FeedCandidate.verdict,
                        FeedCandidate.score, FeedCandidate.moment_id, FeedCandidate.review, FeedCandidate.judged_at, FeedCandidate.fetched_at)
                 .where(FeedCandidate.player_id.in_(running), FeedCandidate.served())
             ).all() if running else []  # fmt: skip
-            names = tuple(name for _, name, _ in players if name)
         out: dict[int, list[Candidate]] = {}
         for r in rows:
             known = feed_source(r.source)
@@ -276,7 +274,7 @@ def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, 
                     embed = source.embed(r.external_id) if source else None
                     details = (r.candidate or {}).get("details")
                     picture = source.picture(r.external_id, details) if source else None
-                    c = _video(embed, source.name if source else "", r, now, picture, names, upright=bool(source and source.upright(details)),
+                    c = _video(embed, source.name if source else "", r, now, picture, upright=bool(source and source.upright(details)),
                                mark=_mark(source.mark) if source and source.mark else None)
             except ValueError:  # pydantic's too: a row the fetch stored oddly is left out, not the feed
                 continue
@@ -301,11 +299,11 @@ def _mark(mark: SourceMark) -> Mark:
     return Mark(name=mark.name, width=mark.width, height=mark.height, min_height=mark.min_height, paths=[MarkPath(fill=f, d=d) for f, d in mark.paths])
 
 
-def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime, picture: str | None = None, names: Sequence[str] = (),
-           upright: bool = False, mark: Mark | None = None) -> Candidate | None:
+def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime, picture: str | None = None, upright: bool = False,
+           mark: Mark | None = None) -> Candidate | None:
     """A scored row as a video item, its score faded by age: an evergreen one keeps its own, and a pinned one
-    fades only past its pin, so it leads however old, and is never put among the evergreen. Its title tidied
-    (titles.tidy), keeping these names and its sport's title_words as they're written. upright: taller than it's
+    fades only past its pin, so it leads however old, and is never put among the evergreen. Its title as YouTube
+    gives it (titles.shown). upright: taller than it's
     wide (VideoSource.upright); mark: its source's icon (VideoSource.mark)."""
     if not embed:
         return None  # a video the app's player can't play
@@ -316,7 +314,7 @@ def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime, pic
     evergreen = not pinned and rank.evergreen(features, published, now)
     faded = (score if evergreen else score * fade(published, now)) + (rank.PIN if pinned else 0.0)
     channel_name = html.unescape(str(kept.get("channel") or source))  # a search's came escaped before it read them as written
-    title = titles.tidy(str(kept.get("title") or ""), channel_name, sports.of(str(kept.get("sport") or "")).title_words, names)
+    title = titles.shown(str(kept.get("title") or ""))
     item = Item(
         id=item_id(r.url), kind="video", tag=rank.tag(verdict), title=title or "A video", url=r.url,
         source=channel_name, published_at=str(kept.get("published") or "") or None,

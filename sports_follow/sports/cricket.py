@@ -489,12 +489,6 @@ a board or outlet is news; "likely to be dropped" from fan pages is rumour."""
         "UCZSNzBgFub_WWil6TOTYwAg",  # Netflix India: its cricketers' shows and interviews
         "UCQYRGzYaVa7aWd8TsbjdJ6Q",  # Aakash Chopra: analysis (5M subscribers)
     )
-    title_words = (  # kept as written in a title put in sentence case (titles.py)
-        "IPL", "WPL", "ICC", "BCCI", "ECB", "ODI", "ODIs", "T20I", "T20Is", "T20", "T20s", "WTC", "CWC",
-        "DRS", "LBW", "RCB", "CSK", "KKR", "SRH", "PBKS", "LSG", "MI", "DC", "GT", "RR", "IND", "AUS", "ENG", "PAK",
-        "NZ", "SA", "SL", "WI", "AFG", "India", "Australia", "England", "Pakistan", "New Zealand",
-        "South Africa", "Sri Lanka", "West Indies", "Bangladesh", "Afghanistan", "Test", "Tests", "Kiwis", "Proteas", "Ashes", "Ranji Trophy",
-        "Lord's", "Edgbaston", "Wankhede", "Eden Gardens", "Chinnaswamy", "MCG", "SCG")
     # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
     news_feeds = {
         "https://www.cricinfo.com/rss/content/story/feeds/0.xml": "ESPNcricinfo",
