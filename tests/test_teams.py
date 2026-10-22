@@ -810,6 +810,9 @@ def test_a_sport_turned_off_is_out_of_reach_and_its_hidden_follows_take_no_room(
         async def get(self, key: str):
             return super().get(key)
 
+        async def mget(self, keys: list[str]) -> list:
+            return [super().get(key) for key in keys]
+
         async def set(self, key: str, value: str, **kwargs) -> bool:
             self[key] = value
             return True
