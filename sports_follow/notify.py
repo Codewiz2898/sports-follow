@@ -23,6 +23,7 @@ browser's push stays as it was.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -89,6 +90,7 @@ STORY_LINES, STORY_CHARS = 3, 80  # the earlier lines under a scorecard's, each 
 # a device that never answers costs its push thread this long, not minutes (BUG-181). FCM's are fcm.TIMEOUT.
 CONNECT_TIMEOUT, READ_TIMEOUT = 2, 5
 DELIVER_WAIT = 15  # seconds a batch waits for its pushes: one still going then is written back when it ends
+TEST_WAIT = 10  # seconds a test push is waited for (send_test)
 
 _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="notify")  # batches
 # One push to one device each. A device that took its last push goes by _wire; a new one, or one failing lately, by
@@ -96,6 +98,7 @@ _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="notify")  # batche
 # others like them, never the pushes to devices that work, in their batch or any other (BUG-181).
 _wire = ThreadPoolExecutor(max_workers=16, thread_name_prefix="push")
 _doubt = ThreadPoolExecutor(max_workers=8, thread_name_prefix="push-doubt")
+_tests = ThreadPoolExecutor(max_workers=4, thread_name_prefix="push-test")  # test pushes (send_test), apart from the API's threads
 
 
 # ---------------------------------------------------------------- keys
@@ -742,16 +745,38 @@ def _fit(payload: dict[str, Any]) -> str:
     return data
 
 
-def send_test(fan_id: str) -> int:
-    """A test notification to each of this fan's devices. Returns how many took it."""
-    with session() as db:
-        newest = select(PushSubscription).where(PushSubscription.fan_id == fan_id, PushSubscription.transport.in_(transports())).order_by(PushSubscription.id.desc()).limit(MAX_DEVICES)
-        devices = [(d.id, d.transport, d.endpoint, d.p256dh, d.auth) for d in db.scalars(newest)]
-    # On Android, a moment of no sport, in the app's blue (fcm.message).
-    payload = {"id": 0, "title": "Notifications are on", "body": "You'll hear about goals, fifties, big games and results for the players you follow.", "url": "/", "tag": "test", "kind": "test", "loud": True, "quiet": False}
-    results = [(device[0], deliver(device, payload, 600)) for device in devices]
-    settle(results)
-    return sum(1 for _, error in results if error is None)
+def newest_devices(db: Session, fan_id: str) -> list[tuple]:
+    """A fan's devices a push goes to, (id, transport, endpoint, p256dh, auth): their newest, of the transports this
+    server sends by, as a moment's push (_plan). A test push goes to these (send_test)."""
+    newest = select(PushSubscription).where(PushSubscription.fan_id == fan_id, PushSubscription.transport.in_(transports())).order_by(PushSubscription.id.desc()).limit(MAX_DEVICES)
+    return [(d.id, d.transport, d.endpoint, d.p256dh, d.auth) for d in db.scalars(newest)]
+
+
+# On Android, a moment of no sport, in the app's blue (fcm.message).
+TEST = {"id": 0, "title": "Notifications are on", "body": "You'll hear about goals, fifties, big games and results for the players you follow.", "url": "/", "tag": "test", "kind": "test", "loud": True, "quiet": False}
+
+
+async def send_test(devices: list[tuple]) -> int:
+    """A test notification to each of these devices (newest_devices) at once, on the test threads (_tests), which write
+    back each device's health as its push ends. Waited for without holding a thread, for at most TEST_WAIT: one not
+    taken by then counts as not taken (and one not yet started isn't sent). Returns how many took it."""
+    if not devices:
+        return 0
+    pushes = [asyncio.wrap_future(_tests.submit(logs.carried(_test_one), device)) for device in devices]
+    done, going = await asyncio.wait(pushes, timeout=TEST_WAIT)
+    for push in going:
+        push.cancel()
+    return sum(1 for push in done if push.exception() is None and push.result() is None)
+
+
+def _test_one(device: tuple) -> int | str | None:
+    """One test push, then its device's health written back."""
+    error = deliver(device, TEST, 600)
+    try:
+        settle([(device[0], error)])
+    except Exception:
+        log.exception("a test push to device %s: what its push service said wasn't written back", device[0])
+    return error
 
 
 def settle(results: list[tuple[int, int | str | None]]) -> None:

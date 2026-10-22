@@ -2093,11 +2093,24 @@ def unregister_fcm(body: dict = Body(...), fan: str = Depends(fan_id), db: Sessi
     return {"ok": True}
 
 
+PUSH_TESTS_PER_FAN = 5  # an hour
+PUSH_TESTS_PER_ADDRESS = 20  # an hour, from one client address (an IPv6 /64)
+
+
 @app.post("/api/push/test")
-async def push_test(fan: str = Depends(fan_id)) -> dict[str, int]:
+async def push_test(request: Request, fan: str = Depends(fan_id)) -> dict[str, int]:
+    """A test notification to each of this fan's devices. A fan and an address send only so many an hour: past
+    either, a 429. The pushes go on notify's own threads and are waited for on none (notify.send_test), so devices
+    that never answer hold up nothing but other test pushes, never search, following or sign-in (BUG-182)."""
     if notify.public_key() is None and not fcm.enabled():
         raise HTTPException(503, "Notifications aren't set up on this server yet.")
-    return {"sent": await asyncio.to_thread(notify.send_test, fan)}
+    refused = "That's a lot of test notifications for one hour. Try again later."
+    await _take(f"pushtest:fan:{fan}", PUSH_TESTS_PER_FAN, 3600, refused)
+    address = client_address(request)
+    if address:
+        await _take(f"pushtest:address:{address}", PUSH_TESTS_PER_ADDRESS, 3600, refused)
+    devices = await in_db(notify.newest_devices, fan)
+    return {"sent": await notify.send_test(devices)}
 
 
 @app.post("/api/notifications/{notification_id}/opened")

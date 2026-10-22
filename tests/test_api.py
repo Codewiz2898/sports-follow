@@ -21,6 +21,8 @@ import asyncio
 import errno
 import json
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
@@ -1324,6 +1326,68 @@ def test_one_network_turns_notifications_on_for_only_so_many_new_devices_a_day(a
     assert browser("someone", 9, "81.2.69.143") == 200
     assert set(api.devices) == {"https://fcm.googleapis.com/fcm/send/0", "https://fcm.googleapis.com/fcm/send/1", "https://fcm.googleapis.com/fcm/send/9",
                                 "dGVzdC1pbnN0YW5jZQ:APA91bE2" + "x" * 140}
+
+
+@pytest.fixture
+def unanswered(api, monkeypatch):
+    """Every fan has ten devices (the cap), whose push services never answer a test push till the event is set."""
+    release = threading.Event()
+    devices = [(i, "webpush", f"https://fcm.googleapis.com/fcm/send/{i}", "k", "a") for i in range(notify.MAX_DEVICES)]
+
+    @contextmanager
+    def session():  # what send_test read the devices from before it was handed them
+        yield SimpleNamespace(scalars=lambda stmt: [SimpleNamespace(id=i, transport=t, endpoint=e, p256dh=p, auth=a) for i, t, e, p, a in devices])
+
+    tests = ThreadPoolExecutor(max_workers=4)
+    monkeypatch.setattr(notify, "public_key", lambda: "key")
+    monkeypatch.setattr(notify, "session", session)
+    monkeypatch.setattr(notify, "newest_devices", lambda db, fan: devices, raising=False)
+    monkeypatch.setattr(notify, "deliver", lambda device, payload, ttl, topic=None: release.wait(30) and "Read timed out.")
+    monkeypatch.setattr(notify, "settle", lambda results: None)
+    monkeypatch.setattr(notify, "_tests", tests, raising=False)
+    monkeypatch.setattr(notify, "TEST_WAIT", 0.3, raising=False)
+    yield release
+    release.set()
+    tests.shutdown(wait=True)
+
+
+def test_test_pushes_to_devices_that_never_answer_hold_up_no_search(unanswered):
+    # BUG-182: each test push held one of the threads search, following and sign-in run on (about six a worker),
+    # pushing its ten devices one after another: 34 at once and a search took 77 s.
+    async def go():
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=4))
+
+        async def test_push(n: int) -> httpx.Response:
+            transport = httpx.ASGITransport(app=server.app, client=(f"81.2.69.{10 + n}", 50000), raise_app_exceptions=False)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                return await client.post("/api/push/test", headers={"Cookie": f"sf_fan={server.sign_fan(f'fan-{n}')}"})
+
+        pushes = [asyncio.create_task(test_push(n)) for n in range(8)]
+        await asyncio.sleep(0.2)
+        try:
+            searched = await asyncio.wait_for(asyncio.to_thread(lambda: "found"), 2)  # as /api/search runs _search
+        except TimeoutError:
+            searched = "still waiting for a thread"
+        finally:
+            unanswered.set()
+        return searched, await asyncio.gather(*pushes)
+
+    searched, answers = asyncio.run(go())
+    assert searched == "found"
+    assert [(a.status_code, a.json()) for a in answers] == [(200, {"sent": 0})] * 8  # none answered in time
+
+
+def test_test_pushes_are_limited_for_each_fan_and_network(api, unanswered, monkeypatch):
+    unanswered.set()
+    monkeypatch.setattr(server, "PUSH_TESTS_PER_FAN", 5, raising=False)
+    monkeypatch.setattr(server, "PUSH_TESTS_PER_ADDRESS", 8, raising=False)
+
+    def test_push(fan: str, address: str = PUBLIC) -> int:
+        return api.call("POST", "/api/push/test", fan=fan, address=address).status_code
+
+    assert [test_push("fan") for _ in range(6)] == [200] * 5 + [429]
+    assert [test_push(f"cookie-{n}") for n in range(4)] == [200, 200, 200, 429]  # new cookies share their network's
+    assert test_push("someone", "81.2.69.143") == 200
 
 
 def test_starters_are_offered_as_the_fan_sees_them(api, monkeypatch):
