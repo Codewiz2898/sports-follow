@@ -515,6 +515,29 @@ def test_signing_in_brings_this_devices_fan_and_counts_its_researches(api, store
     assert api.queue.options == {"_defer_by": 60, "trace": {"rid": answer.headers["x-request-id"]}}  # logged under the sign-in's id
 
 
+def test_what_a_sign_in_brings_shows_in_the_accounts_apps_open_on_other_devices(api, store, outbox):
+    """The players, teams and games a device brought as it signed in showed in the account's apps open elsewhere only
+    at their stream's next connect (BUG-165): once they're in, the sign-in says so on the account's own channel, which
+    each of its open streams answers by sending the list again (tests/test_streams.py)."""
+    said: list[tuple[str, list]] = []
+
+    async def publish(channel, message):
+        said.append((channel, list(store.adopted)))
+        return 1
+
+    api.redis.publish = publish
+    sign_in(api, outbox)  # a device with nothing of its own to bring
+    assert said == []
+    assert sign_in(api, outbox, headers=cookies(fan="anon-1")).status_code == 200
+    assert said == [("follows:acct-1", [("anon-1", 1)])]  # said once they're in
+
+    async def down(channel, message):
+        raise ConnectionError("Redis is restarting")
+
+    api.redis.publish = down  # the sign-in stands all the same: the apps catch up as their streams connect again
+    assert sign_in(api, outbox, headers=cookies(fan="anon-2")).json()["players_added"] == 2
+
+
 def test_an_accounts_fan_id_is_never_taken_from_a_fan_cookie(api, store, monkeypatch):
     """Ids from before cookies were signed are taken unsigned if they hold something; an account's never is."""
     monkeypatch.setattr(server, "_owns_anything", lambda db, fan: True)

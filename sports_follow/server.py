@@ -1745,6 +1745,16 @@ async def _tell_signed_out(fan: str | None) -> None:
         log.warning("accounts: couldn't tell the account's open apps it was signed out: %s", exc)
 
 
+async def _tell_brought(fan: str) -> None:
+    """A device's players, teams and games came into the account as it signed in: a word on the account's own channel,
+    and each of its open streams sends its list again (my_stream), so its apps open on other devices show them at
+    once, not at their stream's next connect (BUG-165). A courtesy, as _tell_devices's word is."""
+    try:
+        await state["redis"].publish(bus.follows_channel(fan), "{}")
+    except Exception as exc:  # noqa: BLE001 — what came stays the account's either way
+        log.warning("accounts: couldn't tell the account's open apps what a sign-in brought: %s", exc)
+
+
 async def _sign_in(request: Request, response: Response, account_id: int, signed: accounts.Signed | None) -> dict[str, Any]:
     """Sign this device in to the account, bringing what its anonymous fan had (accounts.adopt). A
     session this device already had (signing in again, or as someone else) ends. The answer says how many
@@ -1763,6 +1773,7 @@ async def _sign_in(request: Request, response: Response, account_id: int, signed
         await state["redis"].delete(mine)
         # A follow or a device sent just before this, still under way, lands on the anonymous fan: move it too.
         await enqueue("adopt_stragglers", anon, account_id, done.session_id, _defer_by=60)
+        await _tell_brought(done.fan_id)
     _set_session(request, response, done.token)
     response.delete_cookie(FAN_COOKIE, httponly=True, samesite="lax", secure=_secure(request))
     return {**(await in_db(accounts.describe, account_id) or {}), "players_added": done.players, "teams_dropped": done.teams_dropped}

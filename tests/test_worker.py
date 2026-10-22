@@ -5,6 +5,7 @@ job logs under its own id, or the request's that queued it, and ends with one li
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import logging
 import os
@@ -20,7 +21,7 @@ from arq.worker import Worker, create_worker
 
 import pytest
 
-from sports_follow import db, engine, history, livecards, logs, notify, pipeline, predictions_push, shutdown, structured, teams, worker
+from sports_follow import accounts, db, engine, history, livecards, logs, notify, pipeline, predictions_push, shutdown, structured, teams, worker
 
 
 def test_every_job_slot_gets_a_thread(monkeypatch):
@@ -635,3 +636,28 @@ def test_a_worker_starting_without_a_recent_starters_refresh_or_team_import_queu
     asyncio.run(worker.WorkerSettings.on_startup({"redis": Redis(done=False)}))
     asyncio.run(worker.WorkerSettings.on_startup({"redis": Redis(done=True)}))
     assert queued == [("refresh_starters", "refresh_starters:startup"), ("import_teams", "import_teams:startup")]
+
+
+def test_what_comes_into_an_account_after_its_sign_in_shows_in_its_open_apps(monkeypatch):
+    """A follow under way as a device signed in lands on its anonymous fan, and moves into the account a minute later
+    (adopt_stragglers): the account's apps open on its devices hear of it then, as they do of a follow (BUG-165)."""
+    moved: list[tuple[str, int]] = []
+    said: list[tuple[str, list]] = []
+    monkeypatch.setattr(accounts, "adopt_later", lambda anon, account_id, session_id: moved.append((anon, account_id)) or 1)
+    monkeypatch.setattr(accounts, "fan_of", lambda s, account_id: f"acct-{account_id}")
+    monkeypatch.setattr(db, "session", lambda: contextlib.nullcontext(None))
+
+    class Redis:
+        async def publish(self, channel, message):
+            said.append((channel, list(moved)))
+            return 1
+
+    asyncio.run(worker.adopt_stragglers({"redis": Redis()}, "anon-1", 7, 101))
+    assert said == [("follows:acct-7", [("anon-1", 7)])]  # once they're in
+
+    class Down:
+        async def publish(self, channel, message):
+            raise ConnectionError("Redis is restarting")
+
+    asyncio.run(worker.adopt_stragglers({"redis": Down()}, "anon-2", 7, 102))  # what moved stays moved
+    assert moved[-1] == ("anon-2", 7)
