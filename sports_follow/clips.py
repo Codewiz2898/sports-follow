@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import delete, func, literal, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -328,11 +328,11 @@ def report(db: Session, slug: str, fan: str, reason: str = "") -> bool | None:
 
 
 def merge(db: Session, anon: str, fan: str) -> None:
-    """A device's anonymous fan signing in (accounts.adopt): its reports become the account's, one each."""
-    moved = insert(ClipReport).from_select(["clip_id", "fan_id", "reason", "created_at"],
-                                           select(ClipReport.clip_id, literal(fan), ClipReport.reason, ClipReport.created_at).where(ClipReport.fan_id == anon))
-    db.execute(moved.on_conflict_do_nothing())
-    db.execute(delete(ClipReport).where(ClipReport.fan_id == anon))
+    """A device's anonymous fan signing in (accounts.adopt): its reports become the account's, one each. Taken off the
+    device in one statement: a report made on it as this runs stays there for the next move (BUG-327)."""
+    taken = db.execute(delete(ClipReport).where(ClipReport.fan_id == anon).returning(ClipReport.clip_id, ClipReport.reason, ClipReport.created_at)).all()
+    if taken:
+        db.execute(insert(ClipReport).values([{"clip_id": clip_id, "fan_id": fan, "reason": reason, "created_at": at} for clip_id, reason, at in taken]).on_conflict_do_nothing())
 
 
 def forget_players(db: Session, gone: list[int]) -> None:

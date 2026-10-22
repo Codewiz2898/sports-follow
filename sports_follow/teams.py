@@ -773,17 +773,21 @@ def merge(db: Session, anon: str, fan: str) -> int:
     have = set(db.scalars(select(TeamFollow.team_id).where(TeamFollow.fan_id == fan)))
     room, dropped = MAX - counted(db, fan), 0
     running = set(sports.running_keys())
-    rows = db.execute(select(TeamFollow, Team.sport).join(Team, Team.id == TeamFollow.team_id)
-                      .where(TeamFollow.fan_id == anon).order_by(TeamFollow.created_at, TeamFollow.id)).all()
-    for row, sport in rows:
+    # Taken off the device in one statement: a team followed on it as this runs stays there for the next move
+    # (accounts.adopt_later), never deleted unmoved (BUG-327).
+    rows = db.execute(delete(TeamFollow).where(TeamFollow.fan_id == anon).returning(TeamFollow.id, TeamFollow.team_id, TeamFollow.alert_rules, TeamFollow.created_at)).all()
+    sport_of = dict(db.execute(select(Team.id, Team.sport).where(Team.id.in_([row.team_id for row in rows]))).all()) if rows else {}
+    for row in sorted(rows, key=lambda row: (row.created_at, row.id)):
+        sport = sport_of.get(row.team_id)
         if row.team_id in have:
             db.execute(update(TeamFollow).where(TeamFollow.fan_id == fan, TeamFollow.team_id == row.team_id).values(created_at=func.least(TeamFollow.created_at, row.created_at)))
+        elif row.team_id not in sport_of:
+            continue  # the team was removed as this ran
         elif sport not in running or room > 0:  # a turned-off sport's comes too, hidden, and takes no room (counted)
             db.execute(insert(TeamFollow).values(fan_id=fan, team_id=row.team_id, alert_rules=row.alert_rules, created_at=row.created_at).on_conflict_do_nothing())
             room -= sport in running
         else:
             dropped += 1
-    db.execute(delete(TeamFollow).where(TeamFollow.fan_id == anon))
     return dropped
 
 

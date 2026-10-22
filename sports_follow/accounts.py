@@ -17,8 +17,9 @@ import re
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
-from sqlalchemy import ColumnElement, SQLColumnExpression, case, delete, func, literal, null, or_, select, update
+from sqlalchemy import ColumnElement, SQLColumnExpression, case, delete, func, null, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -233,61 +234,52 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int | None) -> Mo
         return Moved(0, 0)
     if session_id is not None and db.scalar(select(AccountSession.id).where(AccountSession.id == session_id).with_for_update(read=True)) is None:
         session_id = None  # signed out since: held until this commits, so a sign-out under way takes what moved with it
-    players = db.scalar(select(func.count()).select_from(Follow).where(Follow.fan_id == anon)) or 0
+    # Each kind of row is taken off `anon` in one statement (_take) and then put under the account: a row a request
+    # under way writes to `anon` as this runs is left there for the next move (adopt_later), never deleted unmoved.
     # A player both follow keeps the account's alert level, and the earlier follow date: the activity
     # list shows moments since then.
-    followed = insert(Follow).from_select(
-        ["fan_id", "player_id", "alert_rules", "created_at"],
-        select(literal(fan), Follow.player_id, Follow.alert_rules, Follow.created_at).where(Follow.fan_id == anon),
-    )
-    db.execute(followed.on_conflict_do_update(index_elements=["fan_id", "player_id"], set_={"created_at": func.least(Follow.created_at, followed.excluded.created_at)}))
-    db.execute(delete(Follow).where(Follow.fan_id == anon))
+    followed = _take(db, Follow, anon, fan, Follow.player_id, Follow.alert_rules, Follow.created_at)
+    players = len(followed)
+    if followed:
+        moved = insert(Follow).values(followed)
+        db.execute(moved.on_conflict_do_update(index_elements=["fan_id", "player_id"], set_={"created_at": func.least(Follow.created_at, moved.excluded.created_at)}))
     # The games followed by themselves (matches.py), as players are: a game both follow keeps the account's
     # level and the earlier date, and stays followed if either still did. The account follows at most
     # matches.MAX games at once: of this device's others, the soonest that fit come over, and every lapsed one. A
     # game the account let lapse but the device still follows is on again, so it needs room too (BUG-099).
     have = set(db.scalars(select(MatchFollow.event_id).where(MatchFollow.fan_id == fan, MatchFollow.until.is_(None))))
     room = matches.MAX - len(have)
+    games = _take(db, MatchFollow, anon, fan, MatchFollow.id, MatchFollow.event_id, MatchFollow.alert_rules, MatchFollow.keys, MatchFollow.created_at, MatchFollow.until)
+    starts = dict(db.execute(select(Event.id, Event.start_utc).where(Event.id.in_([g["event_id"] for g in games]))).all()) if games else {}
+    unknown = datetime.max.replace(tzinfo=timezone.utc)  # a game with no start time yet: after every other
     moving = []
-    for follow_id, event_id, until in db.execute(select(MatchFollow.id, MatchFollow.event_id, MatchFollow.until).join(Event, Event.id == MatchFollow.event_id)
-                                                 .where(MatchFollow.fan_id == anon).order_by(Event.start_utc.asc().nulls_last(), MatchFollow.id)):
-        counts = until is None and event_id not in have  # a game it doesn't follow yet, still on
+    for game in sorted(games, key=lambda g: (starts.get(g["event_id"]) or unknown, g["id"])):
+        del game["id"]
+        counts = game["until"] is None and game["event_id"] not in have  # a game it doesn't follow yet, still on
         if not counts or room > 0:
-            moving.append(follow_id)
+            moving.append(game)
             room -= 1 if counts else 0
-    games = insert(MatchFollow).from_select(
-        ["fan_id", "event_id", "alert_rules", "keys", "created_at", "until"],
-        select(literal(fan), MatchFollow.event_id, MatchFollow.alert_rules, MatchFollow.keys, MatchFollow.created_at, MatchFollow.until).where(MatchFollow.id.in_(moving)),
-    )
-    db.execute(games.on_conflict_do_update(index_elements=["fan_id", "event_id"], set_={
-        "created_at": func.least(MatchFollow.created_at, games.excluded.created_at),
-        "until": case((or_(MatchFollow.until.is_(None), games.excluded.until.is_(None)), None), else_=func.greatest(MatchFollow.until, games.excluded.until)),
-    }))
-    db.execute(delete(MatchFollow).where(MatchFollow.fan_id == anon))
+    if moving:
+        moved = insert(MatchFollow).values(moving)
+        db.execute(moved.on_conflict_do_update(index_elements=["fan_id", "event_id"], set_={
+            "created_at": func.least(MatchFollow.created_at, moved.excluded.created_at),
+            "until": case((or_(MatchFollow.until.is_(None), moved.excluded.until.is_(None)), None), else_=func.greatest(MatchFollow.until, moved.excluded.until)),
+        }))
     teams_dropped = teams.merge(db, anon, fan)  # the teams followed (teams.py), as players are, at most teams.MAX
     fansports.merge(db, anon, fan)  # the sports they watch (fansports.py): the account's first, then the device's others
     predictions.merge(db, anon, fan)  # the games called (predictions.py): a question both picked keeps the account's pick
     clips.merge(db, anon, fan)  # clips reported (clips.py): one each
-    muted = insert(NotificationMute).from_select(
-        ["fan_id", "event_id", "created_at"],
-        select(literal(fan), NotificationMute.event_id, NotificationMute.created_at).where(NotificationMute.fan_id == anon),
-    )
-    db.execute(muted.on_conflict_do_nothing())
-    db.execute(delete(NotificationMute).where(NotificationMute.fan_id == anon))
+    muted = _take(db, NotificationMute, anon, fan, NotificationMute.event_id, NotificationMute.created_at)
+    if muted:
+        db.execute(insert(NotificationMute).values(muted).on_conflict_do_nothing())
     # What the fan hid from players' feeds (feed.py): an item both hid keeps the account's word on it.
-    hid = insert(FeedFeedback).from_select(
-        ["fan_id", "player_id", "item_id", "verdict", "created_at"],
-        select(literal(fan), FeedFeedback.player_id, FeedFeedback.item_id, FeedFeedback.verdict, FeedFeedback.created_at).where(FeedFeedback.fan_id == anon),
-    )
-    db.execute(hid.on_conflict_do_nothing())
-    db.execute(delete(FeedFeedback).where(FeedFeedback.fan_id == anon))
+    hid = _take(db, FeedFeedback, anon, fan, FeedFeedback.player_id, FeedFeedback.item_id, FeedFeedback.verdict, FeedFeedback.created_at)
+    if hid:
+        db.execute(insert(FeedFeedback).values(hid).on_conflict_do_nothing())
     # Where the fan first came from, unless the account already says (an earlier device's first link).
-    came = insert(FanSource).from_select(
-        ["fan_id", "tag", "utm_source", "utm_medium", "utm_campaign", "landing", "created_at"],
-        select(literal(fan), FanSource.tag, FanSource.utm_source, FanSource.utm_medium, FanSource.utm_campaign, FanSource.landing, FanSource.created_at).where(FanSource.fan_id == anon),
-    )
-    db.execute(came.on_conflict_do_nothing(index_elements=["fan_id"]))
-    db.execute(delete(FanSource).where(FanSource.fan_id == anon))
+    came = _take(db, FanSource, anon, fan, FanSource.tag, FanSource.utm_source, FanSource.utm_medium, FanSource.utm_campaign, FanSource.landing, FanSource.created_at)
+    if came:
+        db.execute(insert(FanSource).values(came).on_conflict_do_nothing(index_elements=["fan_id"]))
     # The push log the noise rules read (how often this phone buzzed, the game's story so far).
     db.execute(update(Notification).where(Notification.fan_id == anon).values(fan_id=fan))
     # This device's alerts: now the account's, and this session's. The account's oldest devices make room.
@@ -298,6 +290,13 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int | None) -> Mo
     if devices:
         notify.trim_devices(db, fan, PushSubscription.id.in_(devices), notify.MAX_DEVICES - len(devices))
     return Moved(players, teams_dropped)
+
+
+def _take(db: Session, model: Any, anon: str, fan: str, *columns: Any) -> list[dict[str, Any]]:
+    """The rows kept under `anon` in this table, taken off it in one statement (DELETE … RETURNING these columns), each
+    ready to go under the account's fan id. A row written to `anon` as the move runs isn't among them, so it isn't
+    deleted either: copying then deleting in two statements deleted it unmoved (BUG-327)."""
+    return [{**row._mapping, "fan_id": fan} for row in db.execute(delete(model).where(model.fan_id == anon).returning(*columns))]
 
 
 def adopt_later(anon: str, account_id: int, session_id: int) -> int:
