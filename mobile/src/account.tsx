@@ -86,7 +86,12 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       }
       meRef.current = now
       setMe(now)
-      if (shown === null && now.signed_in === false && now.reason === 'signed_out') setNotice((said) => said ?? SIGNED_OUT)
+      // Found signed out elsewhere as it starts (the app was closed meanwhile): said once, and its live cards, the old
+      // account's games, go too, as they would have had it been open (BUG-278).
+      if (shown === null && now.signed_in === false && now.reason === 'signed_out') {
+        StannNotifications?.takeDownLive(null)
+        setNotice((said) => said ?? SIGNED_OUT)
+      }
     })
     who.current = asker
     asker.ask().finally(go)

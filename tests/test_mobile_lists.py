@@ -99,12 +99,13 @@ const held = () => { const h = {}; h.promise = new Promise((done, fail) => { h.d
 """
 
 
-def provider(path: str, first: str, name: str) -> str:
-    """A provider's file from `first` (after its imports) to what it draws, nothing exported, its value returned."""
+def provider(path: str, first: str, name: str, returns: str = "value") -> str:
+    """A provider's file from `first` (after its imports) to what it draws, nothing exported, returning `returns`
+    (its value) in place of drawing."""
     text = (ROOT / path).read_text()
     start = text.index(first)
     end = text.index(f"  return <{name}Context", start)
-    return text[start:end].replace("\nexport function ", "\nfunction ") + "  return value\n}\n"
+    return text[start:end].replace("\nexport function ", "\nfunction ") + f"  return {returns}\n}}\n"
 
 
 MODULE = """
