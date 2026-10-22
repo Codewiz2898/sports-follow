@@ -219,6 +219,40 @@ def test_a_hidden_clip_comes_back_after_the_buckets_keys_change_and_one_whose_fi
         assert s.query(Clip).filter_by(slug=slug).one().status == "hidden"
 
 
+def test_a_first_hide_the_bucket_fails_halfway_through_is_finished_by_asking_again(db, bucket, page, monkeypatch):
+    """BUG-285: a first hide made its token, moved the video, and failed on the poster: the 502 rolled the clip back,
+    token and all, so nothing could find the video again. Asking again made another token, the clip couldn't be put
+    back, and taking it down left the video in the bucket for good. The token is kept before anything moves."""
+    key_id, _ = _key(db)
+    slug, _ = _publish(db, bucket, key_id)
+    video, poster = clips.video_key(slug), clips.poster_key(slug)
+    copy = bucket.copy
+
+    def flaky(source, key):
+        if source == poster:
+            monkeypatch.setattr(bucket, "copy", copy)  # once
+            raise OSError("the bucket is down")
+        copy(source, key)
+
+    monkeypatch.setattr(bucket, "copy", flaky)
+    with db() as s, pytest.raises(clips.Refused) as refused:
+        clips.set_hidden(s, slug, True)
+    assert refused.value.status == 502 and bucket.size(video) is None  # the video had moved
+    with db() as s:
+        assert clips.set_hidden(s, slug, True).status == "hidden"  # asked again: the rest moves, under the same names
+    with db() as s:
+        token = s.query(Clip).filter_by(slug=slug).one().hidden_as or ""
+    assert sorted(bucket.objects) == sorted([clipstore.hidden(token, video), clipstore.hidden(token, poster)])
+    with db() as s:
+        assert clips.set_hidden(s, slug, False).status == "live"
+    assert (bucket.size(video), bucket.size(poster), len(bucket.objects)) == (1000, 100, 2)
+    with db() as s:
+        clips.set_hidden(s, slug, True)
+    with db() as s:
+        assert clips.remove(s, slug)
+    assert bucket.objects == {}  # nothing left behind
+
+
 def test_the_poster_is_signed_for_the_size_the_app_says(db, bucket, page):
     """BUG-126: the poster's upload URL was signed for its type alone, so a file of any size could be put there (its
     2 MB was checked only at done). The app says its size, and the URL is signed for that, as the video's is."""

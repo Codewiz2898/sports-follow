@@ -243,11 +243,19 @@ def set_hidden(db: Session, slug: str, hidden: bool) -> Clip | None:
     public address to names made with a token of its own (clipstore.hidden, Clip.hidden_as), so a link to them plays
     nothing either; put back, they're moved back. Refused (502) when the bucket fails on it: the caller's change is
     rolled back, and asking again finishes the move; and (409) putting back one whose files are in neither place,
-    rather than showing a clip with nothing to play."""
+    rather than showing a clip with nothing to play.
+
+    A clip's first hide commits its token before any file moves (and whatever the caller had done before it): a move
+    the bucket fails halfway leaves a file under it, which asking again, or taking the clip down, finds there."""
     clip = db.scalar(select(Clip).where(Clip.slug == slug))
     if clip is None or clip.status not in ("live", "hidden"):
         return None
-    token = clip.hidden_as or secrets.token_urlsafe(24)
+    if hidden and clip.hidden_as is None:
+        # The first token kept is the one: two hides at once agree on it (the second waits for the first's commit).
+        db.execute(update(Clip).where(Clip.id == clip.id, Clip.hidden_as.is_(None)).values(hidden_as=secrets.token_urlsafe(24)))
+        db.commit()
+        db.refresh(clip)
+    token = clip.hidden_as or secrets.token_urlsafe(24)  # put back with none: hidden before files were moved
     bucket = clipstore.STORE
     if bucket is not None:
         try:
@@ -262,8 +270,7 @@ def set_hidden(db: Session, slug: str, hidden: bool) -> Clip | None:
         except Refused:
             raise
         except Exception as exc:
-            raise Refused(502, f"The clips bucket failed on its files ({type(exc).__name__}): nothing changed, try again.") from exc
-    clip.hidden_as = token
+            raise Refused(502, f"The clips bucket failed on its files ({type(exc).__name__}): try again, which finishes the move.") from exc
     clip.status = "hidden" if hidden else "live"
     if not hidden:
         clip.reports = 0
