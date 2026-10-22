@@ -135,9 +135,9 @@ export function chessMiddle(state: ChessState, clock?: string | null, on = true)
   if (!match) return state.result ? state.result.replace('-', '–') : clock
   const leader = [state.white, state.black].find((s) => s?.id && s.id === match.ahead)
   const [mine = '', theirs = ''] = match.score.split('–')
-  if (!leader) return `Match ${match.score}`  // level (or read before it said who leads)
+  if (!leader) return `Match\u00a0${match.score}`  // level (or read before it said who leads)
   const [high, low] = points(mine) >= points(theirs) ? [mine, theirs] : [theirs, mine]
-  return on ? `${leader.name} leads ${high}–${low}` : `Match ${high}–${low}`
+  return on ? `${leader.name} leads\u00a0${high}–${low}` : `Match\u00a0${high}–${low}`  // a long name may wrap; the score stays whole
 }
 
 /** A match score's points ("2½" is 2.5). */

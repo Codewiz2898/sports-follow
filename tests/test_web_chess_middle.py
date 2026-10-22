@@ -66,8 +66,8 @@ def test_a_mini_matchs_line_names_who_leads_whichever_players_page_it_is():
     single = lichess_chess.parse_board({**final, "games": [final["games"][0]]}, LAZAVIK, now)
     boards.append((single.state, single.clock_label, False))
     assert middles(boards) == [
-        "Gukesh D leads 2–0", "Gukesh D leads 2–0",  # through either player's fixture
-        "Match 1–1", "Match 1–1",
-        "Match 6–2", "Match 6–2",  # over: the leader's points first, the note under it ("Magnus Carlsen won the match") names him
+        "Gukesh D leads\u00a02–0", "Gukesh D leads\u00a02–0",  # through either player's fixture (a long name may wrap, not the score)
+        "Match\u00a01–1", "Match\u00a01–1",
+        "Match\u00a06–2", "Match\u00a06–2",  # over: the leader's points first, the note under it ("Magnus Carlsen won the match") names him
         "1–0",  # one game: its result, White's first
     ]
