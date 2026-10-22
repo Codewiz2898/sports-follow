@@ -311,6 +311,42 @@ def test_an_admins_word_stands_over_the_judges_and_a_channels_trust_scales_or_hi
     assert "Every boundary" in served()
 
 
+def test_an_admins_hide_takes_the_video_off_every_players_feed_and_taking_it_back_brings_every_one_back(made):
+    """BHA-438: an admin hides a video (it's abusive, or fake), not one player's row of it: a video kept for a whole
+    team is hidden under every player it was kept for, so For you, which mixes in players the fan doesn't follow,
+    doesn't serve it either. Taking the hide back (or approving the video) brings every row of it back at once."""
+    pid = asha()
+    with db_module.session() as s:
+        p = Player(slug="ravi-rao", name="Ravi Rao", sport="cricket", teams=["Riverside XI"])
+        s.add(p)
+        s.flush()
+        s.add(PlayerCard(player_id=p.id, status="ready", card={"player": {"name": "Ravi Rao"}, "news": []}))
+        other = p.id
+    mine = stored(pid, "shared00001", "Verma and Rao's stand", EDITS, 5, verdict=said())
+    stored(other, "shared00001", "Verma and Rao's stand", EDITS, 5, verdict=said())
+    stored(other, "raoonly0001", "Rao in the nets", TALKS, 4, verdict=said())
+    rank.rescore()
+
+    def served(player_id: int) -> set[str]:
+        s = made()
+        try:
+            return {c.item.title for c in feed.judged(s, [player_id]).get(player_id, [])}
+        finally:
+            s.close()
+
+    assert served(pid) == {"Verma and Rao's stand"} and served(other) == {"Verma and Rao's stand", "Rao in the nets"}
+    assert admin.review_candidate(mine, "hidden")
+    assert served(pid) == set() and served(other) == {"Rao in the nets"}
+    assert {r.player_id: r.review for r in rows_of("shared00001")} == {pid: "hidden", other: "hidden"}
+    rank.rescore()  # the curator's next run leaves it hidden
+    assert served(other) == {"Rao in the nets"}
+    assert admin.review_candidate(mine, None)
+    assert served(pid) == {"Verma and Rao's stand"} and served(other) == {"Verma and Rao's stand", "Rao in the nets"}
+    assert {r.player_id: r.review for r in rows_of("shared00001")} == {pid: None, other: None}
+    assert admin.review_candidate(mine, "hidden") and admin.review_candidate(mine, "approved")
+    assert served(other) == {"Verma and Rao's stand", "Rao in the nets"}
+
+
 def test_signed_in_fans_reports_lower_their_channels_trust_to_half_at_most_and_anonymous_ones_dont(made):
     pid = asha()
     stored(pid, "edit0000001", "Every boundary", EDITS, 8, verdict=said())

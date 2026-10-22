@@ -301,6 +301,25 @@ def test_a_video_a_fans_app_said_wont_play_inside_it_stays_unserved_when_found_f
     assert marks == {kohli: NOW, bumrah: NOW}
 
 
+def test_a_video_an_admin_hid_stays_hidden_when_found_for_another_player(world):
+    """BHA-438: an admin's hide is the video's: a later poll that keeps it for someone else keeps it hidden."""
+    from sports_follow import rank
+
+    kohli = player("Virat Kohli")
+    world.feeds[CHANNEL] = feed_xml = feed(("kohlibumrah", "Kohli and Bumrah on the tour", ""))
+    world.videos["kohlibumrah"] = video("kohlibumrah")
+    candidates.poll(NOW)
+    with db_module.session() as s:
+        row = s.scalar(select(FeedCandidate.id).where(FeedCandidate.player_id == kohli))
+        assert row is not None and rank.review(s, row, "hidden")
+    bumrah = player("Jasprit Bumrah")
+    world.feeds[CHANNEL] = feed_xml
+    assert candidates.poll(NOW + timedelta(minutes=30))["kept"] == 1
+    with db_module.session() as s:
+        said = dict(s.execute(select(FeedCandidate.player_id, FeedCandidate.review)).all())
+    assert said == {kohli: "hidden", bumrah: "hidden"}
+
+
 def test_a_poll_keeps_pool_players_videos_and_a_teams_video_for_its_players_as_their_teams(world):
     """BHA-382: the pool's players (feedpool.ids: nobody follows them) are looked for beside followed ones, and a video
     naming a team and none of its players is kept for them as the team's."""

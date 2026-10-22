@@ -486,7 +486,8 @@ def match(uploads: list[Upload], players: list[Followed], names: dict[int, set[t
 
 def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "channels") -> dict[str, int]:
     """Store what's new of what was found from a channel the player's sport lists (on_list; the rest are counted
-    off_list and dropped): a video already kept for someone else is kept for this player too, as it is; the rest
+    off_list and dropped): a video already kept for someone else is kept for this player too, as it is (hidden,
+    if an admin hid it, and unplayable, if fans' apps said so); the rest
     are asked about (a request per 50, with no transaction open meanwhile) and kept if no hard filter refuses them.
     stream: where it was found, for the funnel's counts (feedstats.keep_counted)."""
     counts = {"kept": 0, "refused": 0, "off_list": 0}
@@ -504,12 +505,14 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
     have: set[tuple[int, str]] = set()
     with db.session() as session:
         rows = session.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features,
-                                      FeedCandidate.unplayable_at)
+                                      FeedCandidate.unplayable_at, FeedCandidate.review)
                                .where(FeedCandidate.source == source.system, FeedCandidate.external_id.in_(ids)))  # fmt: skip
-        for pid, vid, url, kept, numbers, unplayable in rows:
-            stored.setdefault(vid, {"url": url, "candidate": kept or {}, "features": numbers or {}, "unplayable_at": unplayable})
+        for pid, vid, url, kept, numbers, unplayable, said in rows:
+            stored.setdefault(vid, {"url": url, "candidate": kept or {}, "features": numbers or {}, "unplayable_at": unplayable, "review": None})
             if unplayable is not None:  # a fan's app said it won't play inside it (feed.unplayable): every row of it keeps that
                 stored[vid]["unplayable_at"] = unplayable
+            if said == "hidden":  # an admin hid the video (rank.review): so is every row of it
+                stored[vid]["review"] = said
             have.add((pid, vid))
     new = [f for f in found if (f.player_id, f.upload.video_id) not in have]
     if not new:
@@ -529,7 +532,7 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
                 continue
             if vid in stored:
                 same = stored[vid]
-                values = {"url": same["url"], "features": same["features"], "unplayable_at": same["unplayable_at"],
+                values = {"url": same["url"], "features": same["features"], "unplayable_at": same["unplayable_at"], "review": same["review"],
                           "candidate": {**candidate(f.upload, f.name, f.where, f.sport, None, f.team), "details": same["candidate"].get("details") or {},
                                         "paid": same["candidate"].get("paid") is True}}
             else:
