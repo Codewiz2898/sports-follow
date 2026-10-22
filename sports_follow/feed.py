@@ -27,8 +27,8 @@ before a weak one of today's.
 Each entry says whether the fan follows its player, and the page which of the two layouts the apps draw (layout:
 a setting, FEED_LAYOUT, that the admin panel changes live).
 
-A video's title is tidied as it's served, never as it's stored (titles.py): emoji, hashtags and the channel's name
-off, a shouted one in sentence case. Its picture is the biggest its source has (VideoSource.picture).
+A video's title is shown as YouTube gives it, its HTML escapes read as it's served (titles.py: YouTube's API policies
+want it unmodified). Its picture is the biggest its source has (VideoSource.picture).
 
 The web app draws it (web/src/components/Feed.tsx): a player page's Feed tab and Overview's "From the fans", the
 Feed tab, and Today's "From your players" (the top two of the fan's Feed). A fan's "…" sheet sends feedback
@@ -56,6 +56,7 @@ from sqlalchemy.orm import Session
 
 from . import controls, feedpool, rank, sports, titles
 from .adapters import VIDEOS, feed_source
+from .adapters import Mark as SourceMark
 from .config import FEED_LAYOUT, FEED_ZONES
 from .models import FeedCandidate, FeedFeedback, Follow, Moment, Player, PlayerCard
 
@@ -116,11 +117,29 @@ BIG_FOR = timedelta(hours=24)
 LAYOUTS = controls.FEED_LAYOUTS  # how the apps draw the fan's Feed: "edge", posts edge to edge, or "full", a video a screen (layout)
 
 
+class MarkPath(BaseModel):
+    fill: str  # its colour, as the source draws it
+    d: str  # an SVG path's drawing
+
+
+class Mark(BaseModel):
+    """The icon of the source a video is from (VideoSource.mark), which its card shows linked to the video where it
+    plays (item.url), so a fan can tell where it's from: its name, for the link's label, and its drawing in a
+    width x height box, at least min_height high."""
+
+    name: str
+    width: float
+    height: float
+    min_height: int
+    paths: list[MarkPath]
+
+
 class Video(BaseModel):
     youtube_id: str  # the player loads from youtube-nocookie.com, and only once a fan taps play
     duration: int | None = None  # seconds
     views: int | None = None
     upright: bool = False  # taller than it's wide (a Short): the apps frame and play it upright
+    mark: Mark | None = None  # its source's icon, linked to the video on the source's site (YouTube's III.F.2)
 
 
 class Post(BaseModel):
@@ -230,8 +249,7 @@ def item_id(url: str) -> str:
 
 def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, strict: bool = False) -> dict[int, list[Candidate]]:
     """The judge's kept items for each player, best first: the rows the curator scored and nobody hid (rank.py),
-    their score faded by age, a video's title tidied (titles.tidy, keeping these players' names and its sport's
-    words as written). None for a player whose sport is turned off: their rows stay, served again once it's back on.
+    their score faded by age, a video's title as YouTube gives it (titles.shown). None for a player whose sport is turned off: their rows stay, served again once it's back on.
     {} if they can't be read: a feed is then the news alone, and never an error; with strict, the error is raised
     instead (the curator mustn't take a failed read for nothing served)."""
     if not player_ids:
@@ -239,14 +257,13 @@ def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, 
     now = now or datetime.now(timezone.utc)
     try:
         with db.begin_nested():
-            players = db.execute(select(Player.id, Player.name, Player.sport).where(Player.id.in_(sorted(set(player_ids))))).all()
-            running = sorted(pid for pid, _, sport in players if sports.on(sport))
+            players = db.execute(select(Player.id, Player.sport).where(Player.id.in_(sorted(set(player_ids))))).all()
+            running = sorted(pid for pid, sport in players if sports.on(sport))
             rows = db.execute(
                 select(FeedCandidate.player_id, FeedCandidate.source, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features, FeedCandidate.verdict,
                        FeedCandidate.score, FeedCandidate.moment_id, FeedCandidate.review, FeedCandidate.judged_at, FeedCandidate.fetched_at)
                 .where(FeedCandidate.player_id.in_(running), FeedCandidate.served())
             ).all() if running else []  # fmt: skip
-            names = tuple(name for _, name, _ in players if name)
         out: dict[int, list[Candidate]] = {}
         for r in rows:
             known = feed_source(r.source)
@@ -255,10 +272,13 @@ def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, 
                 if known is not None and known.kind == "article":
                     c = _story(r, now)
                 else:
-                    embed = source.embed(r.external_id) if source else None
                     details = (r.candidate or {}).get("details")
+                    if source and not source.allowed(details):
+                        continue  # its source's terms keep it off the feed (YouTube's made for kids); its next read drops it
+                    embed = source.embed(r.external_id) if source else None
                     picture = source.picture(r.external_id, details) if source else None
-                    c = _video(embed, source.name if source else "", r, now, picture, names, upright=bool(source and source.upright(details)))
+                    c = _video(embed, source.name if source else "", r, now, picture, upright=bool(source and source.upright(details)),
+                               mark=_mark(source.mark) if source and source.mark else None)
             except ValueError:  # pydantic's too: a row the fetch stored oddly is left out, not the feed
                 continue
             if c is not None:
@@ -277,12 +297,17 @@ def fade(published: datetime | None, now: datetime) -> float:
     return FADE_FLOOR + (1 - FADE_FLOOR) * 0.5 ** (max(age, timedelta(0)) / HALF_LIFE)
 
 
-def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime, picture: str | None = None, names: Sequence[str] = (),
-           upright: bool = False) -> Candidate | None:
+def _mark(mark: SourceMark) -> Mark:
+    """A source's icon as the API sends it."""
+    return Mark(name=mark.name, width=mark.width, height=mark.height, min_height=mark.min_height, paths=[MarkPath(fill=f, d=d) for f, d in mark.paths])
+
+
+def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime, picture: str | None = None, upright: bool = False,
+           mark: Mark | None = None) -> Candidate | None:
     """A scored row as a video item, its score faded by age: an evergreen one keeps its own, and a pinned one
-    fades only past its pin, so it leads however old, and is never put among the evergreen. Its title tidied
-    (titles.tidy), keeping these names and its sport's title_words as they're written. upright: taller than it's
-    wide (VideoSource.upright)."""
+    fades only past its pin, so it leads however old, and is never put among the evergreen. Its title as YouTube
+    gives it (titles.shown). upright: taller than it's
+    wide (VideoSource.upright); mark: its source's icon (VideoSource.mark)."""
     if not embed:
         return None  # a video the app's player can't play
     kept, features, verdict = r.candidate or {}, r.features or {}, r.verdict or {}
@@ -292,12 +317,12 @@ def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime, pic
     evergreen = not pinned and rank.evergreen(features, published, now)
     faded = (score if evergreen else score * fade(published, now)) + (rank.PIN if pinned else 0.0)
     channel_name = html.unescape(str(kept.get("channel") or source))  # a search's came escaped before it read them as written
-    title = titles.tidy(str(kept.get("title") or ""), channel_name, sports.of(str(kept.get("sport") or "")).title_words, names)
+    title = titles.shown(str(kept.get("title") or ""))
     item = Item(
         id=item_id(r.url), kind="video", tag=rank.tag(verdict), title=title or "A video", url=r.url,
         source=channel_name, published_at=str(kept.get("published") or "") or None,
         reason=str(verdict.get("reason") or "").strip() or "A video from a channel this sport trusts.", picture=picture,
-        video=Video(**embed, duration=rank.whole(features.get("seconds")), views=rank.whole(features.get("views")), upright=upright),
+        video=Video(**embed, duration=rank.whole(features.get("seconds")), views=rank.whole(features.get("views")), upright=upright, mark=mark),
     )  # fmt: skip
     channel = str(kept.get("channel_id") or kept.get("channel") or r.url)
     return Candidate(item=item, moment_id=None if evergreen else r.moment_id, evergreen=evergreen, score=round(faded, 6), channel=channel, pinned=pinned,

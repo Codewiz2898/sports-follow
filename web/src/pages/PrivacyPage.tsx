@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useAccount } from '../account'
 import { SectionHead } from '../components/Blocks'
 import { BackIcon } from '../components/Icons'
+import { GOOGLE_PRIVACY } from '../legal'
 
 /** What the app keeps about a fan, why, who else sees any of it, and how to delete it. */
 export function PrivacyPage() {
@@ -32,6 +33,11 @@ export function PrivacyPage() {
         <p>Resend sends sign-in emails. Google, if you choose to sign in with Google. Your browser's push service (Google, Apple, Mozilla or Microsoft) delivers alerts; Google's Firebase Cloud Messaging delivers the Android app's. OpenRouter, and the model it picks, reads the name you type into Research with AI.</p>
       </Part>
 
+      <Part title="Videos from YouTube">
+        <p>The Feed's videos are YouTube's: we find them and check them through the YouTube API Services, and our requests to them name no fan. A video plays in YouTube's own embedded player, which loads only once the video plays (when you tap it, or as it comes on screen if videos play as you scroll). The player, and the video's picture before it, come from YouTube's servers, and YouTube's player may set cookies and collect data on your device as Google's Privacy Policy says: <a className="link" href={GOOGLE_PRIVACY} target="_blank" rel="noreferrer">policies.google.com/privacy</a>.</p>
+        <p>Watching them, you agree to YouTube's Terms of Service: see <Link to="/terms" className="link">Terms</Link>.</p>
+      </Part>
+
       <Part title="Deleting it">
         <p>Signed in: <Link to="/account" className="link">Account</Link>, then Delete account. Everything above goes at once, and our daily backups are kept for 14 days.</p>
         <p>Without an account: unfollow your players, teams and games and turn alerts off in Alerts, then clear this site's data in your browser, or uninstall the Android app.</p>
@@ -46,7 +52,7 @@ export function PrivacyPage() {
   )
 }
 
-function Part({ title, children }: { title: string; children: ReactNode }) {
+export function Part({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="section" aria-label={title}>
       <SectionHead title={title} />

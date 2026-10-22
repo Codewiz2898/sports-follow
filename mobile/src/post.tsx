@@ -21,6 +21,7 @@ import { useTone } from './catalog'
 import type { Hide } from './feed'
 import { PlayIcon } from './icons'
 import { ShareButton } from './share'
+import { SourceMark } from './sourceMark'
 import { colour, dsp, font, GUTTER, RADIUS_CARD, t } from './theme'
 import { Btn, ErrorBox, Eyebrow } from './ui'
 
@@ -144,6 +145,7 @@ export function FeedPost({ who, item, now, moment, more = true, onMore }: { who:
         <View style={[s.tag, { backgroundColor: own ? colour.text : tone.sport }]}>
           <Text style={[s.tagText, { color: own ? colour.bg : tone.on }]} numberOfLines={1}>{own ? `From ${short}` : item.tag}</Text>
         </View>
+        <SourceMark item={item} />
         {onMore ? (
           <Pressable onPress={onMore} accessibilityRole="button" accessibilityLabel="Why this is here, and feedback" hitSlop={4} style={({ pressed }) => [s.more, pressed && { backgroundColor: colour.bg }]}>
             <Dots />

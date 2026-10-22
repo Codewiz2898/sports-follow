@@ -22,7 +22,7 @@ import { ActivityIndicator, AppState, FlatList, Linking, Modal, Pressable, Style
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Circle } from 'react-native-svg'
 import { WebView } from 'react-native-webview'
-import { channelOf, duration, isShort, openLabel, refusedHere, shortFrame, statsLine, upright, youtubeEmbed } from '../../web/src/feed'
+import { channelOf, duration, isShort, openLabel, refusedHere, shortFrame, sourceMark, statsLine, upright, youtubeEmbed } from '../../web/src/feed'
 import { safeHref, shortName } from '../../web/src/format'
 import { shareFeedItem } from '../../web/src/share'
 import { api, API_URL, type FeedEntry, type FeedItem, type FeedLayout, type FeedTabKey } from './api'
@@ -35,6 +35,7 @@ import { Face, ItemSheet, Picture } from './post'
 import { feedReads, type FeedReads } from './refetchFeed'
 import { setSound, useSound } from './sound'
 import { share, ShareButton } from './share'
+import { SourceMark } from './sourceMark'
 import { useGoToPlace } from './tabbar'
 import { colour, dsp, font, GUTTER, RADIUS_CARD, t } from './theme'
 import { Btn, SectionHead } from './ui'
@@ -378,7 +379,9 @@ export function EdgePost({ entry, now, follows, boxed, playing, onPlay, onKeep, 
             </Pressable>
           </>
         ) : null}
-        <Pressable onPress={onMore} accessibilityRole="button" accessibilityLabel="More about this item" hitSlop={4} style={({ pressed }) => [e.more, pressed && { backgroundColor: colour.bg }]}>
+        {sourceMark(item) ? <View style={e.markAt}><SourceMark item={item} /></View> : null}
+        <Pressable onPress={onMore} accessibilityRole="button" accessibilityLabel="More about this item" hitSlop={4}
+          style={({ pressed }) => [e.more, sourceMark(item) ? { marginLeft: 0 } : null, pressed && { backgroundColor: colour.bg }]}>
           <Dots color={colour.text} />
         </Pressable>
       </View>
@@ -547,7 +550,8 @@ function Reel({ entry, now, height, follows, playing, onPlay, onKeep, onMore }: 
           <View style={r.faceRing}><Face name={who.name} sport={who.sport} photo={who.photo} size={40} /></View>
           <Text style={r.name} numberOfLines={1}>{who.name}</Text>
         </Pressable>
-        {channel ? <Text style={r.chan} numberOfLines={1}>{channel}</Text> : null}
+        {/* The source's icon before the channel, not down the side: the buttons there grow toward the player. */}
+        {channel ? <View style={r.chanRow}><View style={r.markAt}><SourceMark item={item} /></View><Text style={[r.chan, { marginTop: 0, flexShrink: 1 }]} numberOfLines={1}>{channel}</Text></View> : null}
         <Text style={r.title} numberOfLines={3}>{item.kind === 'post' ? `${shortName(who.name)} on ${item.post?.platform ?? ''}` : item.title}</Text>
         <Text style={r.src}>{[statsLine(item, now, true), entry.moment ? `after ${entry.moment}` : ''].filter(Boolean).join(' · ')}</Text>
       </View>
@@ -616,6 +620,7 @@ function ShortReel({ entry, now, height, foot, roomy, follows, playing, onPlay, 
               <Text style={[sh.followText, mine && { color: '#FFFFFF' }]}>{mine ? 'Following' : 'Follow'}</Text>
             </Pressable>
           ) : null}
+          <SourceMark item={item} />
           {icon(shareFeedItem(who.id, item).label, <ShareIcon size={18} color="#FFFFFF" />, () => share(shareFeedItem(who.id, item)))}
           {icon('More about this item', <Dots color="#FFFFFF" />, onMore)}
         </View>
@@ -769,6 +774,7 @@ const e = StyleSheet.create({
   follow: { height: 36, justifyContent: 'center', paddingHorizontal: 2 },
   followText: { fontFamily: font[800], fontSize: 13, color: colour.follow },
   more: { marginLeft: 'auto', width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  markAt: { marginLeft: 'auto' }, // the source's icon, by the "…" (.epost-head .source-mark)
   pic: { width: '100%', aspectRatio: 16 / 9, overflow: 'hidden' },
   band: { aspectRatio: 4 / 5, alignItems: 'center' },  // an upright video's (.epost-pic.upright)
   tall: { height: '100%', aspectRatio: 9 / 16, overflow: 'hidden' },
@@ -824,6 +830,8 @@ const r = StyleSheet.create({
   faceRing: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' }, // .reel-who .face's 2px white ring
   name: { fontFamily: font[800], fontSize: 15, color: '#FFFFFF', flexShrink: 1 },
   chan: { marginTop: -4, fontFamily: font[800], fontSize: 14, lineHeight: 18, color: '#FFFFFF' },  // .reel-chan
+  chanRow: { flexDirection: 'row', alignItems: 'center', minWidth: 0, marginTop: -4 }, // .reel-chan-row: the source's icon, then the channel
+  markAt: { marginLeft: -9 }, // the icon in line with the words, its clear space to its left
   title: { fontFamily: font[700], fontSize: 17, lineHeight: 23, color: '#FFFFFF' },
   src: { fontFamily: font[700], fontSize: 12, lineHeight: 16, color: 'rgba(255,255,255,0.75)' },
   side: { position: 'absolute', right: 12, alignItems: 'center' },

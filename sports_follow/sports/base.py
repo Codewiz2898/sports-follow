@@ -762,9 +762,6 @@ class Sport:
     # rows from any other channel aren't served (rank.rescore). A sport that's off has none read. Every id is a real
     # one that answers (README.md, "Adding or removing").
     video_channels: tuple[str, ...] = ()
-    # Words a video's title keeps as they're written when the Feed puts a shouted title in sentence case (titles.py):
-    # its competitions', bodies' and teams' short names, as fans write them ("IPL", "T20I", "UEFA", "US Open").
-    title_words: tuple[str, ...] = ()
     # Publishers' feeds (RSS or Atom) it reads for stories about its players (news.py), each with the publisher's
     # name as a story credits it: a news source takes those of the shape its feed addresses have
     # (NewsSource.feed_pattern). Each feed's new stories that name a followed player of the sport are kept for the

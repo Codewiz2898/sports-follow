@@ -433,9 +433,6 @@ without a ruling from FIDE or the platform are misinformation."""
         "UCweCc7bSMX5J4jEH7HFImng",  # GMHikaru: his games and others' (3M subscribers)
         "UCL5YbN5WLFD8dLIegT5QAbA",  # agadmator's Chess Channel: game analysis (1.3M subscribers)
     )
-    title_words = (  # kept as written in a title put in sentence case (titles.py)
-        "FIDE", "GM", "IM", "WGM", "FM", "Chess.com", "Norway Chess", "Tata Steel",
-        "Olympiad", "Grand Swiss", "Freestyle", "Hikaru", "Magnus", "India", "Norway")
     news_feeds = {
         "https://www.chess.com/rss/news": "Chess.com",
         "https://en.chessbase.com/feed": "ChessBase",

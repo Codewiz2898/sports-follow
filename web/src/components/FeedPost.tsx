@@ -8,6 +8,7 @@ import { sportKey } from '../sports'
 import { FeedPlayer } from './FeedPlayer'
 import { setSound } from '../sound'
 import { ShareButton } from './Share'
+import { SourceMark } from './SourceMark'
 
 /**
  * The Feed's cards, one shape for every kind (the InstaCards board): who it's about with their photo, where it's
@@ -104,6 +105,7 @@ export function FeedPost({ who, item, now, moment, more = true, onMore }: { who:
           </span>
         </Link>
         <span className={`post-tag${own ? ' own' : ''}`}>{own ? `From ${short}` : item.tag}</span>
+        <SourceMark item={item} />
         {onMore && <button type="button" className="post-more" aria-label="Why this is here, and feedback" onClick={onMore}>{dots}</button>}
       </div>
       {media}
