@@ -74,6 +74,12 @@ class Tennis(Sport):
         winner = next((p for p in state.get("players") or [] if p.get("winner")), None)
         return f"{winner['name']} won" if winner and winner.get("name") else ""
 
+    def says_who_won(self, state: dict[str, Any], clock: str) -> bool:
+        """Its source's note under a finished match's score names the winner, with whom they beat: "(8) Ben Shelton
+        (USA) bt (2) Carlos Alcaraz (ESP) 6-7 (5-7) 6-1…"; a pair by their full names, where the board has them short."""
+        winner = next((p for p in state.get("players") or [] if p.get("winner")), None)
+        return winner is not None and bool(re.search(r"\bbt\b", clock) or (winner.get("name") and winner["name"].casefold() in clock.casefold()))
+
     def after_final(self, who: str, athlete_id: str, now: Seen) -> list[Found]:
         """A win over a much better-seeded player (UPSET_GAP seeds or more; any seed, for an unseeded one), in a match
         played to the end: [2] beating [1] in a final isn't an upset, nor is a walkover or a retirement."""

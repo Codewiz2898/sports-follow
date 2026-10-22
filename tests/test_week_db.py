@@ -12,11 +12,12 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, insert, select, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import notify, pipeline, server, week
-from sports_follow.models import AthleteOverride, Event, EventPlayer, Follow, Moment, Player, PlayerIdentity, PlayerLine, Sidelined, Team, TeamFollow
+from sports_follow import controls, feed, news, notify, pipeline, server, week
+from sports_follow.models import (AthleteOverride, Event, EventPlayer, EventState, FeedCandidate, FeedFeedback, Follow, Moment, NewsItem, Player, PlayerIdentity, PlayerLine,
+                                 Sidelined, Team, TeamFollow)
 from sports_follow.moments import Found, Seen, detect
 
 from .test_moments import goal, line, scored
@@ -364,3 +365,76 @@ def test_a_fans_week_is_worked_out_once_a_minute_and_at_once_when_they_follow_so
     db.add(Follow(fan_id="fan", player_id=3))
     db.flush()
     assert [p["word"] for p in server.this_week("fan", db)["posters"]] == ["Fifty", "Hundred", "Goal"]
+
+
+def test_a_sport_turned_off_has_no_posters_and_a_link_to_its_game_previews_none(db):
+    # BUG-282: This week kept a turned-off sport's posters, and a link to one of its games still previewed its poster.
+    moment(db, 1, 1, 10, "goal", "Goal: Mohamed Salah", "Egypt 1 – 0 South Africa · 10'", 85)
+    moment(db, 2, 2, 20, "hundred", "Smriti Mandhana reaches 100", "112 (98) · IND 289/4", 90)
+    finished(db, 3, 20, "100 (80)", "India won by 40 runs")  # read off his result, for the fan who follows him
+    assert [p["word"] for p in server.this_week("fan", db)["posters"]] == ["Hundred", "Goal"]
+    controls.turn_sport("cricket", False)
+    assert [p["word"] for p in server.this_week("fan", db)["posters"]] == ["Goal"]
+    assert server.this_week("other", db)["posters"] == []
+    assert week.game(db, 2, 20) is None and week.game(db, 3, 20) is None
+    assert week.game(db, 1, 10) is not None
+
+
+def test_a_game_called_off_and_played_again_has_only_the_replays_poster(db):
+    # BUG-301: the goals of a game abandoned and replayed under its fixture made the replay's poster, and its preview.
+    moment(db, 1, 1, 10, "goal", "Goal: Mohamed Salah", "Egypt 1 – 0 South Africa · 23'", 85, ago=timedelta(days=2))
+    moment(db, 2, 1, 10, "goal", "Goal: Mohamed Salah (2)", "Egypt 2 – 0 South Africa · 40'", 85, ago=timedelta(days=2, minutes=-17))
+    db.add(EventState(event_id=10, as_of=NOW - timedelta(days=2, minutes=-30), status="postponed", score_label="Egypt 2 – 0 South Africa", clock_label="Abandoned", state={}))
+    db.get(Event, 10).start_utc = NOW - timedelta(hours=2)  # the replay's start, set after it was called off
+    db.flush()
+    assert server.this_week("fan", db)["posters"] == [] and week.game(db, 1, 10) is None
+    moment(db, 3, 1, 10, "goal", "Goal: Mohamed Salah", "Egypt 1 – 0 South Africa · 75'", 85, ago=timedelta(minutes=30))
+    assert [(p["id"], p["word"]) for p in server.this_week("fan", db)["posters"]] == [(3, "Goal")]
+    assert (week.game(db, 1, 10) or {}).get("id") == 3
+
+
+def served(db, player_id: int, url: str, title: str, hours: float, score: float = 0.5) -> None:
+    """A publisher's story the curator served for the player, published that many hours ago (news.py)."""
+    db.add(FeedCandidate(player_id=player_id, source="publisher_rss", external_id=news.external_id(url), url=url, features={"outlets": 1}, score=score,
+                         verdict={"about_player": "subject", "by": "outlet", "kind": "news", "interest": 0.6, "risks": [], "sponsored": False, "reason": "", "stage": "model"},
+                         candidate={"title": title, "description": "", "channel": "BBC Sport", "published": (NOW - timedelta(hours=hours)).isoformat()},
+                         fetched_at=NOW - timedelta(hours=hours), checked_at=NOW, judged_at=NOW))  # fmt: skip
+    db.flush()
+
+
+def test_the_wire_leaves_out_a_story_the_fan_hid_and_tells_the_players_next_best(db):
+    # BUG-284: a story the fan hid from their Feed, or said wasn't about the player, stayed on the Wire.
+    both = "https://news.example/team-of-the-week"
+    served(db, 2, both, "Salah and Mandhana in the team of the week", 1, score=0.95)
+    served(db, 1, both, "Salah and Mandhana in the team of the week", 1, score=0.95)
+    served(db, 1, "https://news.example/salah-deal", "Salah signs a new deal", 2, score=0.9)
+    served(db, 1, "https://news.example/salah-bench", "Salah starts on the bench", 3)
+    served(db, 2, "https://news.example/mandhana", "Mandhana named captain", 4)
+    story(db, 1, "Salah ruled out for three weeks", "injury", hours=1)  # the research agent's, told as a moment
+    db.add(Follow(fan_id="other", player_id=1))
+    db.flush()
+
+    def wire(fan: str) -> list[str]:
+        return [r["text"] for r in server.this_week(fan, db)["wire"]]
+
+    told = ["Salah ruled out for three weeks", "Salah and Mandhana in the team of the week"]
+    assert wire("fan") == [*told, "Mandhana named captain"]
+    agents = db.scalar(select(NewsItem.url).where(NewsItem.headline == told[0]))
+    db.add_all([FeedFeedback(fan_id="fan", player_id=1, item_id=feed.item_id(agents), verdict="not_interested"),
+                FeedFeedback(fan_id="fan", player_id=1, item_id=feed.item_id("https://news.example/salah-deal"), verdict="not_about_player"),
+                # Hidden from her Feed: a story is one card, whichever player it was hidden from.
+                FeedFeedback(fan_id="fan", player_id=2, item_id=feed.item_id(both), verdict="report")])
+    db.flush()
+    assert wire("fan") == ["Salah starts on the bench", "Mandhana named captain"]  # his next best in its place
+    assert wire("other") == told  # another fan's word is theirs alone
+
+
+def test_the_wire_reads_however_many_spells_fall_in_its_window(facts):
+    # BUG-323: each spell of the window was one more pair in a list the database had to read; at about 8,000 of them
+    # it gave up, and the Wire failed for every fan.
+    db = facts
+    db.execute(insert(Sidelined), [{"system": SM, "source_id": f"many{n}", "athlete_id": f"8{n}", "team_id": "2", "sport": "football", "name": f"Player {n}",
+                                    "team": "", "kind": "injury", "what": "Hamstring Injury", "fame": 0, "out_at": NOW - timedelta(hours=3), "seen_at": NOW}
+                                   for n in range(12_000)])  # fmt: skip
+    out(db, "173896", "M. Salah", hours=2)
+    assert [(r["text"], r["yours"]) for r in server.this_week("fan", db)["wire"]] == [("Mohamed Salah · hamstring injury", True)]
