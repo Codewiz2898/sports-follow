@@ -81,9 +81,10 @@ def mine(db: Session, fan: str) -> dict[str, Any]:
 def posters(db: Session, fan: str, now: datetime | None = None) -> list[dict[str, Any]]:
     """The fan's players' big moments since a week ago, one poster per player and game, the biggest first
     (the priority of the moment it's read from), then the newest. A game of theirs that finished in the week
-    with no moment that makes a poster is read off its result instead (_finished)."""
+    with no moment that makes a poster is read off its result instead (_finished). None of a sport turned off
+    (_seen)."""
     since = (now or datetime.now(timezone.utc)) - timedelta(days=DAYS)
-    rows = db.execute(_highs(Moment.created_at >= since).join(Follow, and_(Follow.player_id == Moment.player_id, Follow.fan_id == fan))).all()
+    rows = _seen(db, db.execute(_highs(Moment.created_at >= since).join(Follow, and_(Follow.player_id == Moment.player_id, Follow.fan_id == fan))).all())
     games: dict[tuple[int, int | str], list[tuple[Moment, Player, str | None]]] = {}
     for m, player, title in rows:
         games.setdefault((player.id, m.event_id if m.event_id is not None else f"m{m.id}"), []).append((m, player, title))
@@ -97,9 +98,9 @@ def posters(db: Session, fan: str, now: datetime | None = None) -> list[dict[str
 def game(db: Session, player_id: int, event_id: int) -> dict[str, Any] | None:
     """One player's game as This week makes it a poster, however long ago it was: its biggest moment that
     makes one, or, with none, its result's once it's over. A shared link to the game previews it (share.py).
-    The poster also carries the game's title and competition. None for a game without a poster, or one
-    the player isn't in."""
-    rows = db.execute(_highs(Moment.player_id == player_id, Moment.event_id == event_id)).all()
+    The poster also carries the game's title and competition. None for a game without a poster, one the
+    player isn't in, or one of a sport turned off."""
+    rows = _seen(db, db.execute(_highs(Moment.player_id == player_id, Moment.event_id == event_id)).all())
     made = _of_moments(rows) if rows else None
     if made is None:
         made = next((p for row in db.execute(_results(EventPlayer.player_id == player_id, EventPlayer.event_id == event_id)) if (p := _of_result(*row))), None)
@@ -120,6 +121,11 @@ def _highs(*where: Any) -> Select[Moment, Player, str]:
         .where(Moment.level == "key", Moment.corrects.is_(None), ~exists().where(correction.corrects == Moment.id), *where)
         .order_by(Moment.id)
     )
+
+
+def _seen(db: Session, rows: Sequence[Any]) -> list[tuple[Moment, Player, str | None]]:
+    """The key moments (_highs) a poster may be read from: none of a sport turned off."""
+    return [(m, player, title) for m, player, title in rows if sports.on(player.sport)]
 
 
 def _of_moments(game: Sequence[Any]) -> tuple[int, datetime, dict[str, Any]] | None:
@@ -159,7 +165,9 @@ def _of_result(event: Event, result: dict[str, Any] | None, player: Player, last
     """A finished game as a poster, as the player's sport words their line in it (Sport.finished_poster): the
     line from their stored result ("112 (98)"), with the stats of the last line stored for them, and the
     result from their side ("Won 2–1"). With its priority and the game's start, which dates it; it has no
-    moment (id None). None for a game without a high, or without a start."""
+    moment (id None). None for a game without a high, without a start, or of a sport turned off."""
+    if not sports.on(player.sport):
+        return None
     result, last = result or {}, last or {}
     line = {"headline": result.get("player_contribution") or last.get("headline") or "", "stats": last.get("stats") or []}
     poster = sports.of(player.sport).finished_poster(line, result.get("result") or "", versus(event.title, [*(player.teams or []), player.name]))

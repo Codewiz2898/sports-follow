@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import notify, pipeline, server, week
+from sports_follow import controls, notify, pipeline, server, week
 from sports_follow.models import AthleteOverride, Event, EventPlayer, Follow, Moment, Player, PlayerIdentity, PlayerLine, Sidelined, Team, TeamFollow
 from sports_follow.moments import Found, Seen, detect
 
@@ -364,3 +364,16 @@ def test_a_fans_week_is_worked_out_once_a_minute_and_at_once_when_they_follow_so
     db.add(Follow(fan_id="fan", player_id=3))
     db.flush()
     assert [p["word"] for p in server.this_week("fan", db)["posters"]] == ["Fifty", "Hundred", "Goal"]
+
+
+def test_a_sport_turned_off_has_no_posters_and_a_link_to_its_game_previews_none(db):
+    # BUG-282: This week kept a turned-off sport's posters, and a link to one of its games still previewed its poster.
+    moment(db, 1, 1, 10, "goal", "Goal: Mohamed Salah", "Egypt 1 – 0 South Africa · 10'", 85)
+    moment(db, 2, 2, 20, "hundred", "Smriti Mandhana reaches 100", "112 (98) · IND 289/4", 90)
+    finished(db, 3, 20, "100 (80)", "India won by 40 runs")  # read off his result, for the fan who follows him
+    assert [p["word"] for p in server.this_week("fan", db)["posters"]] == ["Hundred", "Goal"]
+    controls.turn_sport("cricket", False)
+    assert [p["word"] for p in server.this_week("fan", db)["posters"]] == ["Goal"]
+    assert server.this_week("other", db)["posters"] == []
+    assert week.game(db, 2, 20) is None and week.game(db, 3, 20) is None
+    assert week.game(db, 1, 10) is not None
