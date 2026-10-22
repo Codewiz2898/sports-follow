@@ -229,6 +229,10 @@ def _store_call(method: str, *args: Any) -> Any:
         return getattr(_fallback, method)(*args)
 
 
+# The fans' share is counted under its bucket's name and this (budget:pubg::fan:60:<n>): not a bucket of its own.
+FAN = ":fan"
+
+
 def _window_key(budget: Budget, bucket: str, w: Window, now: float) -> str:
     return f"budget:{budget.name}:{bucket}:{w.seconds}:{_start(w, now)}"
 
@@ -282,7 +286,7 @@ def take(budget: Budget, bucket: str = "", lane_name: str | None = None, cost: i
     if lane_name == "fan" and budget.fan is not None and budget.windows:
         w = budget.windows[0]
         why = f"{budget.name}: fans' share ({budget.fan} {per(w.seconds)}) is spent"
-        counts.append((f"budget:{budget.name}:{bucket}:fan:{w.seconds}:{_start(w, now)}", _ttl(w), budget.fan, why))
+        counts.append((f"budget:{budget.name}:{bucket}{FAN}:{w.seconds}:{_start(w, now)}", _ttl(w), budget.fan, why))
     for w in budget.windows:
         where = f"{budget.name}{f' ({bucket})' if bucket else ''}"
         why = f"{where}: the {lane_name} share of its {w.requests} requests {per(w.seconds)} is spent" if keep else f"{where}: its {w.requests} requests {per(w.seconds)} are spent"
@@ -387,7 +391,8 @@ def standing(budget: Budget, now: float | None = None) -> dict[str, Any]:
     prefix = f"budget:{budget.name}:"
     buckets = {""}
     for w in budget.windows:
-        buckets |= {key[len(prefix):].rsplit(":", 2)[0] for key in _store_call("keys", f"{prefix}*:{w.seconds}:{_start(w, now)}")}
+        found = {key[len(prefix):].rsplit(":", 2)[0] for key in _store_call("keys", f"{prefix}*:{w.seconds}:{_start(w, now)}")}
+        buckets |= {b for b in found if not b.endswith(FAN)}  # the fans' share is counted in the window too
     windows = [{"bucket": b, "window": WINDOW_NAMES.get(w.seconds, f"{w.seconds}s"), "used": _store_call("get", _window_key(budget, b, w, now)) or 0, "allowance": w.requests}
                for b in sorted(buckets) for w in budget.windows]
     left_now = {b: v for b in sorted(buckets) if (v := left(budget, b)) is not None}

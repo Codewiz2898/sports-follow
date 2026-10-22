@@ -183,6 +183,17 @@ def test_the_admin_panels_allowance_keeps_the_zone_its_source_declares():
     assert budget.effective(pacific).windows == (budget.Window(86400, 50, 2, PACIFIC), budget.Window(3600, 5, 0, None))
 
 
+def test_the_fans_share_is_counted_in_the_window_not_shown_as_a_bucket_of_its_own():
+    """BUG-135: the fans' share is counted under keys of its own, which the panel and the metrics took for a bucket
+    (":fan"). A fan's request counts in the window it's sent in; a real bucket (Sportmonks' entities) is still shown."""
+    for scarce in (liquipedia.BUDGET, pubg.BUDGET):
+        budget.take(scarce, lane_name="fan")
+        budget.take(scarce, lane_name="live")
+        assert [(w["bucket"], w["used"]) for w in budget.standing(scarce)["windows"]] == [("", 2)], scarce.name
+    budget.take(sportmonks.BUDGET, "Fixture", lane_name="fan")
+    assert [(w["bucket"], w["used"]) for w in budget.standing(sportmonks.BUDGET)["windows"]] == [("", 0), ("Fixture", 1)]
+
+
 def test_every_client_asks_the_budget_before_it_sends():
     # Each module that makes an HTTP client declares a BUDGET and takes from it.
     for path in sorted(ADAPTERS_DIR.glob("*.py")):
