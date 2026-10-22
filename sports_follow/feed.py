@@ -100,6 +100,7 @@ DAYS = (TODAY, YESTERDAY, THIS_WEEK, THIS_MONTH, EARLIER)  # the fan's Feed's gr
 PAGE = 20  # items on a page of the fan's Feed, unless the app asks for fewer (or up to MAX_PAGE)
 MAX_PAGE = 50
 CURSOR_AGE = timedelta(days=2)  # a cursor older than this carries on in today's order, from its last item
+CURSOR_TAIL = 5  # a page's last items its cursor keeps: the next page carries on after the last of them still there
 FOLLOWING, FOR_YOU = "following", "for_you"  # the fan's Feed's tabs (page): their players only, or mixed with others
 TABS = (FOLLOWING, FOR_YOU)
 # For you: of every MIX[0] + MIX[1] items, MIX[0] from players the fan follows and MIX[1] from players they don't, while
@@ -428,8 +429,8 @@ def page(db: Session, fan: str, player: int | None = None, cursor: str | None = 
     every few items: those of the last OTHERS_WINDOW best first whatever their day, in turns, then older ones by day;
     with a player picked it's FOLLOWING's.
 
-    cursor: where the last page ended (Page.cursor), which carries on after its last item in the order as it was at
-    the cursor's time: its days and fading, what the fan had hidden by then (an item hidden since keeps its place,
+    cursor: where the last page ended (Page.cursor), which carries on after its last item (the last of its last few
+    still in the feed, should it have left every fan's since) in the order as it was at the cursor's time: its days and fading, what the fan had hidden by then (an item hidden since keeps its place,
     unserved), and only the rows that had come in by then (a newer one waits for the next first page). The judge's
     scores aren't kept with it, so a rescore meanwhile (views growing) can still move an item across the page's end,
     and For you's others are chosen again (a follow meanwhile moves a player across). ValueError for a cursor this
@@ -437,12 +438,16 @@ def page(db: Session, fan: str, player: int | None = None, cursor: str | None = 
     if tab not in TABS:
         raise ValueError(f"The feed's tabs are {', '.join(TABS)}.")
     real = now or datetime.now(timezone.utc)
-    at, start, after = _read_cursor(cursor, real) if cursor else (real, 0, None)
+    at, start, after = _read_cursor(cursor, real) if cursor else (real, 0, ())
     limit = max(0, min(limit, MAX_PAGE))
     everyone, circles = _everyone(db, fan, at, tz, player, cursor is not None, mix=tab == FOR_YOU and player is None)
     ordered = [(e, m, gone) for e, m, gone in everyone if player is None or e.player.id == player]
-    if after is not None:
-        start = next((i + 1 for i, (e, _, _) in enumerate(ordered) if e.item.id == after), start)
+    if after:
+        # After the last of the page's last items still in the feed: one gone from every feed since (an admin's hide,
+        # the weekly check, fans' apps saying it won't play) takes its place with it, so nothing after it is skipped.
+        # None of them still there: as many places back as they were.
+        place = {e.item.id: i for i, (e, _, _) in enumerate(ordered)}
+        start = next((place[i] + 1 for i in reversed(after) if i in place), max(0, start - len(after)))
     chunk: list[tuple[Entry, int | None]] = []
     end = start
     while end < len(ordered) and len(chunk) < limit:
@@ -457,7 +462,7 @@ def page(db: Session, fan: str, player: int | None = None, cursor: str | None = 
             e = e.model_copy(update={"moment": moments[m].title, "match": moments[m].url if moments[m].url.startswith("/match/") else None})
         items.append(e)
     more = any(not gone for _, _, gone in ordered[end:])
-    nxt = _write_cursor(at, end, items[-1].item.id) if items and more else None
+    nxt = _write_cursor(at, end, [e.item.id for e in items[-CURSOR_TAIL:]]) if items and more else None
     newest = max((c.newest for c in circles if c.newest), default=None)
     return Page(items=items, cursor=nxt, count=sum(not gone for _, _, gone in ordered), newest=newest, players=circles, tab=tab, layout=layout())
 
@@ -647,21 +652,24 @@ def _day(c: Candidate, now: datetime, tz: int) -> str:
     return THIS_MONTH if back <= 30 else EARLIER
 
 
-def _write_cursor(at: datetime, offset: int, last: str) -> str:
-    """A next page's cursor: the time the feed was put in order at, how many items came before, and the last one."""
-    raw = json.dumps([int(at.timestamp()), offset, last], separators=(",", ":")).encode()
+def _write_cursor(at: datetime, offset: int, last: Sequence[str]) -> str:
+    """A next page's cursor: the time the feed was put in order at, how many items came before, and the page's last
+    few (CURSOR_TAIL), the last of them last."""
+    raw = json.dumps([int(at.timestamp()), offset, list(last[-CURSOR_TAIL:])], separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def _read_cursor(cursor: str, now: datetime) -> tuple[datetime, int, str | None]:
-    """A cursor's time (now instead, once it's over CURSOR_AGE old or ahead of now), offset and last item; ValueError
-    for one this never made."""
+def _read_cursor(cursor: str, now: datetime) -> tuple[datetime, int, tuple[str, ...]]:
+    """A cursor's time (now instead, once it's over CURSOR_AGE old or ahead of now), offset and the page's last few
+    items, the last of them last (one made before it kept them all: its last alone); ValueError for one this never made."""
     try:
         raw = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
     except (binascii.Error, ValueError, UnicodeDecodeError) as exc:
         raise ValueError("That isn't a page of the feed.") from exc
-    if not (isinstance(raw, list) and len(raw) == 3 and all(isinstance(v, int) and not isinstance(v, bool) for v in raw[:2])
-            and isinstance(raw[2], str) and ITEM_ID.fullmatch(raw[2]) and 0 <= raw[1] <= 100_000):  # fmt: skip
+    last = raw[2] if isinstance(raw, list) and len(raw) == 3 else None
+    last = [last] if isinstance(last, str) else last  # one made before cursors kept a page's last few
+    if not (isinstance(raw, list) and len(raw) == 3 and all(isinstance(v, int) and not isinstance(v, bool) for v in raw[:2]) and 0 <= raw[1] <= 100_000
+            and isinstance(last, list) and 1 <= len(last) <= CURSOR_TAIL and all(isinstance(i, str) and ITEM_ID.fullmatch(i) for i in last)):  # fmt: skip
         raise ValueError("That isn't a page of the feed.")
     try:
         at = datetime.fromtimestamp(raw[0], timezone.utc)
@@ -669,7 +677,7 @@ def _read_cursor(cursor: str, now: datetime) -> tuple[datetime, int, str | None]
         raise ValueError("That isn't a page of the feed.") from exc
     if not now - CURSOR_AGE <= at <= now + timedelta(minutes=1):
         at = now
-    return at, raw[1], raw[2]
+    return at, raw[1], tuple(last)
 
 
 def feedback(db: Session, fan: str, player_id: int, item: str, verdict: str) -> None:
