@@ -533,9 +533,13 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
 
     players = {i.player_id for i in items if i.player_id is not None}
     events = {i.event_id for i in items if i.event_id}
-    # Each player as their moments' titles name them: one play two of a fan's players tell alike is one line (alerts.fold).
-    names = {pid: name for pid, name in db.execute(select(Player.id, Player.name).where(Player.id.in_(players)))} if players else {}
-    items = [replace(i, who=names.get(i.player_id, "")) if i.player_id is not None else i for i in items]
+    # Each player as their moments' titles name them, in a game the batch has several players' moments of: one play two
+    # of a fan's players tell alike is one line (alerts.fold).
+    shared = {e for e, n in Counter(e for _, e in {(i.player_id, i.event_id) for i in items if i.player_id is not None and i.event_id}).items() if n > 1}
+    if shared:
+        named = {i.player_id for i in items if i.event_id in shared and i.player_id is not None}
+        names = {pid: name for pid, name in db.execute(select(Player.id, Player.name).where(Player.id.in_(named)))}
+        items = [replace(i, who=names.get(i.player_id, "")) if i.event_id in shared and i.player_id is not None else i for i in items]
     levels: dict[str, dict[int, str]] = {}
     for fan, player_id, rules in db.execute(select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(players))) if players else []:
         levels.setdefault(fan, {})[player_id] = (rules or {}).get("level", DEFAULT_LEVEL)
