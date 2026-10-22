@@ -2039,9 +2039,30 @@ def unsubscribe(body: dict = Body(...), fan: str = Depends(fan_id), db: Session 
     return {"ok": True}
 
 
+# The zones browsers still call by an old name (Chrome's ICU says "Asia/Calcutta" in India), each with its current
+# one, which every zone database has: Debian's in the image keeps the old names apart, in tzdata-legacy (BUG-267).
+OLD_ZONE_NAMES = {
+    "Africa/Asmera": "Africa/Asmara", "America/Buenos_Aires": "America/Argentina/Buenos_Aires",
+    "America/Catamarca": "America/Argentina/Catamarca", "America/Coral_Harbour": "America/Atikokan",
+    "America/Cordoba": "America/Argentina/Cordoba", "America/Godthab": "America/Nuuk",
+    "America/Indianapolis": "America/Indiana/Indianapolis", "America/Jujuy": "America/Argentina/Jujuy",
+    "America/Kralendijk": "America/Curacao", "America/Louisville": "America/Kentucky/Louisville",
+    "America/Lower_Princes": "America/Curacao", "America/Marigot": "America/Port_of_Spain",
+    "America/Mendoza": "America/Argentina/Mendoza", "America/St_Barthelemy": "America/Port_of_Spain",
+    "Arctic/Longyearbyen": "Europe/Oslo", "Asia/Calcutta": "Asia/Kolkata", "Asia/Katmandu": "Asia/Kathmandu",
+    "Asia/Rangoon": "Asia/Yangon", "Asia/Saigon": "Asia/Ho_Chi_Minh", "Atlantic/Faeroe": "Atlantic/Faroe",
+    "Europe/Bratislava": "Europe/Prague", "Europe/Busingen": "Europe/Zurich", "Europe/Kiev": "Europe/Kyiv",
+    "Europe/Mariehamn": "Europe/Helsinki", "Europe/Podgorica": "Europe/Belgrade", "Europe/San_Marino": "Europe/Rome",
+    "Europe/Vatican": "Europe/Rome", "Pacific/Enderbury": "Pacific/Kanton", "Pacific/Ponape": "Pacific/Pohnpei",
+    "Pacific/Truk": "Pacific/Chuuk",
+}
+
+
 def _device_settings(body: dict) -> tuple[str, str | None, str | None]:
-    """A device's timezone (UTC unless it's a real one) and its quiet hours ("22:00" to "07:00", or none)."""
+    """A device's timezone, by its current name (UTC unless it's a real one), and its quiet hours ("22:00" to
+    "07:00", or none)."""
     tz = str(body.get("timezone") or "UTC")[:64]
+    tz = OLD_ZONE_NAMES.get(tz, tz)
     try:
         from zoneinfo import ZoneInfo
 
