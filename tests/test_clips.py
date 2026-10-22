@@ -40,14 +40,15 @@ def test_bucket_put_url_is_path_style_and_signs_the_type():
 
 
 def test_the_bucket_copies_in_place_and_keeps_a_hidden_file_at_a_name_only_it_can_work_out(monkeypatch):
-    """BUG-126: a hidden clip's files are copied, in the bucket, to a name made with the bucket's own secret: the CDN
-    domain serves every name in the bucket, so one worked out from the clip's id would still be public."""
+    """BUG-126: a hidden clip's files are copied, in the bucket, to a name made with a random token of the clip's own:
+    the CDN domain serves every name in the bucket, so one worked out from the clip's id would still be public; and not
+    with the bucket's secret, which a key rotated would change under every clip hidden before it."""
     store = clipstore.BucketStore("https://acct.r2.cloudflarestorage.com", "slam-clips", "auto", "AK", "SK", "https://clips.example")
     sent = []
     monkeypatch.setattr(clipstore.httpx, "put", lambda url, headers, timeout: sent.append((url, headers)) or httpx.Response(200, request=httpx.Request("PUT", url)))
-    hidden = store.hidden("clips/abc.mp4")
-    assert hidden == store.hidden("clips/abc.mp4") and hidden.startswith("hidden/") and hidden.endswith(".mp4") and "abc" not in hidden
-    assert clipstore.BucketStore(store.endpoint, store.bucket, "auto", "AK", "another secret", store.public_base).hidden("clips/abc.mp4") != hidden
+    hidden = clipstore.hidden("token", "clips/abc.mp4")
+    assert hidden == clipstore.hidden("token", "clips/abc.mp4") and hidden.startswith("hidden/") and hidden.endswith(".mp4") and "abc" not in hidden
+    assert clipstore.hidden("another token", "clips/abc.mp4") != hidden
     store.copy("clips/abc.mp4", hidden)
     (url, headers), = sent
     assert urlsplit(url).path == f"/slam-clips/{hidden}" and headers == {"x-amz-copy-source": "/slam-clips/clips/abc.mp4"}

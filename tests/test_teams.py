@@ -917,3 +917,21 @@ def test_search_lists_every_team_with_the_name_typed_and_a_sport_typed_with_it_n
     assert [(t["name"], t["sport"]) for t in teams.find(db, "india cricket")] == [("India", "cricket")]
     assert [(t["name"], t["sport"]) for t in teams.find(db, "cricket india")] == [("India", "cricket")]
     assert teams.find(db, "india cricket", sport="football") == [] and teams.find(db, "cricket") == []
+
+
+@needs_db
+def test_a_devices_teams_of_a_sport_turned_off_come_into_the_account_without_taking_its_room(db, source, monkeypatch):
+    """BUG-097's review: signing in brings the device's teams of a sport that's off as the account's own (hidden till
+    it's back) without counting them against MAX, so a team the fan can see isn't dropped for one they can't."""
+    teams.import_teams(source.fake, NOW)
+    lakers = Team(name="Los Angeles Lakers", sport="basketball", system="pitch", external_id="50", search_text=teams.search_text("Los Angeles Lakers", "LAL"))
+    db.add(lakers)
+    db.flush()
+    db.add_all([TeamFollow(fan_id="account", team_id=team(db, ARS).id, alert_rules={}),
+                TeamFollow(fan_id="phone", team_id=lakers.id, alert_rules={}), TeamFollow(fan_id="phone", team_id=team(db, CHE).id, alert_rules={})])
+    db.commit()
+    monkeypatch.setattr(teams, "MAX", 2)
+    monkeypatch.setattr(sports, "ENABLED", [s for s in sports.ALL if s.key != "basketball"])
+    assert teams.merge(db, "phone", "account") == 0
+    db.commit()
+    assert set(db.scalars(select(TeamFollow.team_id).where(TeamFollow.fan_id == "account"))) == {team(db, ARS).id, team(db, CHE).id, lakers.id}

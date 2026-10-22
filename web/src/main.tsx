@@ -303,6 +303,19 @@ function failedRender(error: unknown, info: { componentStack?: string }) {
   report({ kind: 'render', componentStack: info.componentStack }, error)
 }
 
+// A build replaced while this tab still runs it (another tab took the new one: sw.js drops the old build's files): a
+// page this tab hadn't opened yet is gone from the server and the cache, so loading it fails. The tab reloads onto the
+// new build, at most once in a while, so a failure that isn't that can't reload it over and over.
+window.addEventListener('vite:preloadError', (event) => {
+  try {
+    const last = Number(sessionStorage.getItem('sf-reloaded-for-build') || 0)
+    if (Date.now() - last < 60_000) return
+    sessionStorage.setItem('sf-reloaded-for-build', String(Date.now()))
+  } catch { /* no storage: reload all the same */ }
+  event.preventDefault()
+  window.location.reload()
+})
+
 // The sports this app knows come from the server; the first render waits for them (from this device's
 // copy when there is one, so only a first visit waits on the network), and for a tagged link's source to be
 // told (visit.ts), which a first visit's fan cookie comes back with.

@@ -476,8 +476,11 @@ container restarts if `backup.sh` changed. Fans see about two seconds of errors 
 old worker's jobs (a live poll, a card build) stop and free their locks within five seconds, and the
 new worker starts them again as soon as it's up.
 
-- **The build or a migration fails:** nothing is replaced; the old version keeps serving, and the
-  server's checkout goes back to its commit.
+- **The build or a migration fails:** no container is replaced; the old version keeps serving, and the
+  server's checkout goes back to its commit. Each migration commits on its own (`migrations/env.py`), so
+  when the second of three fails, the first stays applied: the old code keeps running on it, which is why
+  a migration only adds (a column, a table, an index) and a later release takes away. Deploy the fix, which
+  carries on from there; or undo the applied one by hand (`c run --rm migrate alembic downgrade -1`).
 - **The new version doesn't get healthy, or Caddy refuses its Caddyfile:** the previous one comes back
   by itself, with its Caddyfile and backup script, and the deploy fails. Caddy keeps serving its old
   config until then. If the previous one doesn't get healthy in time either, it still runs, and

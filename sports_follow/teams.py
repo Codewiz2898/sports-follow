@@ -762,12 +762,15 @@ def merge(db: Session, anon: str, fan: str) -> int:
     db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"team-follow:{fan}", 0))))
     have = set(db.scalars(select(TeamFollow.team_id).where(TeamFollow.fan_id == fan)))
     room, dropped = MAX - counted(db, fan), 0
-    for row in db.scalars(select(TeamFollow).where(TeamFollow.fan_id == anon).order_by(TeamFollow.created_at, TeamFollow.id)):
+    running = set(sports.running_keys())
+    rows = db.execute(select(TeamFollow, Team.sport).join(Team, Team.id == TeamFollow.team_id)
+                      .where(TeamFollow.fan_id == anon).order_by(TeamFollow.created_at, TeamFollow.id)).all()
+    for row, sport in rows:
         if row.team_id in have:
             db.execute(update(TeamFollow).where(TeamFollow.fan_id == fan, TeamFollow.team_id == row.team_id).values(created_at=func.least(TeamFollow.created_at, row.created_at)))
-        elif room > 0:
+        elif sport not in running or room > 0:  # a turned-off sport's comes too, hidden, and takes no room (counted)
             db.execute(insert(TeamFollow).values(fan_id=fan, team_id=row.team_id, alert_rules=row.alert_rules, created_at=row.created_at).on_conflict_do_nothing())
-            room -= 1
+            room -= sport in running
         else:
             dropped += 1
     db.execute(delete(TeamFollow).where(TeamFollow.fan_id == anon))

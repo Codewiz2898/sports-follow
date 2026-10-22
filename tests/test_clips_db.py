@@ -176,7 +176,9 @@ def test_a_hidden_clip_is_off_its_public_address_until_its_put_back(db, bucket, 
     with db() as s:
         assert clips.set_hidden(s, slug, True).status == "hidden"
     assert bucket.size(video) is None and bucket.size(poster) is None  # nothing at bucket.public_url(video)
-    assert bucket.size(bucket.hidden(video)) == 1000 and slug not in bucket.hidden(video)
+    with db() as s:
+        token = s.query(Clip).filter_by(slug=slug).one().hidden_as
+    assert token and bucket.size(clipstore.hidden(token, video)) == 1000 and slug not in clipstore.hidden(token, video)
     with db() as s:
         clips.set_hidden(s, slug, True)  # hidden twice: nothing more to move
         assert clips.set_hidden(s, slug, False).status == "live"
@@ -194,6 +196,27 @@ def test_a_hidden_clip_is_off_its_public_address_until_its_put_back(db, bucket, 
     assert refused.value.status == 502
     with db() as s:
         assert clips.one(s, other) is not None and bucket.size(clips.video_key(other)) == 1000
+
+
+def test_a_hidden_clip_comes_back_after_the_buckets_keys_change_and_one_whose_files_are_gone_stays_hidden(db, bucket, page):
+    """BUG-126's review: its hidden files' names are the clip's own (Clip.hidden_as), so a new key for the bucket can't
+    lose them; and one whose files are in neither place isn't put back to show a clip with nothing to play."""
+    key_id, _ = _key(db)
+    slug, _ = _publish(db, bucket, key_id)
+    with db() as s:
+        clips.set_hidden(s, slug, True)
+    bucket.secret = b"the key, rotated"
+    with db() as s:
+        assert clips.set_hidden(s, slug, False).status == "live"
+    assert (bucket.size(clips.video_key(slug)), bucket.size(clips.poster_key(slug))) == (1000, 100)
+    with db() as s:
+        clips.set_hidden(s, slug, True)
+    bucket.objects.clear()  # lost meanwhile
+    with db() as s, pytest.raises(clips.Refused) as refused:
+        clips.set_hidden(s, slug, False)
+    assert refused.value.status == 409
+    with db() as s:
+        assert s.query(Clip).filter_by(slug=slug).one().status == "hidden"
 
 
 def test_the_poster_is_signed_for_the_size_the_app_says(db, bucket, page):
@@ -311,7 +334,9 @@ def test_revoking_a_key_can_hide_its_clips_and_unfinished_uploads_are_cleared(db
         assert s.query(Clip).filter_by(slug=stuck).one().status == "failed"
         assert clips.sweep(s, later) == 0
     assert bucket.size(clips.video_key(stuck)) is None and bucket.size(clips.poster_key(gone)) is None
-    assert sorted(bucket.objects) == sorted([clips.video_key(theirs), clips.poster_key(theirs), bucket.hidden(clips.video_key(live)), bucket.hidden(clips.poster_key(live))])
+    with db() as s:
+        token = s.query(Clip).filter_by(slug=live).one().hidden_as or ""
+    assert sorted(bucket.objects) == sorted([clips.video_key(theirs), clips.poster_key(theirs), clipstore.hidden(token, clips.video_key(live)), clipstore.hidden(token, clips.poster_key(live))])
 
 
 # ---------------------------------------------------------------- the routes, on the same rows

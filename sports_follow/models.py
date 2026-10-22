@@ -867,6 +867,9 @@ class Clip(Base):
     # and removed (files deleted) after.
     status: Mapped[str] = mapped_column(String(12), default="uploading", index=True)
     reports: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # The random token its files' hidden names are made with (clipstore.hidden), from its first hide on: kept here,
+    # so a change of the bucket's keys can't lose where they are.
+    hidden_as: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = _now()
     live_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 

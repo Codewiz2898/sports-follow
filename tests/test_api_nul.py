@@ -78,6 +78,9 @@ def postgres(api, monkeypatch):
     ("GET", "/api/clips/a%00b", None),  # a clip's address
     ("POST", "/api/clips/a%00b/report", {}),
     ("GET", "/api/clips?match=a%00b", None),  # a query
+    ("GET", "/%00", None),  # the app's own pages too (BUG-096's review): the page's file is looked up by its address
+    ("GET", "/player/1%00", None),
+    ("GET", "/gukesh?s=a%00b", None),
 ])
 def test_a_nul_anywhere_is_refused_plainly_never_a_500(api, postgres, method, path, body):
     answer = api.call(method, path, body=body, address=PUBLIC)

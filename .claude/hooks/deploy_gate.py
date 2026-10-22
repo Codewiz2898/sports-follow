@@ -15,7 +15,8 @@ it stands for never happens (18 Oct 2026). This blocks a Bash call that would ge
   the like); anything that could run it (a shell, ssh, sudo, xargs, `.`, python) stops the line, though
   ssh, `-c` and `eval` scripts are judged the same way. And `ssh … deploy` or `rollback`, which the
   deploy key's forced command hands to deploy.sh: after the host, as ssh's RemoteCommand option
-  (`-o RemoteCommand=deploy`), or as a RemoteCommand in a config file the call names (`-F file`).
+  (`-o RemoteCommand=deploy`), or as a RemoteCommand in a config file the call names (`-F file`) or,
+  naming none, in `~/.ssh/config`.
 
 These read the raw command, so no wrapper, variable or spelling of a flag gets past them; the cost is
 that a commit message or comment naming them in the command itself is stopped too (pass the text in a
@@ -129,9 +130,11 @@ def ssh_remote(words: list[str]) -> list[str]:
 
 
 def ssh_configs(words: list[str], cwd: str | None) -> list[str]:
-    """The text of each config file an ssh call names (-F file), read from where the call runs."""
+    """The text of each config file an ssh call reads: those it names (-F file), read from where the call runs, or
+    else the user's own (~/.ssh/config), which OpenSSH reads when none is named."""
     texts: list[str] = []
-    for name in (value for letter, value in ssh_parts(words)[0] if letter == "F"):
+    named = [value for letter, value in ssh_parts(words)[0] if letter == "F"]
+    for name in named or ["~/.ssh/config"]:
         path = os.path.join(cwd or os.getcwd(), os.path.expanduser(name))
         if os.path.isfile(path):
             try:
@@ -275,7 +278,9 @@ def main() -> int:
     except Exception:
         return 0
     lowered = command.lower()
-    if not ("deploy" in lowered or "environments" in lowered or "graphql" in lowered or "rollback" in lowered):
+    # An ssh call too: its config file (~/.ssh/config) may say what it runs (RemoteCommand), naming nothing here.
+    if not ("deploy" in lowered or "environments" in lowered or "graphql" in lowered or "rollback" in lowered
+            or re.search(r"\b(ssh|mosh)\b", lowered)):
         return 0
     try:
         stop = blocked(command, call.get("cwd") or os.getcwd())

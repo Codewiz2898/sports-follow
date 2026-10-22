@@ -225,7 +225,8 @@ def remove(db: Session, slug: str, key: ClipKey | None = None) -> bool:
     bucket = store()
     for file in (video_key(slug), poster_key(slug)):
         bucket.delete(file)
-        bucket.delete(bucket.hidden(file))
+        if clip.hidden_as:
+            bucket.delete(clipstore.hidden(clip.hidden_as, file))
     clip.status = "removed"
     return True
 
@@ -239,21 +240,30 @@ def _move(bucket: clipstore.Store, source: str, key: str) -> None:
 
 def set_hidden(db: Session, slug: str, hidden: bool) -> Clip | None:
     """An admin hides a clip, or puts a hidden one back (its reports cleared). Hidden, its files are moved off their
-    public address (clipstore.py), so a link to them plays nothing either; put back, they're moved back. Refused (502)
-    when the bucket fails on it: the caller's change is rolled back, and asking again finishes the move."""
+    public address to names made with a token of its own (clipstore.hidden, Clip.hidden_as), so a link to them plays
+    nothing either; put back, they're moved back. Refused (502) when the bucket fails on it: the caller's change is
+    rolled back, and asking again finishes the move; and (409) putting back one whose files are in neither place,
+    rather than showing a clip with nothing to play."""
     clip = db.scalar(select(Clip).where(Clip.slug == slug))
     if clip is None or clip.status not in ("live", "hidden"):
         return None
+    token = clip.hidden_as or secrets.token_urlsafe(24)
     bucket = clipstore.STORE
     if bucket is not None:
         try:
             for file in (video_key(slug), poster_key(slug)):
+                away = clipstore.hidden(token, file)
                 if hidden:
-                    _move(bucket, file, bucket.hidden(file))
+                    _move(bucket, file, away)
+                elif bucket.size(away) is None and bucket.size(file) is None:
+                    raise Refused(409, "This clip's files aren't in the bucket, hidden or not: take it down instead.")
                 else:
-                    _move(bucket, bucket.hidden(file), file)
+                    _move(bucket, away, file)
+        except Refused:
+            raise
         except Exception as exc:
             raise Refused(502, f"The clips bucket failed on its files ({type(exc).__name__}): nothing changed, try again.") from exc
+    clip.hidden_as = token
     clip.status = "hidden" if hidden else "live"
     if not hidden:
         clip.reports = 0

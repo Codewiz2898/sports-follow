@@ -14,8 +14,8 @@ Without all of them there's no store, and publishing says so; reading still work
 URLs are signed here (AWS Signature Version 4, query-string form) rather than by an SDK: it's one function.
 
 The CDN domain serves every name in the bucket. A hidden clip's files (clips.set_hidden) are copied, in the bucket, to
-a name made with the store's own secret (hidden), which nobody can work out from the clip's id, and the public ones
-deleted; putting it back copies them back. The key needs to read and write objects (R2's Object Read & Write).
+a name made with a random token of the clip's own (hidden, Clip.hidden_as), which nobody can work out from the clip's
+id and which outlives a change of the bucket's keys, and the public ones deleted; putting it back copies them back. The key needs to read and write objects (R2's Object Read & Write).
 """
 
 from __future__ import annotations
@@ -39,14 +39,15 @@ class Store(Protocol):
     def size(self, key: str) -> int | None: ...
     def delete(self, key: str) -> None: ...
     def copy(self, source: str, key: str) -> None: ...
-    def hidden(self, key: str) -> str: ...
     def public_url(self, key: str) -> str: ...
 
 
-def _hidden(secret: bytes, key: str) -> str:
-    """Where a hidden object is kept: a name only the secret makes (the CDN serves every name), with its extension."""
+def hidden(token: str, key: str) -> str:
+    """Where a hidden clip's file is kept (clips.set_hidden): a name only the clip's own random token makes
+    (Clip.hidden_as; the CDN serves every name), with the file's extension. Not the bucket's secret: a key rotated
+    would leave every clip hidden before it where nothing could find it."""
     extension = key.rsplit(".", 1)[1] if "." in key.rsplit("/", 1)[-1] else ""
-    name = hmac.new(secret, key.encode(), hashlib.sha256).hexdigest()[:40]
+    name = hmac.new(token.encode(), key.encode(), hashlib.sha256).hexdigest()[:40]
     return f"hidden/{name}.{extension}" if extension else f"hidden/{name}"
 
 
@@ -131,9 +132,6 @@ class BucketStore:
         r = httpx.put(self._url("PUT", key, headers, expires=60), headers=headers, timeout=60)
         r.raise_for_status()
 
-    def hidden(self, key: str) -> str:
-        return _hidden(f"hidden:{self.secret}".encode(), key)
-
     def public_url(self, key: str) -> str:
         return f"{self.public_base.rstrip('/')}/{key}"
 
@@ -160,9 +158,6 @@ class MemoryStore:
 
     def copy(self, source: str, key: str) -> None:
         self.objects[key] = self.objects[source]
-
-    def hidden(self, key: str) -> str:
-        return _hidden(self.secret, key)
 
     def public_url(self, key: str) -> str:
         return f"{self.public_base}/{key}"

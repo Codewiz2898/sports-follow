@@ -41,7 +41,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.datastructures import Headers
 from starlette.routing import Match
 
-from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
+from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, controls, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, API_DOCS, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_LOOKUPS_PER_ADDRESS, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE
@@ -76,6 +76,9 @@ streaming: Counter[str] = Counter()  # this process's open streams: by "fan:<id>
 async def lifespan(app: FastAPI):
     cookie_key()  # a server without its cookie key stops here, not on a fan's first request
     metrics.seed()
+    # The admin panel's switches, read once before any request: a route asking for them first (sports.on) would wait
+    # on the database on the event loop, holding every other request meanwhile.
+    await asyncio.to_thread(controls.current)
     state["arq"] = await create_pool(RedisSettings.from_dsn(REDIS_URL))
     state["redis"] = aredis.Redis.from_pool(aredis.BlockingConnectionPool.from_url(REDIS_URL, decode_responses=True, max_connections=REDIS_CONNECTIONS, timeout=10))
     state["streams"] = aredis.Redis.from_url(REDIS_URL, decode_responses=True, max_connections=STREAMS_PER_PROCESS)  # each stream's pubsub
@@ -150,8 +153,8 @@ def _holds_nul(value: Any) -> bool:
 
 
 class NoNul:
-    """A NUL character in an API request's text (%00 in its path or query, \\u0000 in its JSON body) is refused with a
-    400 before any route sees it. Postgres can't keep one, so a sign-in address, a clip's address or a league member's
+    """A NUL character in a request's text (%00 in any path or query, \\u0000 in an API write's JSON body) is refused
+    with a 400 before any route sees it. Postgres can't keep one, so a sign-in address, a clip's address or a league member's
     name with one in it failed in the query, a server error anyone could raise at will (BUG-096). A write's body is
     read whole here (the API's are small JSON) and handed on as it came."""
 
@@ -159,12 +162,13 @@ class NoNul:
         self.app = app
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
-        if scope["type"] != "http" or not scope["path"].startswith("/api/"):
+        if scope["type"] != "http":
             return await self.app(scope, receive, send)
         refused = JSONResponse({"detail": NUL_REFUSED}, status_code=400)
+        # Any address's path or query, the app's pages too: a page's file is looked up by its address (spa).
         if "\x00" in scope["path"] or b"%00" in scope["query_string"]:
             return await refused(scope, receive, send)
-        if scope["method"] not in UNSAFE:
+        if not scope["path"].startswith("/api/") or scope["method"] not in UNSAFE:
             return await self.app(scope, receive, send)
         came: list[MutableMapping[str, Any]] = []
         while True:

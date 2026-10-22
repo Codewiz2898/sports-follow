@@ -17,9 +17,10 @@ HOOKS = Path(__file__).parent.parent / ".claude" / "hooks"
 PYTHON = os.environ.get("HOOK_PYTHON", sys.executable)
 
 
-def run(hook: str, command: str, cwd: Path | str = "/") -> int:
+def run(hook: str, command: str, cwd: Path | str = "/", home: Path | None = None) -> int:
     call = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd)}
-    return subprocess.run([PYTHON, str(HOOKS / hook)], input=json.dumps(call), capture_output=True, text=True).returncode
+    env = {**os.environ, "HOME": str(home)} if home is not None else None
+    return subprocess.run([PYTHON, str(HOOKS / hook)], input=json.dumps(call), capture_output=True, text=True, env=env).returncode
 
 
 @pytest.mark.parametrize("path", sorted(HOOKS.glob("*.py")), ids=lambda p: p.name)
@@ -327,3 +328,14 @@ def test_productions_reviewers_and_the_deploy_keys_command_stay_bharaths_however
 ])
 def test_a_hunter_runs_its_repros_but_never_changes_git(command, blocked):
     assert run("hunter_guard.py", command) == (2 if blocked else 0)
+
+
+def test_a_deploy_set_as_the_remote_command_of_the_users_own_ssh_config_is_stopped_too(tmp_path):
+    """BUG-221's review: OpenSSH reads ~/.ssh/config when no -F is named, so a RemoteCommand there (written by another
+    tool than this hook sees) would run deploy.sh from a plain `ssh stann`."""
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "config").write_text("Host stann\n  HostName 203.0.113.7\n  User deploy\n  RemoteCommand deploy\n")
+    assert run("deploy_gate.py", "ssh stann", tmp_path, home=home) == 2
+    (home / ".ssh" / "config").write_text("Host stann\n  HostName 203.0.113.7\n  User deploy\n")
+    assert run("deploy_gate.py", "ssh stann 'cd /opt/sports-follow && deploy/deploy.sh status'", tmp_path, home=home) == 0
