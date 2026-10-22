@@ -145,7 +145,7 @@ export function FeedTab() {
           {channels.map((c) => (
             <li key={c.channel_id} className="admin-row">
               <div className="stack">
-                <span className="title">{c.name || c.channel_id}</span>
+                <span className="title" style={{ overflowWrap: 'anywhere' }}>{c.name || c.channel_id}</span>
                 <span className="small muted">
                   {c.listed ? 'Listed by a sport' : 'No sport lists it'} · trust {c.effective.toFixed(2)} · {count(c.candidates)} found, {count(c.served)} served
                   {c.feedback > 0 && ` · fans' feedback ${c.feedback}`}

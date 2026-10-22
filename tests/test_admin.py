@@ -448,3 +448,24 @@ def test_a_blocked_account_gets_no_code(api, monkeypatch):
     assert refused.status_code == 403 and refused.json()["detail"] == server.BLOCKED
     assert api.call("POST", "/api/auth/email/start", address="81.2.69.142", body={"email": "fan@example.com"}).status_code == 200
     assert sent == ["fan@example.com"]
+
+
+# ---------------------------------------------------------------- the Feed tab
+
+
+def test_a_news_feeds_trust_is_set_from_the_panel_as_a_video_channels_is(api, password, monkeypatch):
+    """BUG-123: the Feed tab lists the publishers' news feeds beside the video channels, each with a Trust control,
+    but a feed is named by its address, which no route took in its path and the check of a channel id refused. The
+    channel goes in the body: an id or a feed's address."""
+    monkeypatch.setattr(admin.rank, "rescore", lambda **kw: {})
+    monkeypatch.setattr(admin, "channels_view", lambda db: [{"channel_id": c, "trust": t} for c, t in controls.current().channel_trust.items()])
+    cookie = admin_cookie(sign_in(api))
+    feed = next(f for s in sports.ENABLED for f in s.news_feeds)
+    video = next(c for s in sports.ENABLED for c in s.video_channels)
+    for channel, trust in ((feed, 0.4), (video, 0)):
+        answer = api.call("PUT", "/api/admin/feed/channels", headers=cookie, body={"channel": channel, "trust": trust})
+        assert answer.status_code == 200, answer.text
+    assert controls.current().channel_trust == {feed: 0.4, video: 0.0}
+    for bad in ("not a channel!", "https://example.com/a feed", "https://" + "x" * 600, "", 7, None):
+        assert api.call("PUT", "/api/admin/feed/channels", headers=cookie, body={"channel": bad, "trust": 1}).status_code == 400
+    assert api.call("PUT", "/api/admin/feed/channels", headers=cookie, body={"channel": feed, "trust": None}).json()["channels"] == [{"channel_id": video, "trust": 0.0}]

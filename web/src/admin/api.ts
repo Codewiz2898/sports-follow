@@ -104,7 +104,7 @@ export interface FeedCandidateRow {
   video: { youtube_id: string } | null // how the app's player plays it (the source says); null: it can't
   title: string
   channel: string
-  channel_id: string
+  channel_id: string // a video channel's id, or a news feed's address
   published: string | null
   fetched_at: string
   judged_at: string | null
@@ -129,7 +129,7 @@ export interface ChannelYield {
 }
 /** A video channel: listed by a running sport or not, its trust as the panel set it (null: its default), and what fans said of its videos. */
 export interface FeedChannel {
-  channel_id: string
+  channel_id: string // a video channel's id, or a news feed's address
   name: string
   listed: boolean
   trust: number | null
@@ -168,8 +168,9 @@ export const admin = {
   linear: () => request<LinearStatus>(at('linear')),
   feed: (show: FeedShow, offset = 0) => request<FeedPage>(at(`feed?show=${show}&offset=${offset}`)),
   review: (id: number, review: Review | null) => request<FeedCandidateRow>(at(`feed/${id}`), json('PUT', { review })),
+  /** A video channel's id or a news feed's address, in the body: an address doesn't fit in a path. */
   channelTrust: (channel: string, trust: number | null) =>
-    request<{ channels: FeedChannel[] }>(at(`feed/channels/${encodeURIComponent(channel)}`), json('PUT', { trust })),
+    request<{ channels: FeedChannel[] }>(at('feed/channels'), json('PUT', { channel, trust })),
   feedLayout: (layout: AdminFeedLayout | null) => request<{ layout: FeedLayoutView }>(at('feed/layout'), json('PUT', { layout })),
   users: (q: string, offset = 0) =>
     request<{ overview: Overview; predictions?: PredictionNumbers; accounts: AccountRow[]; next: number | null }>(at(`users?q=${encodeURIComponent(q)}&offset=${offset}`)),

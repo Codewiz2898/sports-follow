@@ -59,6 +59,7 @@ CODE_DRIFT = 1  # steps either side a code still works, for a phone whose clock 
 PAGE = 50  # accounts a page, and feed candidates
 FEED_SHOWS = ("all", "unjudged", "served", "held", "reviewed")  # which candidates the Feed tab lists
 TRUST_STEPS = (1.0, 0.7, 0.4, 0.0)  # what the Feed tab offers for a channel: high, some, low, hidden
+CHANNEL = re.compile(r"[A-Za-z0-9_-]{1,64}|https?://\S{1,500}")  # a video channel's id, or a news feed's address
 
 
 # ---------------------------------------------------------------- the password
@@ -537,11 +538,12 @@ def review_candidate(row_id: int, said: str | None) -> dict[str, Any] | None:
         return _candidate_row(*found) if found else None
 
 
-def set_channel_trust(channel: str, trust: Any) -> None:
-    """How far the Feed trusts a channel: one of TRUST_STEPS, or None for its default; then rank its videos
-    again. ValueError for a channel id or trust that isn't one."""
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", channel):
-        raise ValueError("That isn't a channel id.")
+def set_channel_trust(channel: Any, trust: Any) -> None:
+    """How far the Feed trusts a channel (a video channel, by its id, or a publisher's news feed, by its address, as
+    channels_view lists them): one of TRUST_STEPS, or None for its default; then rank its items again. ValueError for
+    a channel or trust that isn't one."""
+    if not isinstance(channel, str) or not CHANNEL.fullmatch(channel):
+        raise ValueError("That isn't a channel's id or a news feed's address.")
     if trust is not None and (isinstance(trust, bool) or not isinstance(trust, (int, float)) or float(trust) not in TRUST_STEPS):
         raise ValueError(f"Trust is one of {', '.join(str(t) for t in TRUST_STEPS)}, or null for the default.")
     controls.set_channel_trust(channel, None if trust is None else float(trust))

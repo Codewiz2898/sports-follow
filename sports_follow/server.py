@@ -1978,6 +1978,20 @@ def admin_feed_layout(body: dict = Body(...)) -> dict[str, Any]:
     return {"layout": admin.layout_view()}
 
 
+@app.put("/api/admin/feed/channels", dependencies=AdminOnly)
+def admin_channel_trust(body: dict = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """How far the Feed trusts a video channel or a publisher's news feed ({"channel": its id or the feed's address,
+    "trust": 1 | 0.7 | 0.4 | 0 | null}); 0 hides its items. In the body, as an address doesn't fit in a path; and before
+    /api/admin/feed/{row_id}, which would take "channels" for a row."""
+    channel = body.get("channel")
+    try:
+        admin.set_channel_trust(channel, body.get("trust"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    admin_log.info("admin panel: feed channel %s trust %s", channel, body.get("trust"))
+    return {"channels": admin.channels_view(db)}
+
+
 @app.put("/api/admin/feed/{row_id}", dependencies=AdminOnly)
 def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[str, Any]:
     """An admin's word on a candidate ({"review": "approved" | "hidden" | "pinned" | null}), over the judge's."""
@@ -1991,16 +2005,6 @@ def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[str, A
     admin_log.info("admin panel: feed candidate %s %s", row_id, said or "review taken back")
     return found
 
-
-@app.put("/api/admin/feed/channels/{channel}", dependencies=AdminOnly)
-def admin_channel_trust(channel: str, body: dict = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
-    """How far the Feed trusts a video channel ({"trust": 1 | 0.7 | 0.4 | 0 | null}); 0 hides its videos."""
-    try:
-        admin.set_channel_trust(channel, body.get("trust"))
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from None
-    admin_log.info("admin panel: feed channel %s trust %s", channel, body.get("trust"))
-    return {"channels": admin.channels_view(db)}
 
 
 @app.get("/api/admin/users", dependencies=AdminOnly)
