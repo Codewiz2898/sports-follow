@@ -91,6 +91,10 @@ class Redis:
         self.log.append(f"get {key}")
         return self.cards.get(key)
 
+    async def mget(self, keys):
+        self.log.append(f"mget {' '.join(keys)}")
+        return [self.cards.get(k) for k in keys]
+
     async def set(self, key, value):
         self.cards[key] = value
 
@@ -162,7 +166,7 @@ def test_the_fan_stream_opens_with_the_fans_players_and_holds_no_session(api):
     assert event["matches"] == [] and event["teams"] == []
     assert held == 0 and api.opened == ["thread"] * 4  # the follow ids, the players, the followed games, the teams: each closed at once
     # Read once subscribed, so a card published while the stream connects can't fall in a gap.
-    assert api.redis.log == ["subscribe player:1 player:2", "get card:1", "get card:2", "unsubscribe"]
+    assert api.redis.log == ["subscribe player:1 player:2", "mget card:1 card:2", "unsubscribe"]  # every card in one request (BUG-269)
 
 
 def test_a_fan_who_follows_nothing_hears_so_first(api, monkeypatch):

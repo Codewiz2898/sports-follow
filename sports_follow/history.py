@@ -16,7 +16,9 @@ passed. Any other failure (the source unreachable, a 5xx, a rejected key, data t
 leaves the scorecard, or the player's pages, to wait RETRY and read again, twice as long after each
 failure in a row; one bad page never holds up the other players. A source that failed to answer or asked
 us to slow down isn't asked again in the same run. A source with an hourly allowance (Sportmonks) is
-skipped while it's down to the share kept for live games.
+skipped while it's down to the share kept for live games. Only the players of sports that run are read (a sport
+turned off in the admin panel isn't, though its source runs for another: an esports game), and only the games
+a running source can read, so those of a source switched off never crowd out the rest.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ from typing import Any
 from sqlalchemy import exists, select, tuple_
 from sqlalchemy.orm import Session
 
-from . import bus, shutdown, structured
+from . import bus, shutdown, sports, structured
 from .adapters import ADAPTERS, AdapterError, PlayerRef
 from .db import session
 from .models import Event, EventPlayer, Follow, Player, SourceBinding
@@ -59,9 +61,21 @@ def _wait(failures: int) -> int:
     return min(RETRY * 2 ** min(failures - 1, 16), RETRY_MAX)
 
 
-def _followed_bindings(db: Session) -> list[SourceBinding]:
+def _off(db: Session) -> list[str]:
+    """Followed players' sports that are turned off (sports.on), as their pages name them ("CS2"): the lane reads
+    nothing of theirs, as the scheduler doesn't (BUG-176)."""
+    return [sport for sport in db.scalars(select(Player.sport).where(Player.id.in_(select(Follow.player_id))).distinct()) if not sports.on(sport)]
+
+
+def _of_sports_off(off: list[str]):
+    return select(Player.id).where(Player.sport.in_(off))
+
+
+def _followed_bindings(db: Session, off: list[str]) -> list[SourceBinding]:
     followed = select(Follow.player_id)
-    rows = db.scalars(select(SourceBinding).where(SourceBinding.purpose == "fixtures", SourceBinding.player_id.in_(followed), SourceBinding.adapter.in_(list(ADAPTERS))).order_by(SourceBinding.player_id, SourceBinding.priority.desc(), SourceBinding.id.desc())).all()
+    rows = db.scalars(select(SourceBinding).where(SourceBinding.purpose == "fixtures", SourceBinding.player_id.in_(followed), SourceBinding.adapter.in_(list(ADAPTERS)),
+                                                  *([SourceBinding.player_id.not_in(_of_sports_off(off))] if off else []))
+                      .order_by(SourceBinding.player_id, SourceBinding.priority.desc(), SourceBinding.id.desc())).all()
     best: dict[int, SourceBinding] = {}
     for row in rows:
         best.setdefault(row.player_id, row)  # structured.binding()'s pick: highest priority, newest
@@ -75,15 +89,21 @@ def _pending(history: dict[str, Any] | None, now: datetime) -> bool:
     return not state.get("done") and not (retry and datetime.fromisoformat(retry) > now)
 
 
-def _missing_scorecards(waiting: list[tuple[int, int]] | None = None):
+def _missing_scorecards(waiting: list[tuple[int, int]] | None = None, off: list[str] | None = None):
     """Stored results of followed players still waiting for their scorecard, newest first, leaving out
-    those waiting after a failed read."""
+    those waiting after a failed read. Only those the lane can read: a game whose source runs, of a player a
+    running source has, in a sport that runs (off: those turned off). A source switched off keeps its games'
+    rows waiting for when it runs again, but they never fill the lane's window (BUG-179)."""
+    bound = select(SourceBinding.player_id).where(SourceBinding.purpose == "fixtures", SourceBinding.adapter.in_(list(ADAPTERS)))
     query = (
         select(EventPlayer, Event)
         .join(Event, Event.id == EventPlayer.event_id)
-        .where(Event.status == "final", EventPlayer.result.is_not(None), EventPlayer.result["scorecard"].astext == "false", EventPlayer.player_id.in_(select(Follow.player_id)))
+        .where(Event.status == "final", EventPlayer.result.is_not(None), EventPlayer.result["scorecard"].astext == "false", EventPlayer.player_id.in_(select(Follow.player_id)),
+               Event.live_binding["adapter"].astext.in_(list(ADAPTERS)), EventPlayer.player_id.in_(bound))
         .order_by(Event.start_utc.desc().nulls_last(), Event.id.desc())
     )
+    if off:
+        query = query.where(EventPlayer.player_id.not_in(_of_sports_off(off)))
     return query.where(tuple_(EventPlayer.event_id, EventPlayer.player_id).not_in(waiting)) if waiting else query
 
 
@@ -108,10 +128,11 @@ def has_work() -> bool:
         return False
     waiting = _waiting(_rests())
     with session() as db:
-        if db.scalar(select(exists(_missing_scorecards(waiting).limit(1).subquery()))):
+        off = _off(db)
+        if db.scalar(select(exists(_missing_scorecards(waiting, off).limit(1).subquery()))):
             return True
         now = datetime.now(timezone.utc)
-        return any(_pending(b.history, now) for b in _followed_bindings(db))
+        return any(_pending(b.history, now) for b in _followed_bindings(db, off))
 
 
 def run() -> None:
@@ -152,9 +173,10 @@ def _failed(system: str, what: str, exc: Exception, down: set[str], done: dict[s
 def _scorecards(budget: int, done: dict[str, int], down: set[str]) -> int:
     rests = _rests()
     with session() as db:
-        athlete = {b.player_id: PlayerRef(**b.locator).athlete_id for b in _followed_bindings(db)}
+        off = _off(db)
+        athlete = {b.player_id: PlayerRef(**b.locator).athlete_id for b in _followed_bindings(db, off)}
         # More than a run reads, so a source that's down this run doesn't hold up the others.
-        todo = [(ep.event_id, ep.player_id) for ep, _ in db.execute(_missing_scorecards(_waiting(rests)).limit(budget * 5))]
+        todo = [(ep.event_id, ep.player_id) for ep, _ in db.execute(_missing_scorecards(_waiting(rests), off).limit(budget * 5))]
     for event_id, player_id in todo:
         if budget <= 0 or shutdown.stopping.is_set():
             break
@@ -193,7 +215,7 @@ def _scorecards(budget: int, done: dict[str, int], down: set[str]) -> int:
 def _pages(budget: int, done: dict[str, int], down: set[str]) -> int:
     now = datetime.now(timezone.utc)
     with session() as db:
-        todo = [(b.id, b.player_id) for b in _followed_bindings(db) if _pending(b.history, now)]
+        todo = [(b.id, b.player_id) for b in _followed_bindings(db, _off(db)) if _pending(b.history, now)]
     for binding_id, player_id in todo:
         if budget <= 0 or shutdown.stopping.is_set():
             break

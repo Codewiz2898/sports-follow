@@ -616,11 +616,13 @@ async def app_picture() -> Response:
 
 async def _following(fan: str) -> list[dict[str, Any]]:
     """The fan's players as the app lists them: each card's summary and the fan's alert level. Not a turned-off
-    sport's: the follow stays, out of sight, for when it's back (as teams.mine)."""
+    sport's: the follow stays, out of sight, for when it's back (as teams.mine). Their hot copies are read in one
+    request (each stream's opening, and its every reconnect, reads them all: BUG-269)."""
     rows = await in_db(lambda db: db.execute(select(Follow.player_id, Follow.alert_rules).where(Follow.fan_id == fan).order_by(Follow.created_at)).all())
+    raws = await state["redis"].mget([bus.card_key(player_id) for player_id, _ in rows]) if rows else []
     out = []
-    for player_id, rules in rows:
-        card = await read_card(player_id)
+    for (player_id, rules), raw in zip(rows, raws):
+        card = json.loads(raw) if raw else await read_card(player_id)  # one Redis lost: from Postgres
         if card and sports.on((card.get("player") or {}).get("sport")):
             out.append({**_summary(card), "alerts": (rules or {}).get("level", moments.DEFAULT_LEVEL)})
     return out
@@ -2743,6 +2745,9 @@ async def refresh(player_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any
         raise HTTPException(403, "Follow this player to refresh them.")
     if row.status != "ready":
         return {"queued": False, "reason": "The player's first card is still being built."}
+    if not sports.on(((row.card or {}).get("player") or {}).get("sport")):
+        # Turned off in the admin panel: its source isn't read for it, though it may run for another sport (BUG-176).
+        return {"queued": False, "reason": "This sport is turned off for now, so its players aren't read again."}
     if await in_db(structured.binding, player_id) is not None:
         # A bound player's live score is already polled; a refresh re-reads fixtures and stats.
         if bus.is_locked(f"structured:{player_id}"):

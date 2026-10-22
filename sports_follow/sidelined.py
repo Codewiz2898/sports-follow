@@ -35,7 +35,7 @@ from typing import Any, cast
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import logs, registry, sports
+from . import logs, registry, shutdown, sports
 from .adapters import ADAPTERS, Absence, Adapter
 from .db import session
 from .models import Athlete, Sidelined
@@ -138,8 +138,11 @@ def read(system: str, now: datetime | None = None) -> dict[str, int]:
 
 def read_all() -> None:
     """Every source that lists who's out, one after another (worker.read_sidelined); one that fails is logged
-    and changes nothing."""
+    and changes nothing. A stopping worker reads no more of them: the next read does."""
     for adapter in sources():
+        if shutdown.stopping.is_set():
+            log.info("sidelined: the worker is stopping; %s and the rest are read next time", adapter.system)
+            return
         try:
             done = read(adapter.system)
             log.info("sidelined %s: %d spells listed, %d news of a player out, %d players back", adapter.system, done.get("listed", 0), done.get("out", 0), done.get("back", 0))
