@@ -435,6 +435,60 @@ def test_searches_that_reach_the_live_sources_are_limited_per_fan_and_per_addres
     assert allowed[4:] == [False, True]
 
 
+class Clocked(Redis):
+    """The fake Redis, its keys expiring by a test's clock."""
+
+    def __init__(self, clock: list[float]):
+        super().__init__()
+        self.clock, self.ends = clock, {}
+
+    def _expired(self) -> None:
+        for key, end in list(self.ends.items()):
+            if end <= self.clock[0]:
+                self.data.pop(key, None)
+                del self.ends[key]
+
+    async def incr(self, key):
+        self._expired()
+        return await super().incr(key)
+
+    async def mget(self, keys):
+        self._expired()
+        return await super().mget(keys)
+
+    async def expire(self, key, seconds, nx=False):
+        if not (nx and key in self.ends):
+            self.ends[key] = self.clock[0] + seconds
+        return True
+
+
+def test_a_minutes_source_searches_hold_across_the_edge_of_the_minute(api, monkeypatch):
+    # BUG-134: a fan's minute started at their first search and its count went with it, so searches spent just before
+    # it ended were there again just after: up to twice the limit in a few seconds, for each fan and each address.
+    monkeypatch.setattr(server, "SOURCE_SEARCHES_PER_MINUTE", 3)
+    clock = [1_792_000_000.0]
+    monkeypatch.setattr(server, "time", SimpleNamespace(time=lambda: clock[0], monotonic=time.monotonic, perf_counter=time.perf_counter))
+    monkeypatch.setitem(server.state, "redis", Clocked(clock))
+    allowed: list[bool] = []
+
+    def run(db, q, sport, fan, may_ask):
+        allowed.append(may_ask())
+        return {"query": q, "results": [], "partial": []}
+
+    monkeypatch.setattr(server.player_search, "run", run)
+
+    def searches(at: float, n: int) -> list[bool]:
+        clock[0], before = 1_792_000_000.0 + at, len(allowed)
+        for _ in range(n):
+            assert api.call("GET", "/api/search?q=someone", fan="script", address=PUBLIC).status_code == 200
+        return allowed[before:]
+
+    assert searches(0, 1) == [True]
+    assert searches(40, 2) == [True, True]
+    assert searches(70, 3) == [True, False, False]  # the two from half a minute ago still count
+    assert searches(110, 3) == [True, True, False]  # a minute after them, they don't
+
+
 @pytest.fixture
 def a_source(api, monkeypatch):
     """ESPN soccer has every athlete id; the ids it was asked for. A pick makes a new player each time."""

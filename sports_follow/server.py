@@ -3008,13 +3008,25 @@ def _search(q: str, sport: str | None, fan: str, may_ask: Callable[[], bool]) ->
         return {**found, "teams": teams.find(db, found.get("query") or q, found.get("sport"), fan)}
 
 
+MINUTE_SLOTS = 12  # a minute's requests are counted in twelve five-second slots (_in_minute)
+
+
 async def _in_minute(kind: str, fan: str, address: str | None, per_fan: int, per_address: int) -> bool:
-    """Count one of a fan's requests of a kind against their minute and their address's; False when either is
-    over. A minute starts at its first such request."""
+    """Count one of a fan's requests of a kind against their last minute and their address's; False when either is
+    over, and then it isn't counted. The last minute wherever it starts: counted in the five-second slot now and the
+    twelve before (one a slot longer, as adapters/budget.py counts a source's minute), so a burst across the end of
+    one minute gets no more than the limit (BUG-134: a minute that started at its first request let twice through)."""
+    slot = int(time.time() // (60 // MINUTE_SLOTS))
+    counted: list[str] = []
     for key, limit in [(f"{kind}:fan:{fan}", per_fan), *([(f"{kind}:address:{address}", per_address)] if address else [])]:
-        used = await state["redis"].incr(key)
-        await state["redis"].expire(key, 60, nx=True)  # the minute's end, set once (a count without one would never end)
-        if used > limit:
+        now = f"{key}:{slot}"
+        counted.append(now)
+        used = await state["redis"].incr(now)
+        await state["redis"].expire(now, 70, nx=True)  # past the last minute it's counted in (a count without one would never end)
+        before = await state["redis"].mget([f"{key}:{n}" for n in range(slot - MINUTE_SLOTS, slot)])
+        if used + sum(int(n or 0) for n in before) > limit:
+            for refused in counted:
+                await state["redis"].decr(refused)
             return False
     return True
 
