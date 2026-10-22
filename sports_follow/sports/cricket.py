@@ -370,7 +370,9 @@ class Cricket(Sport):
 
     def answer(self, ask: str, status: str | None, state: dict[str, Any]) -> str | None:
         """The side the board marks the winner, else the one its summary says won: a tie a Super Over settles is its
-        winner's, as the result says ("Match tied (India won the Super Over)"). VOID for a tie nothing settled, no
+        winner's, as the result says ("Match tied (India won the Super Over)"). The side it names by its whole name
+        or abbreviation, else the one side whose name starts with the words it names: a note the source garbled
+        ("Royal Challengers won by 6Bengaluru wickets") is still Bengaluru's. VOID for a tie nothing settled, no
         result, or a match cancelled or washed out (the board's cancelled); None while its result is still to come."""
         if state.get("cancelled"):
             return VOID
@@ -382,7 +384,10 @@ class Cricket(Sport):
             return str(marked[0]["id"])
         summary = str(state.get("summary") or "")
         if won := _WON.search(summary):
-            named = [t for t in teams if team_key(won[1]) in {team_key(str(t.get(k) or "")) for k in ("name", "abbr")} - {""}]
+            said = team_key(won[1])
+            named = [t for t in teams if said in {team_key(str(t.get(k) or "")) for k in ("name", "abbr")} - {""}]
+            if not named and said:
+                named = [t for t in teams if team_key(str(t.get("name") or "")).startswith(f"{said} ")]
             return str(named[0]["id"]) if len(named) == 1 else None
         return VOID if _NO_WINNER.search(summary) else None
 

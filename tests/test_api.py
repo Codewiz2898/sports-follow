@@ -1804,13 +1804,66 @@ def test_a_fans_first_links_tags_are_kept_once_and_only_in_their_shape(api):
     def kept() -> list[dict]:
         return [{k: _param(s, k) for k in ("fan_id", "tag", "utm_source", "utm_medium", "utm_campaign", "landing")} for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source"]
 
-    assert api.call("POST", "/api/me/source", fan="fan", body={"utm_source": "whatsapp", "utm_campaign": "gukesh-launch", "s": "<b>", "path": "/gukesh"}).json() == {"ok": True}
+    assert api.call("POST", "/api/me/source", fan="fan", body={"utm_source": "whatsapp", "utm_campaign": "gukesh-launch", "s": "\x00", "path": "/gukesh"}).json() == {"ok": True}
     assert kept() == [{"fan_id": "fan", "tag": None, "utm_source": "whatsapp", "utm_medium": None, "utm_campaign": "gukesh-launch", "landing": "/gukesh"}]
     insert_ = next(s for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source")
     assert "ON CONFLICT (fan_id) DO NOTHING" in str(insert_.compile(dialect=postgresql.dialect()))  # the first link's, never a later one's
     for body in ({"path": "/gukesh"}, {"s": "x" * 61, "path": "/"}, {"s": "share", "path": "gukesh"}, {"s": "share", "path": "/" + "x" * 200}, {"s": "share"}):
         assert api.call("POST", "/api/me/source", fan="fan", body=body).json() == {"ok": True}
     assert len(kept()) == 1
+
+
+def _sources(api: Api) -> list[dict]:
+    """The rows /api/me/source wrote: who, and where from."""
+    return [{k: _param(s, k) for k in ("fan_id", "tag", "utm_source", "utm_medium", "utm_campaign", "landing")} for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source"]
+
+
+def test_where_fans_came_from_is_kept_for_fans_with_their_cookie_so_many_a_day_from_one_address(api, monkeypatch):
+    """BUG-149: a script with no cookie wrote a row each request (each one a new fan), inflating any campaign's launch
+    numbers without end. A visit is kept now only for a fan whose cookie came with it (the app's page makes one before
+    the app tells where it came from), and so many a day from one address."""
+    monkeypatch.setattr(server, "SOURCES_PER_ADDRESS", 3, raising=False)
+    body = {"utm_source": "h1probe", "path": "/gukesh"}
+    for _ in range(3):
+        assert api.call("POST", "/api/me/source", address=PUBLIC, body=body).json() == {"ok": True}
+    assert _sources(api) == []
+    for i in range(4):
+        api.call("POST", "/api/me/source", fan=f"fan-{i}", address=PUBLIC, body=body)
+    api.call("POST", "/api/me/source", fan="fan-9", address="81.2.69.143", body=body)  # another address isn't held up
+    assert [row["fan_id"] for row in _sources(api)] == ["fan-0", "fan-1", "fan-2", "fan-9"]
+
+
+def test_a_links_tags_are_kept_as_typed_spaces_and_all(api):
+    """BUG-194: a tag with a space or a "|" ("Gukesh v Sindarov", "wcc|day1") was dropped, and a visit tagged only so
+    wasn't kept at all. Any printable text is a tag now, its spaces trimmed and made single, up to 60 characters."""
+    api.call("POST", "/api/me/source", fan="fan-1", body={"utm_source": "instagram", "utm_campaign": "Gukesh  v Sindarov", "path": "/h13-wcc"})
+    api.call("POST", "/api/me/source", fan="fan-2", body={"utm_campaign": " wcc|day1 ", "path": "/"})
+    api.call("POST", "/api/me/source", fan="fan-3", body={"utm_campaign": "a\u202eb", "utm_medium": "x" * 61, "path": "/"})  # nothing in a tag's shape
+    assert _sources(api) == [{"fan_id": "fan-1", "tag": None, "utm_source": "instagram", "utm_medium": None, "utm_campaign": "Gukesh v Sindarov", "landing": "/h13-wcc"},
+                             {"fan_id": "fan-2", "tag": None, "utm_source": None, "utm_medium": None, "utm_campaign": "wcc|day1", "landing": "/"}]
+
+
+def test_league_invites_are_looked_up_so_many_times_an_address_and_opened_only_by_a_fan_with_their_cookie(api, monkeypatch):
+    """BUG-110: the invite page's limit was a fan's, and a request with no cookie is a new fan each time, so a script
+    could try code after code without end; and each of its requests counted as the invite opened. Now an address
+    looks up so many an hour, and a fan the request itself made up (no cookie) doesn't count as opening it."""
+    from sports_follow import predictions
+
+    opened: list[tuple[str, bool]] = []
+
+    def invite(db, code, fan, counted=True):
+        opened.append((code, counted))
+        if code != "38KWAS":
+            raise predictions.Refused(404, "No league has that invite: ask for a new link.")
+        return {"code": code, "name": "Derby", "members": 2, "by": "Asha", "member": False}
+
+    monkeypatch.setattr(predictions, "invite", invite)
+    monkeypatch.setattr(server, "INVITES_PER_ADDRESS", 5, raising=False)
+    tries = [api.call("GET", f"/api/leagues/ZZZZZ{i}/invite", address=PUBLIC).status_code for i in range(6)]
+    assert tries == [404] * 5 + [429]
+    assert api.call("GET", "/api/leagues/38KWAS/invite", address="81.2.69.143").status_code == 200  # another address isn't held up
+    assert api.call("GET", "/api/leagues/38KWAS/invite", fan="asha-phone", address="81.2.69.144").status_code == 200
+    assert opened[-2:] == [("38KWAS", False), ("38KWAS", True)]  # opened: by the fan who came with their cookie only
 
 
 def test_a_video_that_wont_play_inside_the_app_is_said_so_of_so_many_an_hour_and_odd_ones_are_refused_plainly(api, monkeypatch):

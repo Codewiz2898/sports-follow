@@ -362,6 +362,56 @@ def test_a_match_the_schedule_puts_back_keeps_its_question_till_its_new_date(db,
     assert shut.value.status == 409 and db.get(Question, moved.id).locks_at == kicked_off
 
 
+def test_a_match_postponed_before_its_start_waits_closed_to_picks_and_opens_at_its_new_date(db, redis):
+    """BUG-109: a match put back before it starts (ESPN and Sportmonks often keep its date) was closed by the sweep at
+    the old kick-off, though it never started, and stayed closed when its new date came: nobody could call it then.
+    Now, while it waits, it takes no picks and isn't closed (so friends' picks stay hidden, as they were), and its new
+    date opens it again, closing at the new kick-off."""
+    start = soon()
+    sportmonks = SimpleNamespace(system="sportmonks_football", live_cadence=10)
+
+    def schedule(at: datetime, status: str) -> None:
+        structured.upsert_game(db, sportmonks, "Football", Fixture("557", "Trabzonspor vs Galatasaray", "Super Lig", at, None, status, [str(HOME), str(AWAY)], {"fixture": "557"}))
+        db.commit()
+
+    schedule(start, "scheduled")
+    event_id = db.scalars(select(Event.id).where(Event.key == "sportmonks_football:557")).one()
+    poll(event_id, sm.parse_match({**football_match("NS", 0, 0), "id": 557}), "sportmonks_football")
+    q = db.scalars(select(Question)).one()
+    gang = predictions.create(db, "acct-asha", "Derby", "Asha")
+    predictions.join(db, "acct-ravi", gang.code, "Ravi")
+    predictions.pick(db, "acct-asha", q.id, str(HOME))
+    db.commit()
+    schedule(start, "postponed")  # called off for the day, its date kept
+    with pytest.raises(predictions.Refused) as waiting:
+        predictions.pick(db, "acct-ravi", q.id, str(AWAY))
+    assert (waiting.value.status, waiting.value.message) == (409, predictions.POSTPONED)
+    db.rollback()
+    # The old kick-off passes, the tick's sweep and a poll of it after: not closed, for it never started.
+    after = start + timedelta(minutes=1)
+    predictions.sweep(db, after)
+    predictions.settle(db, [db.get_one(Question, q.id)], sports.of("Football"), "postponed", sm.parse_match(football_match("POSTPONED", 0, 0)).state, after)
+    db.commit()
+    db.expire_all()
+    assert db.get_one(Question, q.id).status == "open"
+    # Shown as not open to picks, with Asha's pick still hidden from her friends and the split unshown.
+    [shown] = predictions.league(db, "acct-ravi", gang.code, now=start + timedelta(hours=1))["questions"]
+    assert shown["status"] == "closed" and shown["friends"] == [{"name": "Asha", "you": False}]
+    assert all("share" not in o and "picks" not in o for o in shown["options"])
+    # Its new date: open again, closing then.
+    later = start + timedelta(days=7)
+    schedule(later, "scheduled")
+    db.expire_all()
+    q = db.get_one(Question, q.id)
+    assert (q.status, q.locks_at, q.starts_at) == ("open", later, later)
+    predictions.pick(db, "acct-ravi", q.id, str(AWAY), now=start + timedelta(days=1))
+    db.commit()
+    predictions.sweep(db, later + timedelta(minutes=1))
+    db.commit()
+    db.expire_all()
+    assert db.get_one(Question, q.id).status == "closed"
+
+
 def test_a_later_map_takes_no_pick_once_the_series_is_under_way_and_its_board_is_stale(db, redis):
     began = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=5)  # the series' start time has come
     db.add(Event(id=5, key=SERIES, sport="Valorant", title="Sentinels vs NRG", start_utc=began, status="armed", live_binding={"adapter": "pandascore_esports", "locator": {"match": "777"}}))
@@ -427,7 +477,7 @@ def test_the_match_page_lists_its_questions_and_the_pick_route_refuses_what_it_s
     assert missing.value.status_code == 404
     monkeypatch.setattr(server, "PICKS_PER_ADDRESS", 1)  # one address's picks an hour
     with pytest.raises(server.HTTPException) as flooded:
-        asyncio.run(server.make_pick(request(client="8.8.4.4"), q["id"], {"option": "draw"}, "other")) and asyncio.run(server.make_pick(request(client="8.8.4.4"), q["id"], {"option": "draw"}, "third"))
+        asyncio.run(server.make_pick(request(client="8.8.4.4"), q["id"], {"option": "draw"}, "other", None)) and asyncio.run(server.make_pick(request(client="8.8.4.4"), q["id"], {"option": "draw"}, "third", None))
     assert flooded.value.status_code == 429
     # Its link previews it, on its own game's page only.
     preview = asyncio.run(server._page_preview(f"match/lichess_chess/{address}", request(f"q={q['id']}&s=share")))  # pyright: ignore[reportPrivateUsage]
@@ -436,6 +486,34 @@ def test_the_match_page_lists_its_questions_and_the_pick_route_refuses_what_it_s
 
 
 
+
+
+def test_fans_signed_in_behind_one_network_address_dont_use_up_each_others_picks(db, redis, monkeypatch):
+    """BUG-114: a phone network can put many fans behind one address (carrier NAT), and an address's picks an hour
+    (PICKS_PER_ADDRESS) were everyone's behind it, signed in or not: on a big game they could run out. A signed-in
+    fan's picks count against their account's own hour now (accounts are made only so fast); fans without one still
+    share their address's."""
+    monkeypatch.setitem(server.state, "redis", Counts())
+    monkeypatch.setattr(server, "PICKS_PER_ADDRESS", 1)
+    monkeypatch.setattr(server, "PICKS_PER_ACCOUNT", 2, raising=False)
+    chess_board(db, soon())
+    poll(1, board(status="*"))
+    q = db.scalars(select(Question)).one()
+
+    def pick(fan: str, account: int | None = None) -> None:
+        signed = accounts.Signed(account_id=account, fan_id=fan, session_id=account) if account else None
+        asyncio.run(server.make_pick(request(client="49.36.0.1"), q.id, {"option": CARLSEN}, fan, signed))
+
+    for n, fan in enumerate(("acct-asha", "acct-ravi", "acct-meera"), start=1):
+        pick(fan, n)
+    pick("phone-1")  # the address's one an hour, for fans without an account
+    with pytest.raises(server.HTTPException) as shared:
+        pick("phone-2")
+    assert shared.value.status_code == 429
+    pick("acct-asha", 1)  # her second: an account's own hour
+    with pytest.raises(server.HTTPException) as hers:
+        pick("acct-asha", 1)
+    assert hers.value.status_code == 429
 
 
 def test_a_series_asked_days_ahead_keeps_its_later_maps_till_it_plays(db, redis):
@@ -688,8 +766,8 @@ def test_a_game_picked_from_its_match_page_is_read_again_till_it_starts(db, redi
     codes["1"] = "POSTPONED"  # postponed, its date kept for now: the sweep waits a month, not three days
     assert run(day) == [("pitch", "1")]
     assert (db.get_one(Event, event_id).status, db.get_one(Event, event_id).start_utc) == ("postponed", later)
-    predictions.sweep(db, later + predictions.STALE + timedelta(minutes=1))  # three days past its date: closed, not voided
-    assert db.scalar(select(Question.status).where(Question.id == q.id)) == "closed"
+    predictions.sweep(db, later + predictions.STALE + timedelta(minutes=1))  # three days past its date: not voided, nor closed (BUG-109)
+    assert db.scalar(select(Question.status).where(Question.id == q.id)) == "open"
     db.rollback()  # (back to before that sweep: the game's to come still)
 
     codes["1"], games["1"] = "NS", (sooner := start - timedelta(hours=1))  # on again, and sooner
@@ -770,7 +848,8 @@ def test_friends_play_in_a_league_by_its_invite_and_its_table_counts_from_its_ma
     made = asyncio.run(server.make_league({"name": " Chess  gang ", "member": "Arjun"}, "acct-arjun", signed))["league"]
     code = made["code"]
     assert made["name"] == "Chess gang" and re.fullmatch(f"[{predictions.CODE}]{{6}}", code) and made["members"] == 1
-    assert asyncio.run(server.league_invite(code.lower(), "acct-meera"))["invite"] == {"code": code, "name": "Chess gang", "members": 1, "by": "Arjun", "member": False}
+    meera = accounts.Signed(account_id=2, fan_id="acct-meera", session_id=2)
+    assert asyncio.run(server.league_invite(request(), code.lower(), "acct-meera", meera))["invite"] == {"code": code, "name": "Chess gang", "members": 1, "by": "Arjun", "member": False}
     with pytest.raises(server.HTTPException) as unsigned:
         asyncio.run(server.join_league(code, {"member": "Meera"}, "anon", None))
     assert unsigned.value.status_code == 401
@@ -815,6 +894,45 @@ def test_friends_play_in_a_league_by_its_invite_and_its_table_counts_from_its_ma
     for fan in ("acct-arjun", "acct-meera", "acct-ravi"):
         server.leave_league(code, fan, db)
     assert db.scalars(select(League)).all() == []
+
+
+def test_names_keep_only_what_can_be_seen_and_one_with_nothing_to_see_is_refused(db, redis):
+    """BUG-112: a NUL in a league's or a member's name was a 500 (Postgres keeps none), and a name of zero-width spaces
+    alone was taken. What can't be seen is taken out now (not the joiners Indic scripts and emoji are drawn with), and
+    a name with nothing left to see is refused, as an empty one is."""
+    gang = predictions.create(db, "acct-asha", "Der\x00by\u202e", "\u200bAsha")
+    predictions.join(db, "acct-ravi", gang.code, "Ra\x00vi\ud800")
+    predictions.join(db, "acct-sita", gang.code, "Sita 👩\u200d💻")
+    db.commit()
+    db.expire_all()
+    assert db.get_one(League, gang.id).name == "Derby"
+    assert dict(db.execute(select(LeagueMember.fan_id, LeagueMember.name)).all()) == {"acct-asha": "Asha", "acct-ravi": "Ravi", "acct-sita": "Sita 👩\u200d💻"}
+    for blank in ("\u200b\u200b", "\x00", "\u200d", " \u2060\t"):
+        with pytest.raises(predictions.Refused) as nothing:
+            predictions.join(db, "acct-dev", gang.code, blank)
+        assert (nothing.value.status, nothing.value.message) == (400, "Give your name.")
+        db.rollback()
+
+
+def test_two_members_of_a_league_cant_go_by_one_name(db, redis):
+    """BUG-111: Ravi could join as "Asha", the league's maker, and the table showed two Ashas (the web's rows, keyed by
+    name, mixed up too). A name is one member's in a league now, whatever its case, spaces or what can't be seen in it;
+    a member may keep theirs, or change it to one nobody else has."""
+    gang = predictions.create(db, "acct-asha", "Derby", "Asha")
+    db.commit()
+    for taken in ("Asha", " asha ", "ASHA\u200b"):
+        with pytest.raises(predictions.Refused) as clash:
+            predictions.join(db, "acct-ravi", gang.code, taken)
+        assert clash.value.status == 409
+        db.rollback()
+    predictions.join(db, "acct-ravi", gang.code, "Ravi")
+    predictions.join(db, "acct-ravi", gang.code, "ravi k")  # his own, changed
+    predictions.join(db, "acct-ravi", gang.code, "Ravi K")
+    db.commit()
+    with pytest.raises(predictions.Refused):
+        predictions.join(db, "acct-asha", gang.code, "RAVI K")  # the maker renaming to his
+    db.rollback()
+    assert sorted(db.scalars(select(LeagueMember.name))) == ["Asha", "Ravi K"]
 
 
 def test_signing_in_brings_every_pick_and_those_on_games_under_way_count_in_no_league(db, redis):
@@ -870,7 +988,8 @@ def test_signing_in_brings_every_pick_and_those_on_games_under_way_count_in_no_l
 
 def test_the_admin_panel_counts_leagues_invites_and_fans_who_came_back(db, redis):
     now = datetime.now(timezone.utc)
-    settled_question(db, "g:1", now - timedelta(days=2), {"a": "w", "b": "w"}, "w")
+    first = settled_question(db, "g:1", now - timedelta(days=2), {"a": "w", "b": "w"}, "w")
+    db.execute(text("UPDATE prediction_pick SET created_at = created_at - interval '3 days' WHERE question_id = :q"), {"q": first.id})  # picked then
     settled_question(db, "g:2", now, {"a": "b"}, "w")
     three = predictions.create(db, "acct-1", "Three", "One")
     for fan in ("acct-2", "acct-3"):
@@ -880,3 +999,33 @@ def test_the_admin_panel_counts_leagues_invites_and_fans_who_came_back(db, redis
     predictions.invite(db, three.code, "acct-9")
     db.commit()
     assert predictions.numbers(db) == {"leagues": 2, "leagues_3": 1, "invites_shared": 1, "invites_opened": 1, "pickers": 2, "picks": 3, "game_day_returns": 1}
+
+
+def test_launch_numbers_count_a_share_once_a_day_and_a_return_by_the_days_fans_picked_on(db, redis):
+    """BUG-193: "invites shared" counted every Share tap (one closed without sharing, and each again), and "game-day
+    returns" counted the days of the games picked, not of the picking: a fan who called tonight's and tomorrow's game
+    in one visit, or both maps of a series either side of midnight, came back twice. A member's shares of a league
+    count once a day now, and a fan came back if they picked on two days or more (the home audience's, IST)."""
+    gang = predictions.create(db, "acct-asha", "Derby", "Asha")
+    db.commit()
+    for _ in range(5):
+        predictions.was_shared(db, "acct-asha", gang.code)
+    db.commit()
+    now = datetime.now(timezone.utc).replace(hour=8, minute=0, second=0, microsecond=0)  # 1:30 pm IST
+
+    def question(game: str, ask: str, locks: datetime | None, closed: datetime | None = None) -> int:
+        row = Question(game=game, ask=ask, keys=[], sport="chess", match=f"x/{game}", title="Who wins?", game_title=game, options=[{"key": "a", "label": "A"}],
+                       status="open", locks_at=locks, closed_at=closed, starts_at=locks)
+        db.add(row)
+        db.flush()
+        return row.id
+
+    tonight, tomorrow = question("g:1", "result", now + timedelta(hours=10)), question("g:2", "result", now + timedelta(days=1))
+    late = (now + timedelta(days=3)).replace(hour=23, minute=30)
+    map1, map2 = question("bo3", "map1", late), question("bo3", "map2", None, closed=late + timedelta(hours=1))
+    db.add_all([Pick(question_id=tonight, fan_id="once", option="a", created_at=now), Pick(question_id=tomorrow, fan_id="once", option="a", created_at=now),
+                Pick(question_id=map1, fan_id="series", option="a", created_at=now), Pick(question_id=map2, fan_id="series", option="a", created_at=now),
+                Pick(question_id=tonight, fan_id="back", option="a", created_at=now - timedelta(days=2)), Pick(question_id=tomorrow, fan_id="back", option="a", created_at=now)])
+    db.commit()
+    found = predictions.numbers(db)
+    assert (found["invites_shared"], found["game_day_returns"]) == (1, 1)  # one share; only "back" came back

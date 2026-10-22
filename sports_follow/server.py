@@ -696,8 +696,11 @@ def set_match_alerts(event_id: RowId, body: dict = Body(...), fan: str = Depends
 LeagueCode = Annotated[str, InPath(min_length=4, max_length=16, pattern=r"^[A-Za-z0-9]+$")]
 LEAGUES_MADE_PER_HOUR = 5  # leagues one fan makes in an hour
 INVITES_PER_HOUR = 60  # invite pages one fan opens, and leagues they join, in an hour: a code can't be guessed by trying them all
-PICKS_PER_ADDRESS = 300  # picks from one client address in an hour: new fans from one place can't stuff a split
+INVITES_PER_ADDRESS = 300  # invite pages opened from one client address in an hour: a request with no cookie is a new fan each time
+INVITES_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
+PICKS_PER_ADDRESS = 300  # picks from one client address in an hour, by fans without an account: new fans from one place can't stuff a split
 PICKS_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
+PICKS_PER_ACCOUNT = 300  # a signed-in fan's in an hour, wherever from: fans behind one carrier address don't use up each other's
 # Fans without an account whose picks on one question count (Pick.counted), from one client address: any device gets
 # a fan cookie (spa), so a split is stuffed only from as many addresses as the picks it would add. A home or a phone
 # network sharing one address has this many fans' calls in a game's split; the rest are theirs, and scored.
@@ -715,7 +718,8 @@ async def make_pick(request: Request, question_id: RowId, body: dict = Body(...)
                     signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
     """Call a game (or a map): this fan's answer to one of its questions, or a new one in place of theirs, while
     it's open. No account needed. Answers with the question as the app shows it, how fans split now included.
-    A question closed is a 409, an answer it doesn't offer a 400; PICKS_PER_ADDRESS an hour from one address.
+    A question closed is a 409, an answer it doesn't offer a 400; PICKS_PER_ADDRESS an hour from one address, or for
+    a signed-in fan PICKS_PER_ACCOUNT an hour of their own (a phone network may put many fans behind one address).
     It counts in the split and in what right picks score from an account, or a fan whose cookie came with it, up to
     COUNTED_PER_ADDRESS of those on a question from one address (_counted_here): a fan this request made up (no
     cookie), or past that, has their pick, but it moves nobody else's numbers (predictions.pick)."""
@@ -723,8 +727,12 @@ async def make_pick(request: Request, question_id: RowId, body: dict = Body(...)
     if not isinstance(option, str) or not 0 < len(option) <= 64:
         raise HTTPException(400, "option is one of the question's answers")
     address = client_address(request)
-    await _take(f"picks:{address or 'unknown'}:{int(time.time() // 3600)}", PICKS_PER_ADDRESS if address else PICKS_UNKNOWN_ADDRESS, 7200,
-                "That's a lot of picks from your network. Try again in a while.")
+    hour = int(time.time() // 3600)
+    if signed is not None:
+        await _take(f"picks:fan:{fan}:{hour}", PICKS_PER_ACCOUNT, 7200, "That's a lot of picks for one hour. Try again in a while.")
+    else:
+        await _take(f"picks:{address or 'unknown'}:{hour}", PICKS_PER_ADDRESS if address else PICKS_UNKNOWN_ADDRESS, 7200,
+                    "That's a lot of picks from your network. Try again in a while.")
 
     counted = signed is not None or (_cookie_fan(request) == fan and await _counted_here(question_id, address, fan))
 
@@ -808,14 +816,20 @@ def league_page(code: LeagueCode, fan: str = Depends(fan_id), db: Session = Depe
 
 
 @app.get("/api/leagues/{code}/invite")
-async def league_invite(code: LeagueCode, fan: str = Depends(fan_id)) -> dict[str, Any]:
+async def league_invite(request: Request, code: LeagueCode, fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
     """What an invite link shows anyone: the league's name, how many are in it, who made it, and whether this fan's
-    in it already. INVITES_PER_HOUR a fan an hour."""
-    await _take(f"leagues:invites:{fan}:{int(time.time() // 3600)}", INVITES_PER_HOUR, 7200, "That's a lot of invites for one hour. Try again later.")
+    in it already. INVITES_PER_HOUR a fan an hour, and INVITES_PER_ADDRESS from one address (a request with no cookie
+    is a new fan each time). Counted as opened only for an account, or a fan whose cookie came with it."""
+    hour = int(time.time() // 3600)
+    address = client_address(request)
+    await _take(f"leagues:invites:{fan}:{hour}", INVITES_PER_HOUR, 7200, "That's a lot of invites for one hour. Try again later.")
+    await _take(f"leagues:invites-from:{address or 'unknown'}:{hour}", INVITES_PER_ADDRESS if address else INVITES_UNKNOWN_ADDRESS, 7200,
+                "That's a lot of invites from your network. Try again later.")
+    counted = signed is not None or _cookie_fan(request) == fan
 
     def look(db: Session) -> dict[str, Any]:
         try:
-            return predictions.invite(db, code, fan)
+            return predictions.invite(db, code, fan, counted)
         except predictions.Refused as refused:
             raise _refused(db, refused)
 
@@ -1061,21 +1075,43 @@ async def campaign_picture(slug: str) -> Response:
 
 # ---------------------------------------------------------------- where fans come from
 
-TAG = re.compile(r"[A-Za-z0-9._~-]{1,60}")  # s=share, utm_source=whatsapp: a link's tags, as a post writes them
+TAG_MOST = 60  # a link's tag, in characters (FanSource's columns)
+SOURCES_PER_ADDRESS = 100  # visits kept a UTC day from one client address: a script can't fill a campaign's numbers
+SOURCES_UNKNOWN_ADDRESS = 1000  # a day, from every client without a public address together
+
+
+def _tag(value: Any) -> str | None:
+    """A link's tag as a post writes it (s=share, utm_source=whatsapp, utm_campaign=Gukesh v Sindarov): any printable
+    text, its spaces trimmed and made single, up to TAG_MOST characters; None for anything else."""
+    tag = " ".join(value.split()) if isinstance(value, str) else ""
+    return tag if 0 < len(tag) <= TAG_MOST and tag.isprintable() else None
 
 
 @app.post("/api/me/source")
-def visit_source(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
+async def visit_source(request: Request, body: dict = Body(...), fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of)) -> dict[str, bool]:
     """Where this fan came from: the tags on the first link they opened (s=, utm_source, utm_medium,
     utm_campaign) and its page, kept once (FanSource); a later link's are not. A tag in any other shape is
-    left out, and a visit with none isn't kept."""
-    tags = {key: value for key in ("s", "utm_source", "utm_medium", "utm_campaign") if isinstance(value := body.get(key), str) and TAG.fullmatch(value)}
+    left out (_tag), and a visit with none isn't kept. Nor is one from a fan the request itself made up (no
+    cookie: the app's page, and the Android app's first request, make the device's fan before it tells this),
+    nor past SOURCES_PER_ADDRESS a day from one address: a script can't fill the launch numbers."""
+    tags = {key: tag for key in ("s", "utm_source", "utm_medium", "utm_campaign") if (tag := _tag(body.get(key)))}
     landing = body.get("path")
     if not tags or not isinstance(landing, str) or not landing.startswith("/") or len(landing) > 200 or not landing.isprintable():
         return {"ok": True}
+    if signed is None and _cookie_fan(request) != fan:
+        return {"ok": True}
+    address = client_address(request)
+    key = f"sources:{address or 'unknown'}:{int(time.time() // DAY)}"
+    used = await state["redis"].incr(key)
+    await state["redis"].expire(key, 2 * DAY)
+    if used > (SOURCES_PER_ADDRESS if address else SOURCES_UNKNOWN_ADDRESS):
+        return {"ok": True}
     row = {"fan_id": fan, "tag": tags.get("s"), "utm_source": tags.get("utm_source"), "utm_medium": tags.get("utm_medium"), "utm_campaign": tags.get("utm_campaign"), "landing": landing}
-    db.execute(insert(FanSource).values(**row).on_conflict_do_nothing(index_elements=["fan_id"]))
-    db.commit()
+
+    def keep(db: Session) -> None:
+        db.execute(insert(FanSource).values(**row).on_conflict_do_nothing(index_elements=["fan_id"]))
+
+    await in_db(keep)
     return {"ok": True}
 
 
