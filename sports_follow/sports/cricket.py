@@ -229,6 +229,10 @@ class Cricket(Sport):
         match is over ("Result")."""
         return not self.verdict(state, score, clock)
 
+    def paused(self, state: dict[str, Any], score: str, clock: str) -> bool:
+        """Stumps: the day's play is over, and the match goes on tomorrow ("Stump Day 2", "Day 3 · Stumps")."""
+        return bool(re.search(r"\bstumps?\b", clock, re.I))
+
     def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
         """A scorecard: each side, in the order they batted, with who batted for it (runs, balls, fours, sixes,
         strike rate, how they were out) and who bowled at it, in the order the source lists them. From each

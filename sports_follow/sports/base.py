@@ -452,6 +452,11 @@ class Sport:
         final is held a poll or two (structured.apply_poll), so fans hear who won. False where the board says it."""
         return False
 
+    def paused(self, state: dict[str, Any], score: str, clock: str) -> bool:
+        """Whether a game that's on has stopped for the day, to go on tomorrow (a Test at stumps): its Android live card
+        comes down till play resumes (livecards.py), rather than go again all night. False for a break in play."""
+        return False
+
     def start(self, who: str, now: Seen) -> Found:
         return Found("start", "key", f"{who}'s game has started", joined(now.score, now.clock))
 
