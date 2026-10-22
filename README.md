@@ -1227,10 +1227,11 @@ once signed in.
 
 What the pages decide is shared with the web app, not copied: the API's calls and types
 (`web/src/endpoints.ts`, `types.ts`), what Today shows and how cards word a game (`today.ts`,
-`lines.ts`), search's sections (`search.ts`), alert levels (`alerts.ts`), dates and names (`format.ts`,
-`follow.ts`), what a Share button shares (`share.ts`), what a campaign page offers and when its games are
-(`campaign.ts`), what a match page's head shows and when it looks again (`match.ts`), what a player's Feed shows
-and how its cards say when (`feed.ts`), and each sport's facts
+`lines.ts`), Today's game chips and what each leaves on the page (`filter.ts`), search's sections
+(`search.ts`), alert levels (`alerts.ts`), dates and names (`format.ts`, `follow.ts`), what a Share button
+shares (`share.ts`), what a campaign page offers and when its games are (`campaign.ts`), what a match page's
+head shows and when it looks again (`match.ts`), what a player's Feed shows and how its cards say when
+(`feed.ts`), and each sport's facts
 (`sports/facts/`: the scoreboard kinds it draws, its line art, how it words a player's line, what its match
 page's part says). Only the drawing is each app's own: a sport's live board is
 `web/src/sports/<sport>.tsx` on the web and `mobile/src/sports/<sport>.tsx` in the app. Like the web app,
