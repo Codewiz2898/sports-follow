@@ -16,7 +16,7 @@ from sqlalchemy.orm import sessionmaker
 
 from sports_follow import live, registry, sports
 from sports_follow.adapters import ADAPTERS, LiveGame, PlayerRef, Snapshot
-from sports_follow.models import AthleteOverride, Event, Follow, Player, PlayerCard, PlayerIdentity
+from sports_follow.models import Account, AthleteOverride, Event, Follow, Player, PlayerCard, PlayerIdentity
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -28,7 +28,7 @@ NOW = datetime(2026, 10, 15, 14, tzinfo=timezone.utc)
 def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE athlete, athlete_override, player, follow, moment, starter, event RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE athlete, athlete_override, player, follow, moment, starter, event, account RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -85,6 +85,7 @@ def test_a_games_players_come_on_the_app_first_then_best_known_then_the_sources_
     # On the app and followed by two fans; two stars the registry knows by the source's id, and one by name only;
     # two it doesn't know.
     db.add(Player(id=5, slug="kane", name="Harry Kane", sport="Football"))
+    db.add_all([Account(email=f"{f}@example.com", fan_id=f) for f in ("fan", "other")])  # signed-in fans' follows count (BUG-293)
     db.flush()
     db.add_all([PlayerCard(player_id=5, status="ready", card={}), PlayerIdentity(player_id=5, system="pitch", external_id="9", confidence=1.0),
                 Follow(fan_id="fan", player_id=5, alert_rules={}), Follow(fan_id="other", player_id=5, alert_rules={})])
@@ -220,6 +221,7 @@ def test_fans_looking_within_a_few_seconds_share_one_ranking_and_only_their_foll
     # BUG-268: every look at Live now read and ranked each source's games again and looked up who's on Sports Follow
     # (their whole cards, their follower counts): the same league-wide work for every fan, every minute each.
     db.add(Player(id=5, slug="kane", name="Harry Kane", sport="Football"))
+    db.add_all([Account(email=f"{f}@example.com", fan_id=f) for f in ("fan", "other", "third")])  # signed-in fans' follows count (BUG-293)
     db.flush()
     db.add_all([PlayerCard(player_id=5, status="ready", card={}), PlayerIdentity(player_id=5, system="pitch", external_id="9", confidence=1.0),
                 Follow(fan_id="fan", player_id=5, alert_rules={}), Follow(fan_id="other", player_id=5, alert_rules={})])

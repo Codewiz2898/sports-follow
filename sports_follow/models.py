@@ -18,16 +18,18 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
+    Select,
     String,
     Text,
     UniqueConstraint,
     and_,
     func,
+    select,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.elements import ColumnElement
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, InstrumentedAttribute, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -737,6 +739,16 @@ class Account(Base):
     last_sign_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # When an admin blocked it (admin.py): it can't sign in, and its sessions ended then.
     blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+def followers(key: InstrumentedAttribute[int], fan: InstrumentedAttribute[str]) -> Select[int, int, int]:
+    """The followers of each player anyone follows (key and fan: Follow.player_id, Follow.fan_id) or team (TeamFollow's):
+    its id, "accounts" and "follows". Accounts are the signed-in fans an admin hasn't blocked, as starters count them:
+    what's shown as "N following", and what ranks (search, For you's most followed, the Feed's sweeps). Follows are
+    every one, an anonymous fan's too, which only break a tie: a new cookie is free, so a script's mustn't steer what
+    every fan is shown (BUG-293)."""
+    return (select(key.label("id"), func.count(Account.id).label("accounts"), func.count().label("follows"))
+            .outerjoin(Account, and_(Account.fan_id == fan, Account.blocked_at.is_(None))).group_by(key))
 
 
 class AccountSession(Base):

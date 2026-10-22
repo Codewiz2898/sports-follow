@@ -128,7 +128,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`follow_player(background_only=True)`), and nothing else it says is kept: no news items and no news
   alerts, whose news is the publishers' (`news.py`). `python -m sports_follow.wiki Q213854 cricket` prints one player's profile.
 - **Search answers from the registry.** `GET /api/search` (`sports_follow/search.py`) reads Postgres only:
-  players on Sports Follow, then registry athletes by popularity, with a trigram index for typos ("did you
+  players on Sports Follow (those more signed-in fans follow first, and "N following" counts them: a cookie's
+  follow only breaks a tie, so a script's can't steer it; teams the same), then registry athletes by popularity, with a trigram index for typos ("did you
   mean"). ESPN's search and Lichess's FIDE search are asked only when the registry has fewer than three
   matches. Two athletes with the typed name get a picker with birth years.
 - **Following binds the exact athlete.** A registry athlete is looked up in their live source by the id
@@ -444,7 +445,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **For you and Following, edge to edge or full screen** (BHA-349, `web/src/components/FeedLayouts.tsx`): the Feed
   tab opens on For you (`?tab=for_you`), which mixes in videos of players the fan doesn't follow, 3 of every 5 items
   the fan's own and 2 others' (`feed.others`: of the players with something served, the fan's sports first, then
-  anyone with a big moment in the last day, then the most followed on the app; 50 at most, the pool's among them,
+  anyone with a big moment in the last day, then the most followed on the app (by signed-in fans, then by anyone); 50 at most, the pool's among them,
   below), each entry saying `following`, so its card offers Follow, which works in place. Others' videos of the
   last two months (`feed.OTHERS_WINDOW`, BHA-382) are one list, best first by their score faded for age whatever
   their day, so a strong official video of three weeks ago comes before a weak one of today's; older ones follow.
@@ -778,7 +779,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   **gap search** for each followed player with nothing the Feed would serve published in the last 7 days (the
   coverage gauge's test): their name and their sport's words (`Sport.video_words`: "Shreyas Iyer cricket", "TenZ
   Valorant"), videos of the last 14 days, most viewed first, embeddable and syndicated, as a viewer in India finds
-  them. The most followed go first, up to `SPORTS_FOLLOW_FEED_GAP_SEARCHES` in any 24 hours (20); a
+  them. The most followed (by signed-in fans, then by anyone) go first, up to `SPORTS_FOLLOW_FEED_GAP_SEARCHES` in any 24 hours (20); a
   player is searched once a day at most, and after a search that kept nothing, not again for 3 days. Then the
   **wide sweep** (BHA-340): every followed player, gaps or not, for videos of the last six months (183 days), most
   viewed first, which the score weighs for their age and the Feed fades as it serves them; each player at most once

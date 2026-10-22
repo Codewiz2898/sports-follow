@@ -282,7 +282,7 @@ def test_following_a_team_reads_its_games_and_has_them_polled(db, redis, source,
     assert [(g["title"], g["versus"], g["match"]) for g in shown["upcoming"]] == [("Arsenal vs Chelsea", "Chelsea", "pitch/100"), ("Tottenham Hotspur vs Arsenal", "Tottenham Hotspur", "pitch/101")]
     assert [(r["result"], r["versus"]) for r in shown["recent"]] == [("Drew 1–1", "Chelsea"), ("Won 2–0", "Tottenham Hotspur")] and shown["form"] == ["D", "W"]
     assert [(p["name"], p["system"], p["athlete_id"]) for p in shown["squad"]] == [("Bukayo Saka", "pitch", "7")]
-    assert (shown["following"], shown["alerts"], shown["followers"], shown["can_follow"], shown["source"]) == (True, "key", 1, True, "Pitch")
+    assert (shown["following"], shown["alerts"], shown["followers"], shown["can_follow"], shown["source"]) == (True, "key", 0, True, "Pitch")  # signed-in followers: gooner's a cookie
     events = {e.key: e for e in db.scalars(select(Event))}
     assert set(events) == {"pitch:50", "pitch:51", "pitch:100", "pitch:101"} and events["pitch:100"].participants == [ARS, CHE] and events["pitch:100"].sport == "Football"
     assert db.scalar(select(func.count()).select_from(EventTeam).where(EventTeam.team_id == arsenal.id)) == 4
@@ -917,6 +917,27 @@ def test_search_lists_every_team_with_the_name_typed_and_a_sport_typed_with_it_n
     assert [(t["name"], t["sport"]) for t in teams.find(db, "india cricket")] == [("India", "cricket")]
     assert [(t["name"], t["sport"]) for t in teams.find(db, "cricket india")] == [("India", "cricket")]
     assert teams.find(db, "india cricket", sport="football") == [] and teams.find(db, "cricket") == []
+
+
+@needs_db
+def test_team_search_ranks_teams_by_their_signed_in_fans_and_anyones_follows_only_break_a_tie(db, redis, source):
+    # Team search put teams in order of every follow, a cookie's too, and said "N following" of them, as the team's
+    # page did: a script's cookies steered both (BUG-293). Signed-in fans an admin hasn't blocked count, as starters
+    # count them; anyone's follows break a tie the source's own tier leaves.
+    def club(name: str, short: str, external: str, tier: int = 1) -> Team:
+        made = Team(name=name, short=short, sport="football", system="pitch", external_id=external, tier=tier, search_text=teams.search_text(name, short))
+        db.add(made)
+        return made
+
+    city, united, rovers, wanderers = club("Manchester City", "MCI", "61"), club("Manchester United", "MUN", "62"), club("Manchester Rovers", "MRO", "63"), club("Manchester Wanderers", "MWA", "64", tier=0)
+    db.add_all([Account(email="a@example.com", fan_id="acct-a"), Account(email="b@example.com", fan_id="acct-b", blocked_at=NOW)])
+    db.flush()
+    db.add_all([TeamFollow(fan_id="acct-a", team_id=city.id, alert_rules={}), TeamFollow(fan_id="acct-b", team_id=united.id, alert_rules={}),
+                *[TeamFollow(fan_id=f"cookie-{n}", team_id=united.id, alert_rules={}) for n in range(5)],  # a blocked account and a script's cookies
+                TeamFollow(fan_id="cookie-0", team_id=rovers.id, alert_rules={}), *[TeamFollow(fan_id=f"cookie-{n}", team_id=wanderers.id, alert_rules={}) for n in range(9)]])
+    db.commit()
+    assert [(t["name"], t["followers"]) for t in teams.find(db, "manchester")] == [("Manchester City", 1), ("Manchester United", 0), ("Manchester Rovers", 0), ("Manchester Wanderers", 0)]
+    assert [page["followers"] for page in (teams.page(db, city.id, None), teams.page(db, united.id, None)) if page] == [1, 0]
 
 
 @needs_db

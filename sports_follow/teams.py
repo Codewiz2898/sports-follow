@@ -38,7 +38,7 @@ from sqlalchemy import ColumnElement, Select, Text, and_, delete, func, or_, sel
 from sqlalchemy.dialects.postgresql import distinct_on, insert
 from sqlalchemy.orm import Session, aliased
 
-from . import bus, logs, matches, moments, naming, registry, search, sports, structured
+from . import bus, logs, matches, models, moments, naming, registry, search, sports, structured
 from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, Fixture, PlayerRef, SourceTeam, budget, serving, source_name
 from .db import session
 from .models import Event, EventState, EventTeam, Moment, NotificationMute, Team, TeamFollow, TeamOverride
@@ -228,8 +228,9 @@ def restore(db: Session, system: str, team_id: str) -> bool:
 
 def find(db: Session, query: str, sport: str | None = None, fan: str | None = None, limit: int = LIMIT) -> list[dict[str, Any]]:
     """Teams whose name or code has a word starting with every typed word (search as you type, beside players):
-    a whole name typed first (every team with it, up to NAMESAKES), then the fan's own, then the most followed, the
-    biggest, the shortest name, `limit` in all unless more have the whole name. Only teams of sports running whose
+    a whole name typed first (every team with it, up to NAMESAKES), then the fan's own, then the most followed by
+    signed-in fans, the biggest, the most followed by anyone (models.followers), the shortest name, `limit` in all
+    unless more have the whole name. Only teams of sports running whose
     source runs. `sport` narrows to one sport, or a group's (esports); so does a sport's name typed with a team's
     ("india cricket", "liquid valorant"), when the words together find no team."""
     typed = registry.words(query)
@@ -251,12 +252,13 @@ def _find(db: Session, typed: list[str], sport: str | None, fan: str | None, lim
         keys = [k for k in keys if k in sports.within(sport)]
     if not keys:
         return []
-    fans = select(TeamFollow.team_id, func.count().label("n")).group_by(TeamFollow.team_id).subquery()
+    fans = models.followers(TeamFollow.team_id, TeamFollow.fan_id).subquery()
+    accounts, follows = func.coalesce(fans.c.accounts, 0), func.coalesce(fans.c.follows, 0)
     whole = " ".join(typed)
     exact = or_(Team.search_text.like(f" {whole} |%"), Team.search_text.like(f"%| {whole} |%"))
     mine = Team.id.in_(select(TeamFollow.team_id).where(TeamFollow.fan_id == fan)) if fan else None
-    order = [exact.desc(), *([mine.desc()] if mine is not None else []), func.coalesce(fans.c.n, 0).desc(), Team.tier.desc(), func.length(Team.name), Team.id]
-    rows = db.execute(select(Team, func.coalesce(fans.c.n, 0), exact).outerjoin(fans, fans.c.team_id == Team.id)
+    order = [exact.desc(), *([mine.desc()] if mine is not None else []), accounts.desc(), Team.tier.desc(), follows.desc(), func.length(Team.name), Team.id]
+    rows = db.execute(select(Team, accounts, exact).outerjoin(fans, fans.c.id == Team.id)
                       .where(*[Team.search_text.like(f"% {w}%") for w in typed], Team.sport.in_(keys), Team.system.in_(list(ADAPTERS)))
                       .order_by(*order).limit(max(limit, NAMESAKES))).all()
     rows = [(t, n) for i, (t, n, named) in enumerate(rows) if i < limit or named]
@@ -676,7 +678,8 @@ def page(db: Session, team_id: int, fan: str | None) -> dict[str, Any] | None:
     if team is None or not followable(team.sport):
         return None
     card = team.card or {}
-    followers = db.scalar(select(func.count()).select_from(TeamFollow).where(TeamFollow.team_id == team.id)) or 0
+    counted = db.execute(models.followers(TeamFollow.team_id, TeamFollow.fan_id).where(TeamFollow.team_id == team.id)).first()
+    followers = counted.accounts if counted else 0  # signed-in fans, as search says (models.followers)
     level = _following(db, fan, [team.id]).get(team.id)
     can = readable(ADAPTERS.get(team.system))
     blocked = registry.blocked(db)

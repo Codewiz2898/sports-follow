@@ -241,7 +241,8 @@ class SearchResult:
     league: str | None = None
     player_id: int | None = None  # set when the athlete is already on Sports Follow
     following: bool = False
-    followers: int = 0
+    followers: int = 0  # signed-in fans following them (models.followers), shown as "N following"
+    follows: int = 0  # every follow, an anonymous fan's too: only breaks a tie in search's order, never shown
     live_scores: bool = False  # a source we follow live covers them; otherwise the agent builds the page
     inactive: bool = False
     exact: bool = False  # the name is exactly what was typed

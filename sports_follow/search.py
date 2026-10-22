@@ -27,7 +27,7 @@ from typing import Any, Callable, Sequence
 from sqlalchemy import case, func, literal, or_, select, tuple_
 from sqlalchemy.orm import Session
 
-from . import naming, pipeline, registry, sports, structured
+from . import models, naming, pipeline, registry, sports, structured
 from .adapters import ADAPTERS, Adapter, AdapterError, PlayerRef, Provider, SearchResult, budget, cache, providers, source_name
 from .models import Athlete, Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity
 from .pipeline import slugify
@@ -143,7 +143,8 @@ def _results(db: Session, rows: Sequence[Any], fan: str | None, query: str) -> l
             league=league,
             player_id=player.id,
             following=player.id in mine,
-            followers=int(followers.get(player.id, 0)),
+            followers=followers.get(player.id, (0, 0))[0],
+            follows=followers.get(player.id, (0, 0))[1],
             live_scores=system is not None,
             inactive=player.status == "retired",
             exact=naming.same(query, player.name),
@@ -157,9 +158,10 @@ def _results(db: Session, rows: Sequence[Any], fan: str | None, query: str) -> l
     return out
 
 
-def _fans(db: Session, ids: list[int], fan: str | None) -> tuple[dict[int, int], set[int]]:
-    """Each player's follower count, and which of them this fan follows."""
-    followers = dict(db.execute(select(Follow.player_id, func.count(Follow.id)).where(Follow.player_id.in_(ids)).group_by(Follow.player_id)).all())
+def _fans(db: Session, ids: list[int], fan: str | None) -> tuple[dict[int, tuple[int, int]], set[int]]:
+    """Each player's followers, (signed-in fans, every follow) as models.followers counts them, and which of them this
+    fan follows."""
+    followers = {pid: (accounts, follows) for pid, accounts, follows in db.execute(models.followers(Follow.player_id, Follow.fan_id).where(Follow.player_id.in_(ids))).all()}
     mine = set(db.scalars(select(Follow.player_id).where(Follow.fan_id == fan, Follow.player_id.in_(ids)))) if fan else set()
     return followers, mine
 
@@ -208,10 +210,10 @@ def next_up(card: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def rank(query: str, local_results: list[SearchResult], source_results: list[SearchResult]) -> list[SearchResult]:
-    """One list: players on Sports Follow first (the fan's own, then by followers), then athletes the
+    """One list: players on Sports Follow first (the fan's own, then by their signed-in followers), then athletes the
     live sources know, then athletes in sports only the agent covers. Within a group, exact names,
     then names that start with what was typed, then notable ones (a headshot on ESPN, a title in
-    chess), in the source's own order."""
+    chess), then players followed by more fans of any kind, in the source's own order."""
     seen: dict[str, SearchResult] = {}
     # One person in one sport: Chahal the cricketer and Chahal the chess player share a Wikidata id.
     by_qid: dict[tuple[str, str], SearchResult] = {}
@@ -240,7 +242,7 @@ def rank(query: str, local_results: list[SearchResult], source_results: list[Sea
         if not held.system and r.system:
             held.system, held.athlete_id, held.league = r.system, r.athlete_id, r.league
         if r.player_id and not held.player_id:
-            held.player_id, held.following, held.followers, held.status, held.next = r.player_id, r.following, r.followers, r.status, r.next
+            held.player_id, held.following, held.followers, held.follows, held.status, held.next = r.player_id, r.following, r.followers, r.follows, r.status, r.next
             by_player[r.player_id] = held
         if r.detail and (sports.of(held.sport).source_line_first or len(r.detail) > len(held.detail)):
             # The source's line is current ("GM · Norway"); ours is whatever the agent last called
@@ -270,7 +272,8 @@ def rank(query: str, local_results: list[SearchResult], source_results: list[Sea
         i, r = pair
         popularity = floor.get(group(r), math.inf) - 0.5 if r.exact and not r.popularity else score(r)
         starts = r.exact or naming.prefix_match(query, r.name)  # an alias typed exactly ("r9") counts too
-        return (group(r), not r.following, -r.followers if r.player_id else 0, not starts, -popularity, not r.exact, r.inactive, i)
+        # Signed-in fans' follows rank before the name typed; anyone's only break a tie the rest leaves (models.followers).
+        return (group(r), not r.following, -r.followers if r.player_id else 0, not starts, -popularity, not r.exact, r.inactive, -r.follows, i)
 
     return [r for _, r in sorted(enumerate(seen.values()), key=order)]
 
@@ -409,7 +412,8 @@ def _ours(db: Session, rows: list[SearchResult], fan: str | None) -> None:
     for r, pid in theirs:
         if pid in cards:
             status, card = cards[pid]
-            r.player_id, r.following, r.followers, r.status, r.next = pid, pid in mine, int(followers.get(pid, 0)), status, next_up(card or {})
+            r.player_id, r.following, r.status, r.next = pid, pid in mine, status, next_up(card or {})
+            r.followers, r.follows = followers.get(pid, (0, 0))
 
 
 def _ask(searches: dict[str, tuple[Provider, str, list[Adapter]]], sport: str | None, may_ask: Callable[[], bool]) -> tuple[list[list[SearchResult]], list[str]]:
@@ -529,7 +533,7 @@ def offered_players(db: Session, players: list[Player], fan: str | None) -> list
 
 def public(r: SearchResult) -> dict[str, Any]:
     out = asdict(r)
-    for hidden in ("_rank", "matched", "popularity"):
+    for hidden in ("_rank", "matched", "popularity", "follows"):
         out.pop(hidden, None)
     return out
 
