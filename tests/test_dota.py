@@ -343,6 +343,33 @@ def test_a_series_finds_only_its_finished_maps(opendota_up):
     assert [(mp["n"], mp["match_id"]) for mp in snap.state["dota"]["maps"]] == [(1, 9001)]
 
 
+def test_a_series_first_seen_during_map_2_gets_map_1s_numbers_too(opendota_up, monkeypatch):
+    # BUG-131: once map 2 was remembered from the live list, the maps it hadn't seen live were never looked for in
+    # OpenDota's pro matches: every pro's line was "over 1 map", and the page was read again for hours.
+    adapter = ps.PandascoreEsports()
+    yesterday, map1 = PRO_MATCHES[2], PRO_MATCHES[0]
+    monkeypatch.setattr(opendota, "pro_matches", lambda: [map1, yesterday])
+    m = _series("running", [("finished", SPIRIT), ("running", None)])
+    adapter._dota(m, ps.parse_match(m))  # first seen during map 2, live as OpenDota game 9043: remembered
+    map2 = {"match_id": 9043, "start_time": int(BEGIN.timestamp()) + 3000, "radiant_name": "Team Liquid", "dire_name": "Team Spirit"}
+    monkeypatch.setattr(opendota, "pro_matches", lambda: [map1, map2, yesterday])  # map 2 is over
+    monkeypatch.setattr(opendota, "live", lambda: [])  # between maps
+    monkeypatch.setattr(opendota, "match", lambda mid: {9001: _details(True), 9043: _details(False, (4, 5, 6))}.get(mid))
+    m = _series("running", [("finished", SPIRIT), ("finished", LIQUID), ("not_started", None)])
+    snap = ps.parse_match(m)
+    whole = adapter._dota(m, snap)
+    assert [(mp["n"], mp["match_id"]) for mp in snap.state["dota"]["maps"]] == [(1, 9001), (2, 9043)]
+    assert whole and snap.lines["101"].stats[0] == {"label": "K/D/A", "value": "16/7/15"}  # Yatoro over both maps
+
+
+def test_maps_seen_live_place_the_ones_found_around_them():
+    assert dota.fill_maps([(2, 9043)], [8000, 9001, 9043], 2) == [(1, 9001), (2, 9043)]  # yesterday's 8000 isn't map 0
+    assert dota.fill_maps([(1, 9001), (3, 9003)], [9001, 9002, 9003], 3) == [(1, 9001), (2, 9002), (3, 9003)]
+    assert dota.fill_maps([(2, 9043)], [9001], 2) == [(2, 9043)]  # map 2 not in the list yet: map 1 waits for it
+    assert dota.fill_maps([], [9001, 9002], 1) == dota.number_maps([9001, 9002], 1)  # nothing seen live: as they're listed
+    assert dota.fill_maps([(1, 9043)], [9001, 9043], 1) == [(1, 9043)]  # what was seen live wins
+
+
 # ---------------------------------------------------------------- each finished map's match page part, recorded
 
 FIXTURES = Path(__file__).parent / "fixtures" / "opendota"

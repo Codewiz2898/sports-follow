@@ -304,7 +304,10 @@ class Adapter:
     same), which the worker moves every binding to (structured.rekey_bound). Its id_pattern then refuses
     the old ids, and the registry drops its rows holding one. A source that lists teams' rosters has
     team(team_id) -> SourceTeam | None and find_teams(name) -> [SourceTeam], with team_id_pattern the shape
-    of its team ids: a campaign page follows a whole team through them (campaigns.py).
+    of its team ids: a campaign page follows a whole team through them (campaigns.py). A source that lists a
+    game only once it's under way (PUBG's lobbies, once their first match is over) has listed_after_start (a
+    timedelta): first polled that soon after its start, the game's start and what happened since are told, as
+    they'd have been had it been listed ahead (structured.opened_live).
 
     A source fans can follow teams from (teams.py) has, for its sports whose athletes turn out for teams
     (Sport.team): teams() -> [SourceTeam], every team it covers in its sports that run (running()), players

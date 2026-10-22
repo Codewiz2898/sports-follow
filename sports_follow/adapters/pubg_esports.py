@@ -59,7 +59,10 @@ RECENT = timedelta(days=14)  # PUBG keeps matches this long
 # minutes with 16 teams and at most 12 finishes for anyone; these bounds keep those and drop the rest.
 MIN_MINUTES, MIN_TEAMS, MAX_FINISHES = 22, 8, 25
 LOBBY_GAP = timedelta(hours=4)  # a longer break between matches starts a new lobby
-OVER_AFTER = timedelta(minutes=90)  # no new match this long after the last one ended: the lobby is over
+# No new match this long after the last one ended: the lobby is over. Not before a match that began within LOBBY_GAP
+# of the last one (and so would join it) has been played and listed: a lobby called over during a long break (a
+# technical delay, a stage change) and then joined by the day's later matches kept its earlier standings for good.
+OVER_AFTER = LOBBY_GAP + timedelta(minutes=30)
 
 
 def _time(raw: str | None) -> datetime | None:
@@ -332,6 +335,10 @@ class PubgEsports(Adapter):
     lag_note = "PUBG lobbies update after each match ends."
     INDEX_AGE = 3600  # how old a tournament's match list may be when finding a player's lobbies
     LIVE_AGE = 90  # …and when polling a live lobby
+    # A lobby is listed only once its first match is over: first looked at this soon after it began, its start and
+    # its matches so far are told (structured.opened_live). It's found within about an hour of its first match
+    # ending (the index is read every 10 minutes, a followed player's lobbies every 30).
+    listed_after_start = timedelta(minutes=90)
 
     def __init__(self) -> None:
         self._index: tuple[float, list[dict[str, Any]]] = (0.0, [])
@@ -360,9 +367,22 @@ class PubgEsports(Adapter):
         return out
 
     def _tournament_lobbies(self, tournament: str, max_age: float) -> list[dict[str, Any]]:
+        """A tournament's lobbies whose every match PUBG still has (RECENT), grouped over every match it lists, those
+        it has dropped as they were kept when read (pubg.kept): so a lobby keeps its number, day and matches as the
+        day's first ones pass RECENT. Grouped from what was left, a lobby came back with part of its standings
+        (rewriting its result), under the next day once its matches before midnight had gone, or under the key of
+        the day's lobby before it."""
         now = datetime.now(timezone.utc)
-        listed = [m for m in pubg.tournament_matches(tournament, max_age) if m.get("createdAt") and now - _time(m["createdAt"]) <= RECENT]
-        return group_lobbies(tournament, [pubg.match(m["id"], summarize_match) for m in listed])
+        listed = [(m, at) for m in pubg.tournament_matches(tournament, max_age) if (at := _time(m.get("createdAt")))]
+        played = [pubg.match(m["id"], summarize_match) if now - at <= RECENT else pubg.kept(m["id"]) for m, at in listed]
+        # A match gone and not kept (never read: a fresh Redis) may have begun a lobby, or been one before it that day.
+        lost = [at for (_, at), summary in zip(listed, played) if now - at > RECENT and summary is None]
+        whole = []
+        for lobby in group_lobbies(tournament, [m for m in played if m]):
+            began = _time(lobby["matches"][0]["at"])
+            if began and now - began <= RECENT and not any(began - at < LOBBY_GAP or at.date().isoformat() == lobby["day"] for at in lost):
+                whole.append(lobby)
+        return whole
 
     def warm(self) -> int:
         """Bring the shared index up to date (the worker, every 10 minutes): tournaments made in the last

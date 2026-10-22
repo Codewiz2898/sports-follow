@@ -290,7 +290,7 @@ class Esports(Sport):
     def start(self, who: str, now: Seen) -> Found:
         if _lobby(now):
             played = now.state.get("total")
-            return Found("start", "key", f"{who} is playing", " · ".join(x for x in (now.state.get("stage"), f"{played} matches" if played else None, now.state.get("game")) if x))
+            return Found("start", "key", f"{who} is playing", " · ".join(x for x in (now.state.get("stage"), f"{played} match{'es' if played != 1 else ''}" if played else None, now.state.get("game")) if x))
         return Found("start", "key", f"{who}'s series has started", " · ".join(x for x in (self.matchup(now.state), now.state.get("format"), now.state.get("stage")) if x))
 
     def final(self, who: str, now: Seen) -> Found:

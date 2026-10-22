@@ -1045,6 +1045,15 @@ def _under_way(snap: Snapshot) -> bool:
     return sports.of_state(snap.state).missed_start(snap)
 
 
+def opened_live(adapter: Adapter, event: Event, latest: EventState | None, now: datetime) -> bool:
+    """Whether a first look at a game comes right after an empty board before its start: its first poll ever, from a
+    source that lists a game only once it's under way, within the while after its start the source says
+    (listed_after_start: PUBG's lobbies appear once their first match is over). Its start and what happened since are
+    then told as they'd have been had it been listed ahead. Any other first look is the baseline (baseline)."""
+    within = getattr(adapter, "listed_after_start", None)
+    return latest is None and within is not None and event.start_utc is not None and now - event.start_utc <= within
+
+
 def _polled(event_id: int, cadence: int) -> bool:
     """Note a poll of an event. Returns whether the one before it was recent: within POLL_GAP, or three of
     a slow source's rounds (Liquipedia reads every five minutes)."""
@@ -1128,6 +1137,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
         # Only changes are stored, so the latest state can be old in a game polled all along (the
         # minutes before kick-off); whether polling had a gap comes from the polls themselves.
         recent = _polled(event_id, int(live_binding.get("cadence") or 10))
+        opened = opened_live(adapter, event, latest, now)
         if rules.engine:
             _evaluate(rules, db, event_id, snap, latest, [w[0] for w in watchers])
         if snap.squad:
@@ -1158,6 +1168,8 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
             if changed or line_changed:
                 before = baseline(latest, last, snap, recent)
                 name, sport = people.get(player_id, ("", ""))
+                if before is None and opened:
+                    before = moments.Seen("scheduled")  # a game listed only once under way, first seen just after its start
                 seen = moments.Seen(snap.status, snap.state, line_json, snap.score_label, snap.clock_label, lineups=bool(snap.lines), role=snap.squad.get(athlete_id), events=snap.moments, teams=sides.get(player_id, []))
                 told = notify.told(db, player_id, event_id) if before else []  # what a source may take back (a goal VAR rules out)
                 new_moments += notify.record(db, player_id, event_id, moments.detect(sport, name, athlete_id, before, seen, told))

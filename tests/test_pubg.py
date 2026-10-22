@@ -4,15 +4,24 @@ JSON:API shape (checked against a real tournament match, 13 Oct 2026), none of t
 
 from __future__ import annotations
 
-from dataclasses import replace
+import os
+from contextlib import contextmanager
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
+from sqlalchemy import create_engine, select, text
+from sqlalchemy.orm import sessionmaker
 
-from sports_follow import credits, moments, registry
+from sports_follow import bus, credits, moments, registry, structured
 from sports_follow.adapters import pubg, pubg_esports as pe
 from sports_follow.adapters import KNOWN, PlayerRef, budget
+from sports_follow.models import Event, EventPlayer, Player, PlayerCard, SourceBinding
+
+from .test_liquipedia import PollSession
+from .test_pipeline import FakeRedis as FakeBus
+from .test_structured import redis  # noqa: F401 (the fixture)
 
 T0 = datetime(2026, 10, 13, 6, 30, tzinfo=timezone.utc)
 TEAMS = ["4AM", "DNS", "TWIS", "AT", "FLC", "VP", "GEN", "S8UL"]  # a lobby of 8, the fewest that counts
@@ -99,13 +108,29 @@ def test_a_lobby_on_now_and_over_later():
     line = live.lines[PRO]  # TGLTN's own numbers over the lobby, beside 4AM's standing
     assert line.headline == "7 finishes · 702 dmg"  # 602.4 and 100.4 damage, each rounded
     assert line.stats[:4] == [{"label": "Team place", "value": "2nd"}, {"label": "Team points", "value": "21"}, {"label": "Assists", "value": "2"}, {"label": "Knocks", "value": "2"}]
-    over = pe.parse_lobby(lobby, T0 + timedelta(hours=5))  # no new match for 90 minutes after the last ended
+    over = pe.parse_lobby(lobby, T0 + timedelta(hours=6))  # no new match for OVER_AFTER (4.5 h) after the last ended
     assert (over.status, over.score_label, over.clock_label) == ("final", "DNS win · 27 pts", "Final standings")
-    f = pe.parse_fixture(lobby, T0 + timedelta(hours=5))
+    f = pe.parse_fixture(lobby, T0 + timedelta(hours=6))
     assert (f.source_id, f.title, f.competition, f.status, f.locator) == ("as-pgsc4t:2026-10-13:1", "PUBG Global Series · Day 1", "PUBG Global Series", "final", {"tournament": "as-pgsc4t", "day": "2026-10-13", "n": 1})
     assert f.sport == "" and pe.PubgEsports().sports == ("pubg",)  # its source's one sport: PUBG
     assert pe.PubgEsports().result_label(f, ["4AM"]) == "2nd of 8 · 21 pts"
     assert len(f"pubg_esports:{f.source_id}") <= 64
+
+
+def test_a_long_break_on_a_match_day_doesnt_end_the_lobby():
+    # BUG-130: a break of 90 minutes to 4 hours called the lobby over, with its final standings and alerts, and the
+    # matches after it joined that same lobby, which the poller no longer read: the rest of the day never reached fans.
+    lobby = _lobby(GAME1, GAME2)  # match 2 began at 7:10 and ended at 7:40
+    during = T0 + timedelta(hours=3, minutes=30)  # over two hours into a break
+    assert pe.parse_lobby(lobby, during).status == "live" and pe.parse_fixture(lobby, during).result is None
+    # The latest a match can begin and still be one of this lobby's (LOBBY_GAP after the last began), played and listed.
+    joins = T0 + timedelta(minutes=40) + pe.LOBBY_GAP - timedelta(minutes=1)
+    third = _doc("m3", joins, GAME1_PLACES, GAME1_KILLS, duration=35 * 60)
+    [later] = pe.group_lobbies("as-pgsc4t", [pe.summarize_match(d) for d in (GAME1, GAME2, third)])
+    assert pe.lobby_key(later) == pe.lobby_key(lobby) and len(later["matches"]) == 3
+    listed = joins + timedelta(minutes=35 + 15)
+    assert pe.parse_lobby(lobby, listed).status == "live"  # it was still on when its third match came in
+    assert pe.parse_lobby(later, listed + pe.OVER_AFTER).status == "final"
 
 
 def test_tournament_names_from_their_ids():
@@ -128,9 +153,45 @@ def test_a_chicken_dinner_and_the_lobby_result_reach_the_player():
 
     found = moments.detect("PUBG", "TGLTN", PRO, seen(one), seen(two))
     assert [(f.kind, f.title) for f in found] == [("game", "TGLTN: 4AM 4th in match 2")]
-    over = pe.parse_lobby(_lobby(GAME1, GAME2), T0 + timedelta(hours=5))
+    over = pe.parse_lobby(_lobby(GAME1, GAME2), T0 + timedelta(hours=6))
     [final] = moments.detect("PUBG", "TGLTN", PRO, seen(two), seen(over))
     assert final.title == "TGLTN: 4AM finish 2nd · 21 pts"
+
+
+def _told(monkeypatch, event_id: int, began: datetime, *polls: tuple[dict, ...]) -> list[moments.Found]:
+    """What TGLTN's fans are told as the poller reads a lobby that began then, once after each set of its matches
+    (apply_poll's own path, as the lane runs it, with its rows kept in memory)."""
+    db = PollSession(Event(id=event_id, status="live", start_utc=began), Player(id=7, name="TGLTN", sport="PUBG"), ["4AM"])
+    told: dict[str, moments.Found] = {}
+
+    def record(db, player_id, event_id, found):
+        for f in found:
+            told.setdefault(f"{f.kind}:{f.detail}", f)  # one per key, as notify.record stores them
+        return []
+
+    monkeypatch.setattr(structured, "session", lambda: db)
+    monkeypatch.setattr(structured.notify, "record", record)
+    monkeypatch.setattr(structured.notify, "told", lambda db, player_id, event_id: [])
+    monkeypatch.setattr(structured.notify, "dispatch", lambda ids: None)
+    binding = {"adapter": "pubg_esports", "locator": {"tournament": "as-pgsc4t", "day": began.date().isoformat(), "n": 1}, "cadence": pe.PubgEsports.live_cadence}
+    for docs in polls:
+        structured.apply_poll(event_id, binding, pe.PubgEsports(), [(7, PRO)], pe.parse_lobby(_lobby(*docs)))
+    return list(told.values())
+
+
+def test_a_lobbys_first_match_and_its_start_are_told(monkeypatch, redis):
+    # BUG-201: PUBG lists a lobby only once its first match is over, so the poller's first look had nothing before it
+    # to be compared with: the first match's chicken dinner and "TGLTN is playing" were never told.
+    now = datetime.now(timezone.utc)
+    first = _doc("m1", now - timedelta(minutes=75), GAME1_PLACES, GAME1_KILLS)  # 4AM's chicken dinner
+    second = _doc("m2", now - timedelta(minutes=35), GAME2_PLACES, GAME2_KILLS)
+    told = _told(monkeypatch, 1, now - timedelta(minutes=75), (first,), (first, second))
+    assert [(f.kind, f.title) for f in told] == [("start", "TGLTN is playing"), ("dinner", "Chicken dinner: 4AM"), ("game", "TGLTN: 4AM 4th in match 2")]
+    assert told[0].body == "Day 1 · 1 match · PUBG"
+    # A lobby first looked at long after it began (a follow, or the poller, starting mid-lobby): what happened
+    # earlier is old news, as for any game.
+    earlier = [_doc(f"e{i}", now - timedelta(minutes=200 - 40 * i), GAME1_PLACES, GAME1_KILLS) for i in range(4)]
+    assert _told(monkeypatch, 2, now - timedelta(minutes=200), tuple(earlier)) == []
 
 
 # ---------------------------------------------------------------- the adapter's index
@@ -309,3 +370,126 @@ def test_the_schedule_is_the_lobbies_that_started_on_those_days_from_the_index(i
     [lobby] = adapter.schedule(today - timedelta(days=7), today + timedelta(days=14))
     assert (lobby.status, lobby.tier, lobby.competition) == ("live", 3, "PUBG Global Series")
     assert adapter.schedule(today + timedelta(days=1), today + timedelta(days=14)) == []
+
+
+# ---------------------------------------------------------------- as PUBG's fortnight passes
+
+
+class Clock(datetime):
+    """The adapter's clock (pubg_esports' datetime), at a time of the test's choosing."""
+
+    at = datetime(2026, 10, 27, 12, 0, tzinfo=timezone.utc)
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls.at
+
+
+def _at(text: str) -> datetime:
+    return datetime.fromisoformat(f"{text}+00:00")
+
+
+@pytest.fixture
+def ageing(monkeypatch):
+    """The adapter over a fake PUBG whose matches pass its fortnight as the clock moves (Clock.at): one tournament,
+    whose matches (docs, by id) are listed for good, downloaded while PUBG has them, and kept as each was read."""
+    docs: dict[str, dict] = {}
+    monkeypatch.setattr(pe, "datetime", Clock)
+    monkeypatch.setattr(Clock, "at", Clock.at)  # put back after the test, however it moved it
+    monkeypatch.setattr(pubg, "tournaments", lambda max_age=600: [{"id": "as-pgsc4t", "createdAt": "2026-10-12T00:00:00Z"}])
+    monkeypatch.setattr(pubg, "tournament_matches", lambda t, max_age: [{"id": mid, "createdAt": d["data"]["attributes"]["createdAt"]} for mid, d in docs.items()])
+
+    def match(mid, summarize):  # PUBG drops a match after 14 days
+        return summarize(docs[mid]) if Clock.at - _at(docs[mid]["data"]["attributes"]["createdAt"][:-1]) <= pe.RECENT else None
+
+    monkeypatch.setattr(pubg, "match", match)
+    monkeypatch.setattr(pubg, "kept", lambda mid: pe.summarize_match(docs[mid]), raising=False)  # each read while PUBG had it
+    return docs
+
+
+def _day(docs: dict, prefix: str, starts: list[str], won: int = 0) -> None:
+    """A lobby's matches, beginning at these times; 4AM wins the first `won` of them, and is 8th in the rest."""
+    for i, start in enumerate(starts):
+        places = GAME1_PLACES if i < won else {**{t: n + 1 for n, t in enumerate(TEAMS[1:])}, "4AM": 8}
+        docs[f"{prefix}{i}"] = _doc(f"{prefix}{i}", _at(start), places, GAME1_KILLS)
+
+
+def test_a_lobby_keeps_its_number_and_matches_as_its_first_ones_pass_pubgs_fortnight(ageing):
+    # BUG-202: lobbies were made of the matches younger than 14 days only, so a lobby whose first matches had passed it
+    # came back with part of its standings, rewriting its result, and the day's next lobby took its key once it was
+    # gone (or a lobby begun before midnight was added again under the next day).
+    _day(ageing, "a", ["2026-10-13T10:55:00", "2026-10-13T11:30:00", "2026-10-13T12:05:00", "2026-10-13T12:40:00"], won=2)
+    _day(ageing, "b", ["2026-10-13T18:30:00", "2026-10-13T19:05:00"])  # the day's second session
+
+    def lobbies(at: str) -> list[tuple[str, list[str]]]:
+        Clock.at = _at(at)
+        return [(pe.lobby_key(lb), [m["id"] for m in lb["matches"]]) for lb in pe.PubgEsports().lobbies()]
+
+    assert lobbies("2026-10-27T10:00:00") == [("as-pgsc4t:2026-10-13:1", ["a0", "a1", "a2", "a3"]), ("as-pgsc4t:2026-10-13:2", ["b0", "b1"])]
+    assert lobbies("2026-10-27T11:45:00") == [("as-pgsc4t:2026-10-13:2", ["b0", "b1"])]  # a0 and a1 gone: not the rest of it as a lobby
+    assert lobbies("2026-10-27T16:00:00") == [("as-pgsc4t:2026-10-13:2", ["b0", "b1"])]  # all of it gone: the second keeps its number
+
+
+def test_a_lobby_whose_first_matches_were_never_read_isnt_offered(ageing, monkeypatch):
+    # PUBG has dropped them and they weren't kept (a fresh Redis): what's left may be part of a lobby, or numbered
+    # after a lobby that's lost.
+    _day(ageing, "a", ["2026-10-13T10:55:00", "2026-10-13T11:30:00", "2026-10-13T12:05:00"])
+    _day(ageing, "b", ["2026-10-13T18:30:00"])
+    _day(ageing, "c", ["2026-10-14T10:00:00"])
+    monkeypatch.setattr(pubg, "kept", lambda mid: None)
+    Clock.at = _at("2026-10-27T11:45:00")
+    assert [pe.lobby_key(lb) for lb in pe.PubgEsports().lobbies()] == ["as-pgsc4t:2026-10-14:1"]
+    # Ones PUBG had nothing at when they were read were never in a lobby: the rest is whole.
+    monkeypatch.setattr(pubg, "kept", lambda mid: {} if mid in ("a0", "a1") else pe.summarize_match(ageing[mid]))
+    assert [pe.lobby_key(lb) for lb in pe.PubgEsports().lobbies()] == ["as-pgsc4t:2026-10-13:1", "as-pgsc4t:2026-10-13:2", "as-pgsc4t:2026-10-14:1"]
+
+
+@pytest.mark.skipif(not os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL"), reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
+def test_a_finished_lobbys_stored_result_stays_as_its_matches_pass_pubgs_fortnight(ageing, monkeypatch):
+    # BUG-202, down a refresh's real path: the result a fan's history keeps, and the lobbies in it.
+    engine = create_engine(os.environ["SPORTS_FOLLOW_TEST_DATABASE_URL"])
+    with engine.begin() as c:
+        c.execute(text("TRUNCATE player, event RESTART IDENTITY CASCADE"))
+    made = sessionmaker(bind=engine, expire_on_commit=False)
+
+    @contextmanager
+    def unit():
+        s = made()
+        try:
+            yield s
+            s.commit()
+        except Exception:
+            s.rollback()
+            raise
+        finally:
+            s.close()
+
+    monkeypatch.setattr(structured, "session", unit)
+    monkeypatch.setattr(bus, "_sync", FakeBus())
+    adapter = pe.PubgEsports()
+    monkeypatch.setitem(structured.ADAPTERS, "pubg_esports", adapter)
+    # One lobby of six matches, begun before midnight; 4AM wins the first two.
+    _day(ageing, "m", ["2026-10-13T22:30:00", "2026-10-13T23:05:00", "2026-10-13T23:40:00", "2026-10-14T00:15:00", "2026-10-14T00:50:00", "2026-10-14T01:25:00"], won=2)
+    ref = PlayerRef("pubg_esports", PRO, "TGLTN", ["4AM"], ["4AM"], league="pubg", game="PUBG")
+    with unit() as db:
+        player = Player(slug="tgltn", name="TGLTN", sport="PUBG", status="active")
+        db.add(player)
+        db.flush()
+        db.add(SourceBinding(player_id=player.id, purpose="fixtures", adapter="pubg_esports", locator=asdict(ref), confidence=1.0, priority=10, health={}))
+        db.add(PlayerCard(player_id=player.id, status="building", card={}))
+
+    def stored(at: str) -> list[tuple[str, str]]:
+        Clock.at = _at(at)
+        adapter._index = (0.0, [])
+        structured._refresh(player.id)
+        with unit() as db:
+            rows = db.execute(select(Event.key, EventPlayer.result).join(EventPlayer, EventPlayer.event_id == Event.id).where(EventPlayer.player_id == player.id))
+            return sorted((key, (result or {}).get("result")) for key, result in rows)
+
+    try:
+        whole = stored("2026-10-26T12:00:00")
+        assert whole == [("pubg_esports:as-pgsc4t:2026-10-13:1", "2nd of 8 · 60 pts")]
+        assert stored("2026-10-27T23:10:00") == whole  # its first two matches gone from PUBG
+        assert stored("2026-10-28T00:20:00") == whole  # and those before midnight: not added again under the 14th
+    finally:
+        engine.dispose()

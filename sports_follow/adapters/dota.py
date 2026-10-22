@@ -197,6 +197,20 @@ def number_maps(ids: list[int], finished: int) -> list[tuple[int, int]]:
     return [(finished - len(ids) + i + 1, mid) for i, mid in enumerate(ids)]
 
 
+def fill_maps(known: list[tuple[int, int]], ids: list[int], finished: int) -> list[tuple[int, int]]:
+    """(map number, OpenDota match) for the series' finished maps: those seen live (known), and the ones they lack
+    from its matches in OpenDota's list (ids, oldest first: find_maps), so a series first seen during map 2 has
+    map 1 too. A map seen live that's in the list places the others around it (the one before it is the map
+    before); with none of them there, the list is numbered as number_maps numbers it. What was seen live wins."""
+    have = dict(known)
+    anchor = next(((n, ids.index(mid)) for n, mid in known if mid in ids), None)
+    found = [(anchor[0] + i - anchor[1], mid) for i, mid in enumerate(ids)] if anchor else number_maps(ids, finished)
+    for n, mid in found:
+        if 1 <= n <= finished and n not in have and mid not in have.values():
+            have[n] = mid
+    return sorted(have.items())
+
+
 def map_stats(details: dict[str, Any], players: dict[int, str], hero_names: dict[int, str]) -> dict[str, dict[str, Any]]:
     """A finished map's numbers for the roster's players, by PandaScore player id."""
     out = {}
