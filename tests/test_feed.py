@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, select, text, update
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import accounts, feed, server
@@ -285,3 +285,32 @@ def test_feedback_goes_with_its_player_and_follows_the_fan_into_an_account(db):
     accounts.delete_account(db, account_id)
     db.commit()
     assert db.scalars(select(FeedFeedback)).all() == []
+
+
+@needs_db
+@pytest.mark.parametrize("verdict", ["not_interested", "report", feed.UNPLAYABLE])
+def test_a_video_a_fan_hid_under_one_player_is_hidden_under_a_teammate_too_but_not_about_them_is_theirs(db, monkeypatch, verdict):
+    # BUG-283: a fan's "not interested", report or "won't play" under one player hid the video on that player's page
+    # alone: a teammate's page and Today's rail still served it (the fan's own Feed already hid it whoever's it was).
+    kohli, rohit = player(db, "kohli", {"player": {"name": "Kohli"}, "news": []}), player(db, "rohit", {"player": {"name": "Rohit"}, "news": []})
+    both, theirs = video("https://youtu.be/both", "Kohli and Rohit put on 200"), video("https://youtu.be/r", "Rohit's pull shot", days_ago=2)
+    kept = {kohli: [Candidate(both, score=0.9, channel="icc")], rohit: [Candidate(both, score=0.9, channel="icc"), Candidate(theirs, score=0.5, channel="bcci")]}
+    monkeypatch.setattr(feed, "judged", lambda db, ids, now=None: {i: kept[i] for i in ids if i in kept})
+    for who in (kohli, rohit):
+        db.add(Follow(fan_id="fan", player_id=who, alert_rules={}))
+    db.commit()
+    db.add(FeedFeedback(fan_id="fan", player_id=kohli, item_id=both.id, verdict=verdict))  # as the sheet or the app keeps it
+    db.commit()
+
+    def rohits_page() -> list[str]:
+        shown = feed.feed_for(db, rohit, "fan", NOW)
+        assert shown is not None
+        return [i.title for g in shown.groups for i in g.items]
+
+    assert rohits_page() == ["Rohit's pull shot"]
+    assert [(s.player_id, s.item.title) for s in feed.shares_for(db, "fan")] == [(rohit, "Rohit's pull shot")]
+    assert [e.item.title for e in feed.page(db, "fan", now=NOW).items] == ["Rohit's pull shot"]
+    # "Not about this player" is about that player alone: under the other it's still theirs to see.
+    db.execute(update(FeedFeedback).values(verdict="not_about_player"))
+    db.commit()
+    assert rohits_page() == ["Kohli and Rohit put on 200", "Rohit's pull shot"]

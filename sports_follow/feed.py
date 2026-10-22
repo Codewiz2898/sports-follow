@@ -50,7 +50,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -843,10 +843,13 @@ def _off(db: Session, player_ids: Iterable[int]) -> set[int]:
 
 
 def _unhidden(db: Session, fan: str, player_id: int, candidates: list[Candidate]) -> list[Candidate]:
-    """The candidates this fan hasn't hidden, each once, safe to link to."""
+    """The candidates this fan hasn't hidden, each once, safe to link to. A video two players hold is one video: what
+    the fan said of it under either (not interested, a report, won't play) hides it under both, as their Feed does;
+    "not about this player" only under the player it was said of, whose teammate it may well be about."""
     if not candidates:
         return []
-    return _unseen(candidates, set(db.scalars(select(FeedFeedback.item_id).where(FeedFeedback.fan_id == fan, FeedFeedback.player_id == player_id))))
+    said = or_(FeedFeedback.player_id == player_id, FeedFeedback.verdict != "not_about_player")
+    return _unseen(candidates, set(db.scalars(select(FeedFeedback.item_id).where(FeedFeedback.fan_id == fan, said))))
 
 
 def _unseen(candidates: list[Candidate], hidden: set[str]) -> list[Candidate]:
