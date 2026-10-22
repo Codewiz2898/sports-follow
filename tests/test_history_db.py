@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -117,7 +118,7 @@ def turn_off(store, source: Arena, *keys: str) -> None:
     """These sports off in the admin panel (none: all on again), the made-up source still running."""
     store.rows[controls.SPORTS_OFF] = list(keys)
     controls.load()
-    ADAPTERS[source.system] = source  # a change rebuilds the running sources, without the made-up one
+    ADAPTERS[source.system] = cast(Any, source)  # a change rebuilds the running sources, without the made-up one
 
 
 def test_a_sport_turned_off_isnt_read_by_the_history_lane_though_its_source_runs(db, arena, admin_controls):
