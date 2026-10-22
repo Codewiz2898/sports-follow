@@ -155,6 +155,20 @@ def test_asking_for_a_code_says_the_same_whether_or_not_the_address_has_an_accou
     assert store.emails == {1: "known@example.com"}  # asking makes nothing
 
 
+def test_asking_for_a_code_doesnt_say_whether_an_address_is_blocked(api, store, outbox):
+    """BUG-102: asking for a code answered 403 "blocked" for a blocked account's address, so anyone could find out
+    whether an address was one. It answers as for any address; the code it sends says so to whoever holds the
+    inbox, and signs nobody in."""
+    store.emails.update({1: "blocked@example.com", 2: "fan@example.com"})
+    store.blocked_ids.add(1)
+    blocked = api.call("POST", "/api/auth/email/start", body={"email": "blocked@example.com"}, address=PUBLIC)
+    other = api.call("POST", "/api/auth/email/start", body={"email": "fan@example.com"}, address=PUBLIC)
+    assert blocked.status_code == other.status_code == 200 and blocked.json() == other.json()
+    refused = api.call("POST", "/api/auth/email/verify", body={"email": "blocked@example.com", "code": outbox["blocked@example.com"]}, address=PUBLIC)
+    assert refused.status_code == 403 and refused.json()["detail"] == server.BLOCKED
+    assert "sf_session" not in set_cookies(refused) and store.sessions == {}
+
+
 @pytest.mark.parametrize("email", ["", "fan", "fan@", "@example.com", "fan@example", "a b@example.com", "x" * 250 + "@example.com",
                                    "fan\x01x@example.com", "fan\u200bx@example.com"])  # a control or an invisible character (BUG-096)
 def test_an_address_that_isnt_one_is_refused(api, store, outbox, email):
@@ -625,8 +639,6 @@ def test_a_blocked_account_signs_in_neither_with_google_nor_with_a_code_from_bef
     refused = api.call("POST", "/api/auth/email/verify", body={"email": "fan@gmail.com", "code": outbox["fan@gmail.com"]}, address=PUBLIC)
     assert refused.status_code == 403 and refused.json()["detail"] == server.BLOCKED
     assert "sf_session" not in set_cookies(refused)
-    asked = api.call("POST", "/api/auth/email/start", body={"email": "fan@gmail.com"}, address=PUBLIC)
-    assert asked.status_code == 403 and "auth-wait:" + accounts.email_key("fan@gmail.com") not in api.redis.data
     _, back = go_to_google(api, google)
     assert back.headers["location"] == "/account?error=blocked" and "sf_session" not in set_cookies(back)
     assert store.sessions == {}

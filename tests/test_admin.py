@@ -398,12 +398,14 @@ def test_a_source_the_panel_turns_off_is_off_for_search_and_follows(api, passwor
     assert api.call("PUT", "/api/admin/sources/nowhere", headers=cookie, body={"on": False}).status_code == 404
 
 
-def test_a_blocked_account_gets_no_code(api, monkeypatch):
+def test_a_blocked_accounts_code_signs_nobody_in(api, monkeypatch):
+    """Asking for one is answered as for any address, so it says nothing of whether one is blocked (BUG-102): only
+    whoever holds the inbox hears so, from the code."""
     monkeypatch.setattr(server.mail, "configured", lambda secure: True)
     monkeypatch.setattr(server.accounts, "blocked", lambda db, email=None, account_id=None: email == "blocked@example.com")
-    sent = []
-    monkeypatch.setattr(server.mail, "send_code", lambda email, code: sent.append(email))
-    refused = api.call("POST", "/api/auth/email/start", address="81.2.69.142", body={"email": "Blocked@example.com"})
+    sent: dict[str, str] = {}
+    monkeypatch.setattr(server.mail, "send_code", lambda email, code: sent.__setitem__(email, code))
+    asked = api.call("POST", "/api/auth/email/start", address="81.2.69.142", body={"email": "Blocked@example.com"})
+    assert asked.status_code == 200 and asked.json() == api.call("POST", "/api/auth/email/start", address="81.2.69.142", body={"email": "fan@example.com"}).json()
+    refused = api.call("POST", "/api/auth/email/verify", address="81.2.69.142", body={"email": "blocked@example.com", "code": sent["blocked@example.com"]})
     assert refused.status_code == 403 and refused.json()["detail"] == server.BLOCKED
-    assert api.call("POST", "/api/auth/email/start", address="81.2.69.142", body={"email": "fan@example.com"}).status_code == 200
-    assert sent == ["fan@example.com"]

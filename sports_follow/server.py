@@ -1583,10 +1583,8 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
         # No code went out: asking again within the minute mustn't answer "the code sent then is the one".
         await state["redis"].delete(f"auth-wait:{who}")
         raise
-    # After the limits, so a loop of addresses can't learn quickly which accounts are blocked.
-    if await in_db(accounts.blocked, email):
-        await state["redis"].delete(f"auth-wait:{who}")
-        raise HTTPException(403, BLOCKED)
+    # A blocked account's address is answered as any other, so asking says nothing of whether one is (BUG-102): its code
+    # goes out, and only whoever holds the inbox hears it's blocked, when the code signs nobody in (email_verify).
     code = f"{secrets.randbelow(10**6):06d}"
     # A new code: its tries are counted afresh, and the network that asked for it keeps its own (_code_tries).
     await state["redis"].set(f"auth-code:{who}", mac("code", f"{email}:{code}"), ex=CODE_LIFE)
