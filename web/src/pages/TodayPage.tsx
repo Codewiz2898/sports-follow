@@ -7,7 +7,7 @@ import { useNow } from '../clock'
 import { BoardLink, ComingCard, LiveScoreboard, ResultCard } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { FromYourPlayers } from '../components/Feed'
-import { findGames, gameRow, gamesOnToday, narrow, NO_BLOCKS, nothingOn, pickedGame, theirGames, type GameRow, type TodayBlocks } from '../filter'
+import { findGames, gameRow, gamesOnNow, gamesOnToday, narrow, NO_BLOCKS, nothingOn, pickedGame, theirGames, type GameRow, type TodayBlocks } from '../filter'
 import { CloseIcon, SearchIcon, UserIcon } from '../components/Icons'
 import { useCalls } from '../components/Calls'
 import { PlayersStrip } from '../components/PlayersStrip'
@@ -163,15 +163,27 @@ function useGame(row: GameRow): [SportInfo | null, (key: string | null) => void]
   return [game, pick]
 }
 
+/** A game's chip (.game-chip): a dot of its colour, or, while one of it is on now (`live`), the pulsing red dot of a
+ * live player's pill. `picked` for the row's (aria-pressed); none for the search's, which show one. */
+function GameChip({ game, live, picked, onClick }: { game: SportInfo; live: boolean; picked?: boolean; onClick: () => void }) {
+  return (
+    <button type="button" className="game-chip" data-sport={game.key} aria-pressed={picked} onClick={onClick}>
+      <span className={live ? 'live-dot' : 'dot'} aria-hidden="true" />{game.label}
+      {live && <span className="sr-only">, live</span>}
+    </button>
+  )
+}
+
 /**
  * Today's game filter, under its header: All, a chip of each of the fan's own games on the page (their sports' among
  * them), and a search for the others (filter.ts gameRow), which leads to their sports too, so a game found can keep
  * its chip; one of those picked has its chip after the fan's own while it's picked. The game picked is a block of
- * its colour and the rest outlined, All picked is ink. Not there while the page holds one game or none. A game
- * picked off the row's edge (far along it, from a link or come back to) is brought into it: the row scrolls
- * sideways, never the page, which a fan come back to Today is put back down. All is first, so never off it.
+ * its colour and the rest outlined, All picked is ink; a game with one on now (`live`, filter.ts gamesOnNow) says so,
+ * picked or not, in the row and in its search. Not there while the page holds one game or none. A game picked off
+ * the row's edge (far along it, from a link or come back to) is brought into it: the row scrolls sideways, never the
+ * page, which a fan come back to Today is put back down. All is first, so never off it.
  */
-function GameChips({ row, game, onPick }: { row: GameRow; game: SportInfo | null; onPick: (key: string | null) => void }) {
+function GameChips({ row, game, live, onPick }: { row: GameRow; game: SportInfo | null; live: Set<string>; onPick: (key: string | null) => void }) {
   const box = useRef<HTMLDivElement>(null)
   const [finding, setFinding] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -192,11 +204,7 @@ function GameChips({ row, game, onPick }: { row: GameRow; game: SportInfo | null
     <div className="game-filter">
       <div ref={box} className="game-chips" role="group" aria-label="Show games">
         <button type="button" className="game-chip" aria-pressed={!game} onClick={() => onPick(null)}>All</button>
-        {chips.map((s) => (
-          <button key={s.key} type="button" className="game-chip" data-sport={s.key} aria-pressed={game?.key === s.key} onClick={() => onPick(s.key)}>
-            <span className="dot" aria-hidden="true" />{s.label}
-          </button>
-        ))}
+        {chips.map((s) => <GameChip key={s.key} game={s} live={live.has(s.key)} picked={game?.key === s.key} onClick={() => onPick(s.key)} />)}
       </div>
       {/* At the row's end, outside its scroll, so it's in sight however many games the fan has. */}
       {row.more.length > 0 && (
@@ -204,24 +212,24 @@ function GameChips({ row, game, onPick }: { row: GameRow; game: SportInfo | null
           <SearchIcon width={18} height={18} />
         </button>
       )}
-      {finding && <FindGame games={row.more} onPick={onPick} onClose={() => setFinding(false)} onYourSports={sportsLoaded ? () => setEditing(true) : undefined} />}
+      {finding && <FindGame games={row.more} live={live} onPick={onPick} onClose={() => setFinding(false)} onYourSports={sportsLoaded ? () => setEditing(true) : undefined} />}
       {editing && <YourSportsSheet onClose={() => setEditing(false)} />}
     </div>
   )
 }
 
-/** The row's search: the other games with something on Today, narrowed as the fan types; a tap shows that one. At
- * its foot, the way to the fan's sports (`onYourSports`: the Edit sheet, in its place, once their sports have come),
- * so a game they came looking for gets a chip every day. From the bottom on a phone, a box in the middle on a
- * desktop, as the Feed's "…" sheet. */
-function FindGame({ games, onPick, onClose, onYourSports }: { games: SportInfo[]; onPick: (key: string) => void; onClose: () => void; onYourSports?: () => void }) {
+/** The row's search: the other games with something on Today, those on now first, narrowed as the fan types; a tap
+ * shows that one. At its foot, the way to the fan's sports (`onYourSports`: the Edit sheet, in its place, once their
+ * sports have come), so a game they came looking for gets a chip every day. From the bottom on a phone, a box in the
+ * middle on a desktop, as the Feed's "…" sheet. */
+function FindGame({ games, live, onPick, onClose, onYourSports }: { games: SportInfo[]; live: Set<string>; onPick: (key: string) => void; onClose: () => void; onYourSports?: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const [words, setWords] = useState('')
   useEffect(() => {
     const d = dialog.current
     if (d && !d.open) d.showModal()
   }, [])
-  const found = findGames(games, words)
+  const found = findGames(games, words, live)
   const choose = (key: string) => {
     onPick(key)
     dialog.current?.close()
@@ -233,11 +241,7 @@ function FindGame({ games, onPick, onClose, onYourSports }: { games: SportInfo[]
         <span className="eyebrow">More games on today</span>
         <input type="search" className="field" placeholder="Search games" aria-label="Search games" value={words} onChange={(e) => setWords(e.target.value)} />
         <div className="game-list">
-          {found.map((s) => (
-            <button key={s.key} type="button" className="game-chip" data-sport={s.key} onClick={() => choose(s.key)}>
-              <span className="dot" aria-hidden="true" />{s.label}
-            </button>
-          ))}
+          {found.map((s) => <GameChip key={s.key} game={s} live={live.has(s.key)} onClick={() => choose(s.key)} />)}
           {!found.length && <span className="muted small">No game by that name on today</span>}
         </div>
         {onYourSports && (
@@ -336,7 +340,7 @@ export function TodayPage() {
       </div>
     </header>
   )
-  const filter = <GameChips row={row} game={game} onPick={pick} />
+  const filter = <GameChips row={row} game={game} live={gamesOnNow(all, sportKey)} onPick={pick} />
 
   if (nobody) {
     if (!welcomed()) return <Navigate to="/welcome" replace />  // a new fan: the welcome first, once

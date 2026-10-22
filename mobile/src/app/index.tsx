@@ -12,7 +12,7 @@ import { Image } from 'expo-image'
 import { router, useIsFocused } from 'expo-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
-import { gameRow, gamesOnToday, narrow, NO_BLOCKS, nothingOn, theirGames, type TodayBlocks } from '../../../web/src/filter'
+import { gameRow, gamesOnNow, gamesOnToday, narrow, NO_BLOCKS, nothingOn, theirGames, type TodayBlocks } from '../../../web/src/filter'
 import { AHEAD_DAYS, comingUp, FEW, followedLive, gamesOn, latestIn, leagueComingUp, liveGames, notTheirs, results, resultsDay, TAIL, teamsLive, theirEvents, type GameOn, type TeamGame } from '../../../web/src/today'
 import { yoursFirst, yoursMovedUp } from '../../../web/src/yourSports'
 import type { FollowedMatch, League, LeagueGame } from '../api'
@@ -216,7 +216,7 @@ export default function TodayScreen() {
     await Promise.all([following.reload(), following.reloadMatches()])
     setRefreshing(false)
   }
-  const filter = <GameChips row={row} game={game} onPick={pick} />
+  const filter = <GameChips row={row} game={game} live={gamesOnNow(all, keyOf)} onPick={pick} />
 
   if (nobody) {
     return (

@@ -88,6 +88,13 @@ export function gamesOnToday(blocks: TodayBlocks, keyOf: KeyOf): Set<string> {
   return gamesIn(blocks, BLOCKS.filter((b) => b !== 'moreLive'), keyOf)
 }
 
+/** The games that have one on now, by key: the fan's players' and teams' games on, the games they follow by
+ * themselves, and every other one on (Live now's, and the link to the rest), so each one's chip says so, as a live
+ * player's pill does, in the row and behind its search. */
+export function gamesOnNow(blocks: TodayBlocks, keyOf: KeyOf): Set<string> {
+  return gamesIn(blocks, ['live', 'followed', 'teamGames', 'alsoLive', 'moreLive'], keyOf)
+}
+
 /** The fan's own games on Today, by key: their players' and teams', and every game of theirs on, done or to come
  * (the games they follow by themselves among them); not the big games', nor the Wire's or This week's. And the
  * sports they said they watch (`yours`, yourSports.ts: BHA-653), even before they follow anyone in them: each gets a
@@ -119,10 +126,11 @@ export function pickedGame(key: string | null | undefined, row: GameRow): SportI
 }
 
 /** The games behind the row's search that a fan's words (`words`) name: each whose name has them, any case; all of
- * them for no words. */
-export function findGames(more: SportInfo[], words: string): SportInfo[] {
+ * them for no words. Those with a game on now (`on`, gamesOnNow) first, each lot in the row's order. */
+export function findGames(more: SportInfo[], words: string, on: Set<string> = new Set()): SportInfo[] {
   const q = words.trim().toLowerCase()
-  return q ? more.filter((s) => s.label.toLowerCase().includes(q) || s.key.includes(q)) : more
+  const found = q ? more.filter((s) => s.label.toLowerCase().includes(q) || s.key.includes(q)) : more
+  return [...found.filter((s) => on.has(s.key)), ...found.filter((s) => !on.has(s.key))]
 }
 
 /** Whether Today shows nothing but who the fan follows (the strip): nothing on, nothing done or to come, nothing
