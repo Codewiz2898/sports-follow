@@ -60,7 +60,8 @@ def db(monkeypatch):
 def pushed(monkeypatch):
     """Polls applied at once, with Redis made up; every push's payload, by the fan it went to."""
     sent: list[tuple[str, dict]] = []
-    monkeypatch.setattr(bus, "sync_redis", lambda: Store())
+    redis = Store()
+    monkeypatch.setattr(bus, "sync_redis", lambda: redis)
     monkeypatch.setattr(notify, "dispatch", notify.send)  # at once, not in the background
     monkeypatch.setattr(notify, "push", lambda endpoint, p256dh, auth, payload, ttl, topic=None: sent.append((endpoint.rsplit("/", 1)[1], payload)))
     return sent
