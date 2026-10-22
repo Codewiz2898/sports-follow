@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from sqlalchemy import delete, exists, func, null, or_, select
+from sqlalchemy import delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -647,8 +647,7 @@ def _again(source: VideoSource, ids: list[str], now: datetime) -> dict[str, int]
                 if (row.candidate or {}).get("paid") is not paid:
                     row.candidate = {**(row.candidate or {}), "paid": paid}
                     if paid:  # declared after it was judged: unserved until the judge says again (the rules: a promo)
-                        # SQL's NULL (null()), which the judge's queue reads (rank.judge): None would store JSON's null.
-                        row.verdict, row.judged_at, row.score = null(), None, None
+                        row.verdict, row.judged_at, row.score = None, None, None  # back in the judge's queue (rank.judge)
                 row.checked_at = now
         counts["read"] += len(part) - len(dead)
         counts["dropped"] += len(dead)

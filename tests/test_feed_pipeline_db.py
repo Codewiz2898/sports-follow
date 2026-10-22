@@ -835,3 +835,17 @@ def test_a_row_the_model_declines_or_answers_off_the_schema_for_waits_days_then_
     # A run that asks again whatever was said (curator rescore --rejudge) asks the held ones too.
     monkeypatch.setattr(curate, "judge_many", lambda cands: [curate.Verdict.model_validate(said()) for _ in list(cands)])
     assert rank.judge(NOW + timedelta(days=31), again=True)["judged"] == 3
+
+
+def test_a_verdict_taken_back_as_none_is_sqls_null_so_the_judge_asks_again(made, monkeypatch):
+    """BUG-287: a verdict set to None was stored as JSON's null, which isn't SQL's NULL, so the judge's queue (verdict
+    IS NULL) never saw the row again: it was neither served nor judged, for good."""
+    pid = asha()
+    rid = stored(pid, "takenback01", "Asha Verma's hundred", EDITS, 5, verdict=said())
+    with db_module.session() as s:
+        s.get_one(FeedCandidate, rid).verdict = None  # a writer taking the judge's word back
+    with db_module.session() as s:
+        assert s.scalar(select(FeedCandidate.id).where(FeedCandidate.verdict.is_(None))) == rid
+    monkeypatch.setattr(curate, "judge_many", lambda cands: [curate.Verdict.model_validate(said()) for _ in list(cands)])
+    assert rank.judge(NOW) == {"judged": 1, "unjudged": 0}
+
