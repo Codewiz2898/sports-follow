@@ -60,6 +60,8 @@ LIVE_TIERS = {"s": 3, "a": 2, "b": 1}
 # closed qualifier, a smaller league (EPL Masters), so a game with a series on isn't empty for days between
 # its big events. A LiveGame tier of 0, below every rated one. D and unranked never.
 STAND_IN_TIER = "c"
+# Pages of 100 series on now live_now reads: a busy day's first page can be all small series, a big one on the next.
+RUNNING_PAGES = 2
 # And whose series are among the big results and big games coming up (schedule): world events and top leagues.
 SCHEDULE_TIERS = ("s", "a")
 DOTA_WAIT = 6 * 3600  # how long after a Dota 2 series ends its match page waits for OpenDota to parse its maps
@@ -690,18 +692,29 @@ class PandascoreEsports(Adapter):
         return parsed >= len(finished)
 
     def live_now(self) -> list[LiveGame]:
-        """The big series on now in the plan's games (matches/running, one request): those of a tournament in
-        LIVE_TIERS, the biggest tier first and of equals in PandaScore's order; in a game with none of those on,
-        its STAND_IN_TIER series. Its teams, not its players: a match names no players, and the registry knows
-        the teams' pros."""
+        """The big series on now in the plan's games (matches/running, one request, or on a busy day up to
+        RUNNING_PAGES): those of a tournament in LIVE_TIERS, the biggest tier first and of equals in PandaScore's
+        order; in a game with none of those on, its STAND_IN_TIER series. Its teams, not its players: a match names
+        no players, and the registry knows the teams' pros."""
         games = game_ids(self._on())
         if not games:
             return []
         # Matches filter by game as "videogame" (ids or slugs); "videogame_id" is the teams' and players' name for it.
-        # It can't filter by tier, so the big series are picked from a page of PandaScore's most.
-        rows = pandascore.get_json("/matches/running", ttl=60, **{"filter[videogame]": games, "page[size]": pandascore.PAGE})
-        rows = rows if isinstance(rows, list) else []
-        by_id = {str(m.get("id")): m for m in rows}
+        # It can't filter by tier, so the big series are picked from pages of PandaScore's most: the next only after
+        # a full one, and a next one the budget can't spare leaves what the first had.
+        by_id: dict[str, dict[str, Any]] = {}
+        for page in range(1, RUNNING_PAGES + 1):
+            try:
+                got = pandascore.get_json("/matches/running", ttl=60, **{"filter[videogame]": games, "page[size]": pandascore.PAGE, **({"page[number]": page} if page > 1 else {})})
+            except AdapterError:
+                if page == 1:
+                    raise
+                break
+            got = got if isinstance(got, list) else []
+            by_id.update((str(m.get("id")), m) for m in got if m.get("id") and str(m.get("id")) not in by_id)  # a series that moved up a page is one
+            if len(got) < pandascore.PAGE:
+                break
+        rows = list(by_id.values())
         out, stand_ins = [], []
         for f in parse_fixtures(rows):
             m = by_id[f.source_id]

@@ -4,7 +4,7 @@ import's rows and search results. Against small made-up responses in PandaScore'
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import httpx
@@ -451,6 +451,33 @@ def test_live_now_lets_a_games_tier_c_series_stand_in_while_none_bigger_is_on_in
     assert [(g.source_id, g.sport, g.tier) for g in games] == [("4", "cs2", 2), ("1", "dota2", 0), ("5", "dota2", 0)]
     running[0]["tournament"]["tier"] = "b"  # a bigger Dota series comes on: the C's give way
     assert [(g.source_id, g.tier) for g in ps.PandascoreEsports().live_now()] == [("4", 2), ("1", 1)]
+
+
+def test_live_now_reads_on_past_a_full_page_on_a_busy_day(monkeypatch):
+    """BUG-208: /matches/running is a page of 100. On a busy day it can be full of small series, and a bigger one on
+    the next page wasn't seen: a C stood in for it. A full page is read on from (and only then), a series on both
+    pages is one, and a next page the budget can't spare leaves the first page's."""
+    def on(match_id: int, slug: str, tier: str) -> dict:
+        return {**LIVE, "id": match_id, "videogame": {"id": match_id, "slug": slug}, "tournament": {"id": match_id, "name": "Group stage", "tier": tier}}
+
+    pages = {1: [on(1, "cs-go", "c"), *(on(n, "cs-go", "d") for n in range(2, 101))], 2: [on(100, "cs-go", "d"), on(101, "cs-go", "s")]}
+    asked: list[int] = []
+
+    def get_json(path, ttl, **params):
+        asked.append(params.get("page[number]", 1))
+        if asked[-1] == 2 and down:
+            raise pandascore.RateLimited("the refresh lane's share is spent")
+        return pages[params.get("page[number]", 1)]
+
+    down = False
+    monkeypatch.setattr(pandascore, "get_json", get_json)
+    assert [(g.source_id, g.tier) for g in ps.PandascoreEsports().live_now()] == [("101", 3)] and asked == [1, 2]
+    down = True
+    assert [(g.source_id, g.tier) for g in ps.PandascoreEsports().live_now()] == [("1", 0)]  # the first page's stand-in
+    asked.clear()
+    pages[1] = pages[1][:50]
+    ps.PandascoreEsports().live_now()
+    assert asked == [1]  # a page that isn't full is the last
 
 
 def test_the_schedule_is_the_big_tournaments_series_between_two_days_each_with_its_tier(monkeypatch):
