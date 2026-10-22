@@ -2214,7 +2214,7 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
         .outerjoin(NotificationMute, and_(NotificationMute.fan_id == fan, NotificationMute.event_id == Moment.event_id))
         .outerjoin(taken, taken.id == Moment.corrects)
         .where(Moment.player_id.is_(None), game_level != "off", Moment.created_at >= MatchFollow.created_at, or_(MatchFollow.until.is_(None), Moment.created_at <= MatchFollow.until))
-        .where(teams.for_fan(fan))  # a result told from a side's is for that team's fans
+        .where(teams.for_fan(fan))  # a result told from a side's is for that team's fans, and once
         .where(Moment.created_at >= func.now() - timedelta(days=ACTIVITY_DAYS), or_(Moment.corrects.is_(None), taken.created_at >= MatchFollow.created_at))
         .order_by(Moment.id.desc())
         .limit(limit)
@@ -2224,9 +2224,10 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
         query = query.where(Moment.id < before)
         games = games.where(Moment.id < before)
         sided = sided.where(Moment.id < before)
+    # Each list's newest `limit` moments, each once (a game followed by itself and through a team is in two): the
+    # newest `limit` of them all are the page, and while it's full there may be more after its last.
     found = [(m, None, event, muted, sport) for m, event, muted, sport in [*db.execute(games), *db.execute(sided)]]
-    rows = sorted([(m, name, event, muted, None) for m, name, event, muted in db.execute(query)] + list({r[0].id: r for r in found}.values()), key=lambda r: -r[0].id)
-    rows = teams.listed(rows)[:limit]  # a game's result from their team's side, in place of the game's own
+    rows = sorted([(m, name, event, muted, None) for m, name, event, muted in db.execute(query)] + list({r[0].id: r for r in found}.values()), key=lambda r: -r[0].id)[:limit]
     # A game's moment that one of the fan's players' says too is listed once, as their player's; and so is a chess
     # board's that two of them say, once from each side, as the one's whose side tells it (alerts.voiced_by).
     planned = {i.id: i for i in notify.for_games(db, notify.on_boards(db, [r[0] for r in rows]))}

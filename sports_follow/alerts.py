@@ -90,7 +90,7 @@ class Item:
     # Whom it's about, by their ids in the game's source: a game's own moment's (Moment.about, "*" the whole
     # game), a player's own (their id there), so the two can be told to be the same moment.
     about: frozenset[str] = frozenset()
-    detail: str = ""  # what tells two moments of a kind apart (its key's: "goal@501", "50", "set2")
+    detail: str = ""  # what tells two moments of a kind apart (its key's: "goal@501", "50", "set2", a game's own "253802:50")
     # Its place among its game's moments of its kind about the same player (their 2nd goal; the game's 2nd goal
     # by them): the same play where one side names it by the source's id ("goal@501") and the other by count.
     nth: int = 0
@@ -177,10 +177,11 @@ def same(game: Item, player: Item, exact: bool = False) -> bool:
     player's line counted before the source's events had it, any card: "red1" and "red@601"), the same place
     among the player's of its kind (nth: their first, the game's first by them), found within PLAY_WINDOW of
     each other: a goal the source dropped and listed again, told again by the game, isn't taken for the player's
-    next one later on."""
+    next one later on. A game's own detail may lead with the player's id where the sport tells each player's
+    moments as theirs (Sport.game_during: "253802:out" is Kohli's "out")."""
     if not (game.event_id == player.event_id and game.kind == player.kind and ("*" in game.about or bool(game.about & player.about))):
         return False
-    if not exact or game.detail == player.detail:
+    if not exact or game.detail in (player.detail, *(f"{a}:{player.detail}" for a in game.about & player.about)):
         return True
     by_id = "@" in game.detail, "@" in player.detail
     near = abs(game.created_at - player.created_at) <= PLAY_WINDOW
