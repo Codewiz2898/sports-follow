@@ -13,7 +13,9 @@ export interface ChessState {
   turn?: 'white' | 'black'
   move?: number | null
   result?: string | null
-  match?: { games: number; score: string } | null  // knockout rounds: several games between the same two players
+  // Knockout rounds: several games between the same two players. Its score is from the side of the player whose
+  // fixture it was read under (the page's), and `ahead` the id of who leads it, if anyone does.
+  match?: { games: number; score: string; ahead?: string | null; first?: string } | null
   eval?: ChessEval | null  // only while a follower wants to hear about swings: the engine looks at no other game
 }
 export type ChessColour = 'white' | 'black'
@@ -124,9 +126,23 @@ export function gameMoves(pairs: string[]): string[] | null {
   return sans.length ? sans : null
 }
 
-/** The big line between the players: the match score in a knockout, the result once it's over, else the clock. */
-export function chessMiddle(state: ChessState, clock?: string | null): string | null | undefined {
-  return state.match ? `Match ${state.match.score}` : state.result ? state.result.replace('-', '–') : clock
+/** The big line between the players: in a knockout's mini-match, its score with the leader's points first, and while
+ * it's on (`on`) who that is ("Gukesh D leads 2–0"; once it's over the note under it names the winner), the same
+ * whichever player's page it is and however the board is turned; a game's result once it's over ("1–0", White's
+ * first), else the clock. */
+export function chessMiddle(state: ChessState, clock?: string | null, on = true): string | null | undefined {
+  const match = state.match
+  if (!match) return state.result ? state.result.replace('-', '–') : clock
+  const leader = [state.white, state.black].find((s) => s?.id && s.id === match.ahead)
+  const [mine = '', theirs = ''] = match.score.split('–')
+  if (!leader) return `Match\u00a0${match.score}`  // level (or read before it said who leads)
+  const [high, low] = points(mine) >= points(theirs) ? [mine, theirs] : [theirs, mine]
+  return on ? `${leader.name} leads\u00a0${high}–${low}` : `Match\u00a0${high}–${low}`  // a long name may wrap; the score stays whole
+}
+
+/** A match score's points ("2½" is 2.5). */
+function points(said: string): number {
+  return (Number.parseInt(said, 10) || 0) + (said.endsWith('½') ? 0.5 : 0)
 }
 
 export const chess: SportFacts = {

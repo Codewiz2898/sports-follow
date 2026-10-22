@@ -134,6 +134,23 @@ def test_tennis_and_chess_form():
     assert {s["label"]: s["value"] for s in chess} == {"W–D–L": "2–1–0", "Score": "5/8", "Score %": "62%"}
 
 
+def test_chess_form_counts_rounds_where_a_mini_match_is_one():
+    # BUG-143: "W–D–L 9–6–2 · Score 22½/32 · Last 17 games": the record counts a knockout's mini-match once, the score
+    # each of its games. Where one of the results is a mini-match, the note counts rounds, as the record does.
+    stats, note = form.summarize("Chess", [(result("Won 1–0"), None), (result("Drew ½–½"), None), (result("Won 3½–2½"), None)], [])
+    assert ({s["label"]: s["value"] for s in stats}["Score"], note) == ("5/8", "Last 3 rounds")
+    assert form.summarize("Chess", [(result("Won 1–0"), None), (result("Lost 0–1 on armageddon"), None)], [])[1] == "Last 2 games"
+    assert form.summarize("Chess", [(result("Won 3½–2½"), None)], [])[1] == "Last 1 round"
+
+
+def test_chess_form_scores_a_game_by_its_word_whichever_way_its_result_reads():
+    # BUG-144: a game's result is now the board's, White's points first ("Won 0–1": a win with Black), where it was the
+    # player's ("Lost 0–1" for a loss with Black, still stored so): a game's point is the word's, a match's the label's.
+    said = ["Won 0–1", "Won 0–1", "Lost 1–0", "Lost 0–1", "Won 1–0 on armageddon", "Lost ½–1½ on armageddon"]
+    chess, _ = form.summarize("Chess", [(result(r), None) for r in said], [])
+    assert {s["label"]: s["value"] for s in chess} == {"W–D–L": "3–0–3", "Score": "3½/7", "Score %": "50%"}
+
+
 def test_a_walkover_isnt_form():
     # BUG-040's follow-up: "Won (w/o)" wasn't played, as the season Win–loss already says.
     tennis, _ = form.summarize("Tennis", [(result("Won (w/o)"), line("Won by walkover")), (result("Won 6-4 6-3"), line("Won in 2 sets", Sets="2–0"))], [])

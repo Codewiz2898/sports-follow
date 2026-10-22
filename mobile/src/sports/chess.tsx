@@ -126,7 +126,7 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page, pal }: 
   // innermost Pressable answers a touch.
   const middle = (
     <View style={c.middle}>
-      <Text style={[num(compact ? 24 : 30), { color: pal.clock, flexShrink: 1 }]}>{chessMiddle(state, clock)}</Text>
+      <Text style={[num(compact ? 24 : 30), { color: pal.clock, flexShrink: 1 }]}>{chessMiddle(state, clock, live.is_live)}</Text>
       {ranks.length === 8 && !onPaper ? (
         <Pressable onPress={() => setSide(flip ? 'white' : 'black')} accessibilityRole="button" accessibilityLabel="Switch sides" hitSlop={4}
           style={({ pressed }) => [c.turn, { backgroundColor: pal.raised }, pressed && { opacity: 0.8 }]}>

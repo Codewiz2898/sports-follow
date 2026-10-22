@@ -220,6 +220,21 @@ def test_chess_fixture_and_result_label_from_each_side():
     assert lichess_chess.fmt_points(2.5) == "2½" and lichess_chess.fmt_points(0.5) == "½" and lichess_chess.fmt_points(0) == "0"
 
 
+def test_a_chess_games_result_is_the_boards_own_white_first():
+    # BUG-144: a game's result was put from the player's side, so Lazavik's loss with Black read "Lost 0–1", which in
+    # chess (White's points first) says Black won. A game's result is the board's own, from either side; a match's
+    # stays the player's, as colours change through it.
+    data = load("lichess/round-final")
+    now = datetime(2026, 9, 29, tzinfo=timezone.utc)
+    first, second = data["games"][0], data["games"][1]  # Carlsen won game 1 with White; game 2 was drawn
+    labels = lambda games: [lichess_chess.result_label(lichess_chess.fixture_for(data["tour"], data["round"], lichess_chess.games_of({"games": games}, fide), fide, now), [fide])  # noqa: E731
+                            for fide in (CARLSEN, LAZAVIK)]
+    assert labels([first]) == ["Won 1–0", "Lost 1–0"]
+    assert labels([{**first, "players": first["players"][::-1], "status": "0-1"}]) == ["Won 0–1", "Lost 0–1"]  # Carlsen's win with Black
+    assert labels([second]) == ["Drew ½–½", "Drew ½–½"]
+    assert labels([first, second]) == ["Won 1½–½", "Lost ½–1½"]  # a mini-match: the player's points first
+
+
 def test_chess_match_page_is_one_players_board_with_both_players():
     data = load("lichess/round-final")
     rnd = data["round"]["id"]
@@ -266,7 +281,7 @@ def test_an_armageddon_drawn_is_blacks_win(monkeypatch):
     assert lichess_chess.parse_board(scored, s, now).lines[s].headline == "Lost with White vs D Gukesh on armageddon"
     # Its tournament's PGN (a finished round's games, as a refresh reads them) names it in the game's event.
     pgn = ('[Event "Norway Chess 2027 Armageddon"]\n[White "Sindarov, Javokhir"]\n[Black "Gukesh, D"]\n[Result "1/2-1/2"]\n[WhiteFideId "14205483"]\n'
-           '[BlackFideId "46616543"]\n[GameURL "https://lichess.org/broadcast/t/r/AbCdEf12/game0002"]\n')
+           '[BlackFideId "46616543"]\n[GameURL "https://lichess.org/broadcast/t/r/AbCdEf12/game0002"]\n\n1. d4 Nf6 2. c4 e6 1/2-1/2\n')
     assert lichess_chess.match_score(lichess_chess.games_of({"games": lichess_chess.parse_pgn_rounds(pgn)["AbCdEf12"]}, g), g) == (1.0, 1)
     # Any other game drawn is half a point each, as before.
     assert lichess_chess.match_score(lichess_chess.games_of({**data, "games": [classical]}, g), g) == (0.5, 1)
@@ -775,6 +790,72 @@ def test_a_player_fide_names_without_a_comma_is_found_by_their_name_not_its_init
     assert len(tours) == lichess_chess.MAX_TOURS and tours[0]["id"] == "OwnEvent"
 
 
+def test_a_matchs_rounds_to_come_are_one_game_under_both_players(monkeypatch):
+    # BUG-215: a World Championship's games further off than 12 hours have no pairing yet, so no board: each player's
+    # fixture of one was a game of its own, and a fan of both saw each one twice in Coming up. In a match between two
+    # players, a round to come is their meeting: under both, it's the round's.
+    now = datetime.now(timezone.utc)
+    ms = lambda d: int(d.timestamp() * 1000)  # noqa: E731
+    gukesh = {"name": "Gukesh D", "fideId": 46616543, "rating": 2767, "title": "GM"}
+    sindarov = {"name": "Sindarov, Javokhir", "fideId": 14205483, "rating": 2726, "title": "GM"}
+    carlsen = {"name": "Carlsen, Magnus", "fideId": 1503014, "rating": 2837, "title": "GM"}
+    so = {"name": "So, Wesley", "fideId": 5202213, "rating": 2750, "title": "GM"}
+    tour = {"id": "WorldCh1", "name": "FIDE World Championship 2026", "info": {"players": "Gukesh, Sindarov", "format": "14-game match"},
+            "dates": [ms(now - timedelta(days=1)), ms(now + timedelta(days=20))]}
+    rounds = [{"id": "Game0001", "name": "Game 1", "finished": True, "startsAt": ms(now - timedelta(days=1))},
+              {"id": "Game0002", "name": "Game 2", "startsAt": ms(now + timedelta(hours=3))},
+              *({"id": f"Game000{n}", "name": f"Game {n}", "startsAt": ms(now + timedelta(days=n - 2, hours=3))} for n in (3, 4, 5))]
+    start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    pgn = ('[White "Gukesh D"]\n[Black "Sindarov, Javokhir"]\n[Result "1/2-1/2"]\n[WhiteFideId "46616543"]\n[BlackFideId "14205483"]\n'
+           '[GameURL "https://lichess.org/broadcast/t/r/Game0001/game1aaa"]\n\n1. d4 d5 1/2-1/2\n')
+    game2 = {"round": rounds[1], "tour": tour, "games": [{"id": "game2aaa", "players": [sindarov, gukesh], "fen": start, "status": "*"}]}
+
+    def get_json(url, ttl, text=False):
+        if "/broadcast/search?q=" in url:
+            return {"currentPageResults": [{"tour": tour}]}
+        if url.endswith("/broadcast/top"):
+            return {"active": [], "upcoming": []}
+        if url.endswith(f"/broadcast/{tour['id']}"):
+            return {"tour": tour, "rounds": rounds}
+        if url.endswith(f"/broadcast/{tour['id']}.pgn"):
+            return pgn
+        if url.endswith("/broadcast/-/-/Game0002"):
+            return game2
+        raise AdapterError(f"not faked: {url}")
+
+    monkeypatch.setattr(lichess_chess, "get_json", get_json)
+    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: Kept())
+    chess = lichess_chess.LichessChess()
+
+    def boards(*players) -> list[dict[str, str]]:
+        return [{f.source_id.split("-")[0]: f.board for f in chess.fixtures(lichess_chess.ref_for({"id": p["fideId"], "name": p["name"]}))} for p in players]
+
+    mine, theirs = boards(gukesh, sindarov)
+    assert mine == theirs and (mine["Game0001"], mine["Game0002"]) == ("game1aaa", "game2aaa")  # a board once it's paired
+    assert mine["Game0003"] == "round:Game0003" and len(set(mine.values())) == 5  # each game to come one of its own, the same under both
+    from sports_follow import structured  # Coming up's game: one for both players' fixtures of it
+
+    assert structured.board_key(f"lichess_chess:Game0003-{gukesh['fideId']}", mine["Game0003"]) == structured.board_key(f"lichess_chess:Game0003-{sindarov['fideId']}", theirs["Game0003"])
+    # Before its first game is paired too, as its format says it's a match of the two it names.
+    rounds[0].update(finished=False, startsAt=ms(now + timedelta(days=1)))
+    rounds[1]["startsAt"] = ms(now + timedelta(days=2))
+    pgn, game2["games"] = "", []
+    mine, theirs = boards(gukesh, sindarov)
+    assert mine == theirs and mine["Game0001"] == "round:Game0001"
+    # Not in a round robin, where a round's boards pair others: a round to come there is each player's own.
+    tour["info"] = {"players": "Gukesh, Sindarov, Carlsen, So", "format": "4-player double round robin"}
+    rounds[0].update(finished=True, startsAt=ms(now - timedelta(days=1)))
+    pgn = pgn + ('[White "Gukesh D"]\n[Black "Sindarov, Javokhir"]\n[Result "1-0"]\n[WhiteFideId "46616543"]\n[BlackFideId "14205483"]\n'
+                 '[GameURL "https://lichess.org/broadcast/t/r/Game0001/game1aaa"]\n\n1. d4 1-0\n\n'
+                 '[White "So, Wesley"]\n[Black "Carlsen, Magnus"]\n[Result "0-1"]\n[WhiteFideId "5202213"]\n[BlackFideId "1503014"]\n'
+                 '[GameURL "https://lichess.org/broadcast/t/r/Game0001/game1bbb"]\n\n1. e4 0-1\n')
+    assert {b["Game0003"] for b in boards(gukesh, sindarov, carlsen, so)} == {""}
+    # Nor where its players line names two of a bigger field (no "match" in its format), with no round read yet.
+    tour["info"] = {"players": "Gukesh, Sindarov", "format": "10-player round robin"}
+    rounds[0].update(finished=False, startsAt=ms(now + timedelta(days=1)))
+    assert {b["Game0001"] for b in boards(gukesh, sindarov)} == {""}
+
+
 def test_a_round_set_to_start_after_the_previous_one_is_read_and_said_to_be_next_once_that_one_is_on(monkeypatch):
     # BUG-211 (H17): a blitz day's round 7 has no start time ("startsAfterPrevious"): it was taken as unpaired, its
     # pairings never read, and its fixture no more than "scheduled" with no start, which nothing ever armed or polled.
@@ -840,6 +921,35 @@ def test_tournament_pgn_gives_every_round_in_one_read():
     assert len(final) == 8
     assert lichess_chess.match_score(final, CARLSEN) == (6.0, 8)  # same as the round JSON says
     assert final[0]["players"][0] == {"name": "Carlsen, Magnus", "fideId": 1503014, "rating": 2823, "title": "GM"}
+
+
+def test_an_unplayed_chess_game_isnt_a_game():
+    # BUG-214: the recorded Esports World Cup third-place match. Nakamura won it 3–1 after four games, and the
+    # broadcast lists a fifth, "1-0" with no move and Termination "Unplayed": it was scored as his win, "Won 4–1"
+    # (5 games), and in form.
+    with gzip.open(FIXTURES / "lichess/tour-ewc-playoffs.pgn.gz", "rt") as f:
+        games = lichess_chess.parse_pgn_rounds(f.read())["Py6uVlbB"]
+    nakamura, firouzja = "2016192", "12573981"
+    now = datetime(2026, 9, 29, tzinfo=timezone.utc)
+    rnd, tour = {"id": "Py6uVlbB", "name": "3rd Place Match", "finished": True}, {"name": "Esports World Cup 2026 | Playoffs"}
+    mine, theirs = (lichess_chess.fixture_for(tour, rnd, lichess_chess.games_of({"games": games}, fide), fide, now) for fide in (nakamura, firouzja))
+    assert (lichess_chess.result_label(mine, [nakamura]), lichess_chess.result_label(theirs, [firouzja])) == ("Won 3–1", "Lost 1–3")
+    assert mine.result["games"] == 4
+    # A game with a result and no move (a forfeit) wasn't played either, whatever its Termination says; one with a move was.
+    forfeit = ('[White "A"]\n[Black "B"]\n[Result "1-0"]\n[WhiteFideId "1"]\n[BlackFideId "2"]\n[Termination "forfeit"]\n'
+               '[GameURL "https://lichess.org/broadcast/t/r/abcdefgh/ijklmnop"]\n\n 1-0\n\n'
+               '[White "C"]\n[Black "D"]\n[Result "0-1"]\n[WhiteFideId "3"]\n[BlackFideId "4"]\n[GameURL "https://lichess.org/broadcast/t/r/abcdefgh/qrstuvwx"]\n\n'
+               '1. f3 { [%eval -0.5] } 1... e5 2. g4 Qh4# 0-1\n')
+    pgn_games = lichess_chess.parse_pgn_rounds(forfeit)["abcdefgh"]
+    assert [lichess_chess.games_of({"games": pgn_games}, fide) != [] for fide in "1234"] == [False, False, True, True]
+    # A round's JSON doesn't say how a game ended: one with a result and no move made (its board at the start) wasn't played.
+    start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    played = [{**g, "fen": "8/8/4k3/8/8/4K3/8/8 w - - 0 50", "lastMove": "e2e3"} for g in games if g["status"] != "1-0"]
+    data = {"round": {**rnd, "url": "https://lichess.org/broadcast/x/y/Py6uVlbB"}, "tour": tour,
+            "games": [*played, {"id": "Q3GR2FUs", "players": games[-1]["players"], "fen": start, "status": "1-0"}]}
+    snap = lichess_chess.parse_board(data, nakamura, now)
+    assert (snap.clock_label, snap.lines[nakamura].headline) == ("Hikaru Nakamura won the match (4 games)", "Won the match 3–1 vs Alireza Firouzja")
+    assert snap.state["match"]["games"] == 4 and snap.state["game_id"] == played[-1]["id"]  # the board shown is the last game played
 
 
 def test_tournament_pgn_reads_tags_with_escaped_quotes():

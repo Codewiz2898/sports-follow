@@ -49,9 +49,11 @@ function BoardFailed() {
   )
 }
 
-/** A line in phrases ("Move 25 · Black to play"), each kept whole: a narrow column breaks it at a dot. */
+/** A line in phrases ("Move 25 · Black to play"), each kept whole: a narrow column breaks it at a dot. A line of one
+ * phrase breaks at its spaces, as words do ("Javokhir Sindarov leads 2–0", its no-break space holding the score). */
 function phrases(text?: string | null) {
-  return text?.split(' · ').map((part, i) => <span key={i}>{i > 0 && ' · '}<span className="nowrap">{part}</span></span>)
+  const parts = text?.split(' · ')
+  return parts && parts.length > 1 ? parts.map((part, i) => <span key={i}>{i > 0 && ' · '}<span className="nowrap">{part}</span></span>) : text
 }
 
 // A game's moves, replayed (facts/chessLine.ts replayedMoves): each in SAN, numbered, with the position after it.
@@ -240,7 +242,7 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
   // live's small card: chess.css).
   const middle = (
     <span className="row">
-      <span className="num clock" style={{ fontSize: compact ? 24 : 30 }}>{phrases(chessMiddle(state, clock))}</span>
+      <span className="num clock" style={{ fontSize: compact ? 24 : 30 }}>{phrases(chessMiddle(state, clock, live.is_live))}</span>
       {ranks.length === 8 && (
         <button type="button" className="btn icon chess-turn over-link" aria-label="Switch sides" title="Switch sides" onClick={() => setSide(flip ? 'white' : 'black')}>
           <SwapIcon width={18} height={18} />
