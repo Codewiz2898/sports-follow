@@ -900,14 +900,14 @@ def test_names_keep_only_what_can_be_seen_and_one_with_nothing_to_see_is_refused
     """BUG-112: a NUL in a league's or a member's name was a 500 (Postgres keeps none), and a name of zero-width spaces
     alone was taken. What can't be seen is taken out now (not the joiners Indic scripts and emoji are drawn with), and
     a name with nothing left to see is refused, as an empty one is."""
-    gang = predictions.create(db, "acct-asha", "Der\x00by‮", "​Asha")
+    gang = predictions.create(db, "acct-asha", "Der\x00by\u202e", "\u200bAsha")
     predictions.join(db, "acct-ravi", gang.code, "Ra\x00vi\ud800")
-    predictions.join(db, "acct-sita", gang.code, "Sita 👩‍💻")
+    predictions.join(db, "acct-sita", gang.code, "Sita 👩\u200d💻")
     db.commit()
     db.expire_all()
     assert db.get_one(League, gang.id).name == "Derby"
-    assert dict(db.execute(select(LeagueMember.fan_id, LeagueMember.name)).all()) == {"acct-asha": "Asha", "acct-ravi": "Ravi", "acct-sita": "Sita 👩‍💻"}
-    for blank in ("​​", "\x00", "‍", " ⁠\t"):
+    assert dict(db.execute(select(LeagueMember.fan_id, LeagueMember.name)).all()) == {"acct-asha": "Asha", "acct-ravi": "Ravi", "acct-sita": "Sita 👩\u200d💻"}
+    for blank in ("\u200b\u200b", "\x00", "\u200d", " \u2060\t"):
         with pytest.raises(predictions.Refused) as nothing:
             predictions.join(db, "acct-dev", gang.code, blank)
         assert (nothing.value.status, nothing.value.message) == (400, "Give your name.")
@@ -920,7 +920,7 @@ def test_two_members_of_a_league_cant_go_by_one_name(db, redis):
     a member may keep theirs, or change it to one nobody else has."""
     gang = predictions.create(db, "acct-asha", "Derby", "Asha")
     db.commit()
-    for taken in ("Asha", " asha ", "ASHA​"):
+    for taken in ("Asha", " asha ", "ASHA\u200b"):
         with pytest.raises(predictions.Refused) as clash:
             predictions.join(db, "acct-ravi", gang.code, taken)
         assert clash.value.status == 409

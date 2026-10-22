@@ -1075,15 +1075,22 @@ async def campaign_picture(slug: str) -> Response:
 
 # ---------------------------------------------------------------- where fans come from
 
-TAG = re.compile(r"[A-Za-z0-9._~-]{1,60}")  # s=share, utm_source=whatsapp: a link's tags, as a post writes them
+TAG_MOST = 60  # a link's tag, in characters (FanSource's columns)
+
+
+def _tag(value: Any) -> str | None:
+    """A link's tag as a post writes it (s=share, utm_source=whatsapp, utm_campaign=Gukesh v Sindarov): any printable
+    text, its spaces trimmed and made single, up to TAG_MOST characters; None for anything else."""
+    tag = " ".join(value.split()) if isinstance(value, str) else ""
+    return tag if 0 < len(tag) <= TAG_MOST and tag.isprintable() else None
 
 
 @app.post("/api/me/source")
 def visit_source(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
     """Where this fan came from: the tags on the first link they opened (s=, utm_source, utm_medium,
     utm_campaign) and its page, kept once (FanSource); a later link's are not. A tag in any other shape is
-    left out, and a visit with none isn't kept."""
-    tags = {key: value for key in ("s", "utm_source", "utm_medium", "utm_campaign") if isinstance(value := body.get(key), str) and TAG.fullmatch(value)}
+    left out (_tag), and a visit with none isn't kept."""
+    tags = {key: tag for key in ("s", "utm_source", "utm_medium", "utm_campaign") if (tag := _tag(body.get(key)))}
     landing = body.get("path")
     if not tags or not isinstance(landing, str) or not landing.startswith("/") or len(landing) > 200 or not landing.isprintable():
         return {"ok": True}

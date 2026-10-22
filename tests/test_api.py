@@ -1804,13 +1804,28 @@ def test_a_fans_first_links_tags_are_kept_once_and_only_in_their_shape(api):
     def kept() -> list[dict]:
         return [{k: _param(s, k) for k in ("fan_id", "tag", "utm_source", "utm_medium", "utm_campaign", "landing")} for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source"]
 
-    assert api.call("POST", "/api/me/source", fan="fan", body={"utm_source": "whatsapp", "utm_campaign": "gukesh-launch", "s": "<b>", "path": "/gukesh"}).json() == {"ok": True}
+    assert api.call("POST", "/api/me/source", fan="fan", body={"utm_source": "whatsapp", "utm_campaign": "gukesh-launch", "s": "\x00", "path": "/gukesh"}).json() == {"ok": True}
     assert kept() == [{"fan_id": "fan", "tag": None, "utm_source": "whatsapp", "utm_medium": None, "utm_campaign": "gukesh-launch", "landing": "/gukesh"}]
     insert_ = next(s for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source")
     assert "ON CONFLICT (fan_id) DO NOTHING" in str(insert_.compile(dialect=postgresql.dialect()))  # the first link's, never a later one's
     for body in ({"path": "/gukesh"}, {"s": "x" * 61, "path": "/"}, {"s": "share", "path": "gukesh"}, {"s": "share", "path": "/" + "x" * 200}, {"s": "share"}):
         assert api.call("POST", "/api/me/source", fan="fan", body=body).json() == {"ok": True}
     assert len(kept()) == 1
+
+
+def _sources(api: Api) -> list[dict]:
+    """The rows /api/me/source wrote: who, and where from."""
+    return [{k: _param(s, k) for k in ("fan_id", "tag", "utm_source", "utm_medium", "utm_campaign", "landing")} for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source"]
+
+
+def test_a_links_tags_are_kept_as_typed_spaces_and_all(api):
+    """BUG-194: a tag with a space or a "|" ("Gukesh v Sindarov", "wcc|day1") was dropped, and a visit tagged only so
+    wasn't kept at all. Any printable text is a tag now, its spaces trimmed and made single, up to 60 characters."""
+    api.call("POST", "/api/me/source", fan="fan-1", body={"utm_source": "instagram", "utm_campaign": "Gukesh  v Sindarov", "path": "/h13-wcc"})
+    api.call("POST", "/api/me/source", fan="fan-2", body={"utm_campaign": " wcc|day1 ", "path": "/"})
+    api.call("POST", "/api/me/source", fan="fan-3", body={"utm_campaign": "a\u202eb", "utm_medium": "x" * 61, "path": "/"})  # nothing in a tag's shape
+    assert _sources(api) == [{"fan_id": "fan-1", "tag": None, "utm_source": "instagram", "utm_medium": None, "utm_campaign": "Gukesh v Sindarov", "landing": "/h13-wcc"},
+                             {"fan_id": "fan-2", "tag": None, "utm_source": None, "utm_medium": None, "utm_campaign": "wcc|day1", "landing": "/"}]
 
 
 def test_league_invites_are_looked_up_so_many_times_an_address_and_opened_only_by_a_fan_with_their_cookie(api, monkeypatch):
