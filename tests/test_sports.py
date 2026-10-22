@@ -152,6 +152,33 @@ def test_no_shared_module_branches_on_a_sport():
     assert not found, "\n".join(found)
 
 
+def _kinds(*paths: Path) -> set[str]:
+    """The kinds of moment these modules' code finds (Found("goal", …)) or tells apart by name (f.kind == "correction")."""
+    out = set()
+    for path in paths:
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", "")) == "Found" and node.args and isinstance(node.args[0], ast.Constant):
+                out.add(node.args[0].value)
+            elif isinstance(node, ast.Compare) and isinstance(node.left, ast.Attribute) and node.left.attr == "kind":
+                out |= {c.value for c in node.comparators if isinstance(c, ast.Constant) and isinstance(c.value, str)}
+    return out
+
+
+def test_a_sports_own_moments_and_their_priorities_are_the_sports():
+    # BUG-225: moments.py kept every sport's moment vocabulary (a goal's priority, a chicken dinner's, a red card's), so
+    # a sport's new moment, or a sport taken out, meant a change in shared code. Shared code keeps the kinds every sport
+    # has (a start, a result, a line-up, the news, a correction); a kind only a sport's module finds is that sport's,
+    # with its priority (Sport.priorities).
+    shared = _kinds(*PACKAGE.glob("*.py"), PACKAGE / "sports" / "base.py")
+    assert set(moments.PRIORITY) <= shared, f"shared code keeps a sport's moments: {sorted(set(moments.PRIORITY) - shared)}"
+    for sport in sports.ALL:
+        own = _kinds(PACKAGE / "sports" / f"{type(sport).__module__.rsplit('.', 1)[1]}.py") - shared
+        assert own and own <= set(sport.priorities), f"{sport.key}: {sorted(own - set(sport.priorities))} have no priority of the sport's"
+    # And a moment takes it: its rule's own, else its sport's for its kind, else every sport's.
+    assert moments.priority(sports.of("football"), "yellow") == 20 and moments.priority(sports.of("cricket"), "final") == moments.PRIORITY["final"]
+    assert moments.priority(sports.OTHER, "yellow") == 50  # a sport no module knows has no yellow card of its own
+
+
 # ---------------------------------------------------------------- the app takes the sports from the server
 
 

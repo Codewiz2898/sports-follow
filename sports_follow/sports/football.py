@@ -245,6 +245,7 @@ class Football(Sport):
         "more": ("yellow cards", "yellow cards"),
     }
     kind_words = {"goal": "Goal", "red": "Red card"}
+    priorities = {"goal": 85, "assist": 65, "red": 80, "yellow": 20, "on": 30}
 
     def matchup(self, state: dict[str, Any]) -> str:
         names = [(state.get(side) or {}).get("name") for side in ("home", "away")]

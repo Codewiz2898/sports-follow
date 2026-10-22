@@ -17,8 +17,9 @@ however many polls see the same fifty, fans hear about it once. Its level decide
 Fans choose per player (follow.alert_rules["level"]): everything, key moments (the default),
 results only, or off.
 
-What counts as a moment in each sport is that sport's (sports/: start, final, during, left_out); this
-module runs them in order and keeps what every sport shares: line-ups, levels, priorities.
+What counts as a moment in each sport is that sport's (sports/: start, final, during, left_out), and so
+is what its own kinds of moment are worth (Sport.priorities); this module runs them in order and keeps what
+every sport shares: line-ups, levels, the priorities of the kinds every sport has.
 
 A source can take a moment back: VAR rules out a goal fans were told about. The sport says so
 (taken_back) with a correction, which replaces the game's notification for the fans who were sent the
@@ -35,19 +36,15 @@ from __future__ import annotations
 from . import sports
 from .sports.base import Found, Seen, crossed, number, stat
 
-__all__ = ["DEFAULT_LEVEL", "LEVELS", "Found", "Seen", "crossed", "detect", "news_kind", "number", "stat", "wanted"]
+__all__ = ["DEFAULT_LEVEL", "LEVELS", "Found", "Seen", "crossed", "detect", "news_kind", "number", "priority", "stat", "wanted"]
 
 LEVELS = ("everything", "key", "results", "off")
 DEFAULT_LEVEL = "key"
 NEWS_KINDS = {"injury": "key", "transfer": "key", "retirement": "key", "milestone": "minor"}
 NEWS_PRIORITY = {"injury": 75, "transfer": 70, "retirement": 90, "milestone": 40}
-# A moment's priority unless its rule sets one (a hundred over a fifty, a late equaliser over a goal).
-PRIORITY = {
-    "final": 80, "start": 40, "lineup": 50, "goal": 85, "assist": 65, "red": 80, "yellow": 20, "on": 30,
-    "fifty": 70, "hundred": 90, "out": 60, "wickets": 70, "points": 30, "double": 30, "triple": 85,
-    "set": 30, "map": 30, "kda": 30, "game": 30, "dinner": 90, "lead": 75, "upset": 90, "swing": 30, "news": 60,
-    "correction": 85,
-}
+# The priority of a moment of the kinds every sport has, unless its rule sets one; a sport's own kinds' are its own
+# (Sport.priorities: a hundred over a fifty, a goal over a yellow card).
+PRIORITY = {"final": 80, "start": 40, "lineup": 50, "news": 60, "correction": 85}
 
 
 def wanted(level: str, moment_level: str, kind: str) -> bool:
@@ -59,6 +56,12 @@ def wanted(level: str, moment_level: str, kind: str) -> bool:
     if level == "off":
         return False
     return moment_level == "key"
+
+
+def priority(rules: sports.Sport, kind: str) -> int:
+    """A moment's priority where its rule sets none: its sport's for a kind of its own (Sport.priorities), else the
+    one every sport has for it (PRIORITY), else 50."""
+    return rules.priorities.get(kind, PRIORITY.get(kind, 50))
 
 
 def news_kind(value: str | None) -> str | None:
@@ -94,7 +97,7 @@ def detect(sport: str, who: str, athlete_id: str, before: Seen | None, now: Seen
         found += rules.during(who, athlete_id, before, now)
         found += rules.taken_back(who, athlete_id, before, now, told or [])
     for f in found:
-        f.priority = f.priority or PRIORITY.get(f.kind, 50)
+        f.priority = f.priority or priority(rules, f.kind)
     return found
 
 

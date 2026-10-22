@@ -1385,7 +1385,7 @@ def _game_moments(db: Session, event: Event, adapter: Adapter, snap: Snapshot, r
     if before is None and old_news:
         found = []  # a first look at a game long over: its result is old news
     for f in found:
-        f.priority = f.priority or moments.PRIORITY.get(f.kind, 50)
+        f.priority = f.priority or moments.priority(rules, f.kind)
     gap = max(POLL_GAP, 3 * int((event.live_binding or {}).get("cadence") or 10))
     value = json.dumps({k: getattr(now, k) for k in ("status", "state", "score", "clock", "events", "lines")}, default=str)
     return notify.record_game(db, event.id, found, f"/match/{match_path(event.key)}"), (key, value, gap)

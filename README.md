@@ -886,7 +886,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Wikidata (`profile_nation`, `profile_role` and the awards worth naming, `honours`: wiki.py), its moments (start, result,
   line-up, what happens during a game, whether a player's first line in a game polled all along is news
   (`first_line_is_news`: a cricketer's first ball) and whether a result is still to come (`result_pending`: cricket's
-  summary a poll behind its "Result"), what a source takes back (`taken_back`), and which of them are a
+  summary a poll behind its "Result"), what a source takes back (`taken_back`), what its own kinds of moment are
+  worth (`priorities`: a goal 85, a yellow card 20; the kinds every sport has are `moments.PRIORITY`'s), and which of them are a
   player's highs on Today's "This week" and in what words (`poster`: a "Five-for"), and the same off a
   finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), how big a game
   its sources list league-wide is and what its card says (`notable`: a final, "1st v 3rd", a last-over
@@ -927,7 +928,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   asks the sport (`sports.get(name)`), and a sport no module knows (golf, from an AI-built page) gets the
   rules every sport shares. The one line is its place in `sports.ALL`, the order the app lists them;
   its sources each declare the `sports` they serve. `SPORTS_FOLLOW_SPORTS` turns sports off without a
-  code change, and the admin panel without a restart. `tests/test_sports.py` fails if shared code names a sport.
+  code change, and the admin panel without a restart. `tests/test_sports.py` fails if shared code names a sport, or
+  keeps a kind of moment only a sport finds.
   Its look in the web app is `web/src/sports/<sport>.tsx` and its facts, `web/src/sports/facts/<sport>.ts`, and
   whatever else of its own sits beside them under its name: chess's analysis board (`chessAnalysis.tsx`,
   `chessEngine.ts`, `facts/chessLine.ts`, `facts/chessEngineCore.ts`) and the engine it runs in the fan's browser

@@ -252,6 +252,7 @@ class Esports(Sport):
         "more": ("", ""),
     }
     kind_words = {"map": "Map"}
+    priorities = {"map": 30, "kda": 30, "game": 30, "dinner": 90, "lead": 75}
     stats_title = "Overview"
     keeps_names = True
 

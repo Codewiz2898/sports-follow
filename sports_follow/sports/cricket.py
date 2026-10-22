@@ -94,7 +94,7 @@ def batting_bowling(lines: list[dict[str, Any]]) -> list[dict[str, str]]:
 _RUNS = {50: "Fifty", 100: "Hundred", 200: "Double hundred", 300: "Triple hundred"}
 _HAUL = {3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten"}
 MARKS = (50, 100, 150, 200, 250, 300)  # the batting milestones told
-# Their moments' priorities: a fifty's and a hundred's are their kinds' (moments.PRIORITY), 150 on above both.
+# Their moments' priorities: a fifty's and a hundred's are their kinds' (Cricket.priorities), 150 on above both.
 _RUNS_PRIORITY = {50: 70, 100: 90}
 
 
@@ -204,6 +204,7 @@ class Cricket(Sport):
         "more": ("", ""),
     }
     kind_words = {"out": "Out"}
+    priorities = {"fifty": 70, "hundred": 90, "out": 60, "wickets": 70}
     stats_title = "Overview"
 
     def lineup_title(self, who: str, starting: bool) -> str:
