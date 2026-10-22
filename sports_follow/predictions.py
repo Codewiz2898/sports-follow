@@ -333,7 +333,8 @@ def settle(db: Session, rows: list[Question], rules: sports.Sport, status: str |
 
 def score(db: Session, q: Question, answer: str, now: datetime) -> None:
     """Settle a question with its answer: each pick scored by how many of those that count made it (points), its
-    own too if it doesn't count; or, voided, none."""
+    own too if it doesn't count, or by all its picks where none count (each a fan's a request made up: BUG-314, a
+    right one scored 0); or, voided, none."""
     q.answer, q.settled_at, q.closed_at = answer, now, q.closed_at or now
     q.told_at = None  # settled again (a void a winner came for, a corrected result): its fans are told again
     if answer == sports.VOID:
@@ -341,7 +342,7 @@ def score(db: Session, q: Question, answer: str, now: datetime) -> None:
         db.execute(update(Pick).where(Pick.question_id == q.id).values(points=None))
         return
     q.status = SETTLED
-    counts = _counts(db, [q.id]).get(q.id, {})
+    counts = _counts(db, [q.id]).get(q.id) or _counts(db, [q.id], every=True).get(q.id, {})
     worth = points(counts.get(answer, 0), sum(counts.values()))
     db.execute(update(Pick).where(Pick.question_id == q.id).values(points=case((Pick.option == answer, worth), else_=0)))
 
@@ -476,10 +477,10 @@ def _to_come(db: Session, q: Question) -> bool:
     return all(s is None or s in TO_COME for s in (status, polled, read))
 
 
-def _counts(db: Session, ids: list[int], unleagued: bool = False) -> dict[int, dict[str, int]]:
+def _counts(db: Session, ids: list[int], unleagued: bool = False, every: bool = False) -> dict[int, dict[str, int]]:
     """How many picks that count (Pick.counted) each answer of these questions has; `unleagued`, only those of fans
-    in no league (an open question's split: _refresh)."""
-    where = [Pick.question_id.in_(ids), Pick.counted]
+    in no league (an open question's split: _refresh); `every`, those that don't count too (score)."""
+    where = [Pick.question_id.in_(ids)] if every else [Pick.question_id.in_(ids), Pick.counted]
     if unleagued:
         where.append(~exists().where(LeagueMember.fan_id == Pick.fan_id))
     out: dict[int, dict[str, int]] = {}
@@ -559,8 +560,8 @@ def shown(db: Session, fan: str | None, rows: list[Question], now: datetime) -> 
                         for o in q.options or []],
             "mine": own[0] if own else None,
             "points": own[1] if own else None,
-            # What their pick would score were it right now, while it's still to be settled.
-            "worth": points(c.get(own[0], 0), total) if own and q.status in UNSETTLED and split is not None else None,
+            # What their pick would score were it right now, while it's still to be settled; none while no pick counts.
+            "worth": points(c.get(own[0], 0), total) if own and q.status in UNSETTLED and split is not None and total else None,
         })
     return out
 
