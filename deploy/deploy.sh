@@ -69,7 +69,7 @@ do_deploy() {
         say "there's no image of ${was:0:7} here, so sports-follow:latest is still ${sha:0:7}'s: deploy again before recreating any container"
       fi
     fi
-    die "the migrations failed, so nothing was replaced${was:+ (${was:0:7} is still live)}"
+    die "the migrations failed, so nothing was replaced${was:+ (${was:0:7} is still live)}; after a lock timeout, deploy again once the job holding the table is done"
   fi
   # From here a rollback goes back to what was live before this deploy, whatever happens next.
   if [ -n "$was" ] && [ "$was" != "$sha" ]; then echo "$was" >"$STATE/previous"; fi

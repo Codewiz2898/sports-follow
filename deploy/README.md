@@ -482,7 +482,10 @@ new worker starts them again as soon as it's up.
   server's checkout goes back to its commit. Each migration commits on its own (`migrations/env.py`), so
   when the second of three fails, the first stays applied: the old code keeps running on it, which is why
   a migration only adds (a column, a table, an index) and a later release takes away. Deploy the fix, which
-  carries on from there; or undo the applied one by hand (`c run --rm migrate alembic downgrade -1`).
+  carries on from there; or undo the applied one by hand (`c run --rm migrate alembic downgrade -1`). A
+  migration gives up after waiting 5 seconds for a lock (`SPORTS_FOLLOW_MIGRATION_LOCK_TIMEOUT`), so an
+  ALTER never holds a table's queries up longer, nor a `CONCURRENTLY` build the deploy: "lock timeout" means
+  a long job held the table. Deploy again once it's done; a build that stopped part way is made again.
 - **The new version doesn't get healthy, or Caddy refuses its Caddyfile:** the previous one comes back
   by itself, with its Caddyfile and backup script, and the deploy fails. Caddy keeps serving its old
   config until then. If the previous one doesn't get healthy in time either, it still runs, and

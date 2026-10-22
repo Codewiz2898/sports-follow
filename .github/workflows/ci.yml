@@ -54,6 +54,9 @@ jobs:
           test "$(echo "$heads" | wc -l)" -eq 1
       - name: Migrate an empty database
         run: alembic upgrade head
+      # Every downgrade too (a fix undoes a migration by hand with one), then up again (BUG-224).
+      - name: Every migration down and back up
+        run: alembic downgrade base && alembic upgrade head
       - name: Models match the migrations
         run: alembic check
       # Includes tests/test_web_names.py: web/src names sports and sources no more than it did. Four workers
