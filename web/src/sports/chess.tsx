@@ -3,7 +3,7 @@ import { ErrorBoundary } from '../components/ErrorBoundary'
 import { SwapIcon } from '../components/Icons'
 import { usePwa } from '../pwa'
 import './chess.css'
-import type { Opening } from './facts/chessLine'
+import type { Opening, replayedMoves } from './facts/chessLine'
 import { chess as facts, chessMiddle, evalDepth, evalScore, evalWords, followedSide, movesAbout, PIECES, position, standardCastling, whiteShare, type ChessColour, type ChessEval, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
 import type { BoardProps, SportView } from './view'
 
@@ -52,7 +52,7 @@ function phrases(text?: string | null) {
 }
 
 // A game's moves, replayed (facts/chessLine.ts replayedMoves): each in SAN, numbered.
-type Replayed = { san: string; number: string | null; said: string }[]
+type Replayed = NonNullable<ReturnType<typeof replayedMoves>>
 
 /** A game's moves on its match page, replayed as chess (replayedMoves, the Android app's too): that takes chess.js,
  * which comes in the analysis board's own chunk of the rules (facts/chessLine.ts). Null until it has, and where

@@ -17,19 +17,19 @@ export function Page({ children, onRefresh, refreshing, top = true, bar = colour
   useEffect(() => { scroll.current?.scrollTo({ y: 0, animated: false }) }, [])
   return (
     <View style={s.page}>
-        <ScrollView
-          ref={scroll}
-          style={s.page}
-          contentContainerStyle={[s.content, { paddingTop: top ? insets.top + 20 : 0, paddingBottom: 120 + insets.bottom }]}
-          keyboardShouldPersistTaps="handled"
-          refreshControl={onRefresh ? <RefreshControl refreshing={Boolean(refreshing)} onRefresh={onRefresh} /> : undefined}
-        >
-          {notice ? <View style={top ? undefined : { paddingTop: insets.top + 16 }}><AccountNotice /></View> : null}
-          {children}
-        </ScrollView>
-        {/* The status bar's own strip, of the page's ground (a band's colour on a player's page), over what scrolls under it. */}
-        <View pointerEvents="none" style={[s.bar, { height: insets.top, backgroundColor: bar }]} />
-      </View>
+      <ScrollView
+        ref={scroll}
+        style={s.page}
+        contentContainerStyle={[s.content, { paddingTop: top ? insets.top + 20 : 0, paddingBottom: 120 + insets.bottom }]}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={onRefresh ? <RefreshControl refreshing={Boolean(refreshing)} onRefresh={onRefresh} /> : undefined}
+      >
+        {notice ? <View style={top ? undefined : { paddingTop: insets.top + 16 }}><AccountNotice /></View> : null}
+        {children}
+      </ScrollView>
+      {/* The status bar's own strip, of the page's ground (a band's colour on a player's page), over what scrolls under it. */}
+      <View pointerEvents="none" style={[s.bar, { height: insets.top, backgroundColor: bar }]} />
+    </View>
   )
 }
 
