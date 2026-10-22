@@ -151,7 +151,9 @@ def test_a_chess_board_to_come_is_one_game_under_each_players_fixture(monkeypatc
         lives.append(c["live"]["game_key"])
     assert [u["event_id"] for u in coming] == [11, 12]  # an event of each player's
     assert [u["game_key"] for u in coming] == lives == ["lichess_chess:mJnv1YBU"] * 2
-    assert [u["game_key"] for u in unpaired] == [None, None]
+    # A round not paired yet is the same game under both too, as every round read paired the two of them: a match's
+    # (BUG-215; a round robin's stays each player's own: test_new_adapters).
+    assert [u["game_key"] for u in unpaired] == ["lichess_chess:round:Rnd2Late"] * 2
     # A knockout round's mini-match too: its fixture says the board parse_board shows, the last game once it's over.
     final = lichess_chess.fixture_for(data["tour"], data["round"], lichess_chess.games_of(data, CARLSEN), CARLSEN, NOW)
     assert structured.board_key(f"lichess_chess:{final.source_id}", final.board) == structured.game_key(f"lichess_chess:{final.source_id}", lichess_chess.parse_board(data, CARLSEN, NOW).state)
