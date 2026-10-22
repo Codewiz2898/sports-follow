@@ -477,7 +477,7 @@ def test_the_match_page_lists_its_questions_and_the_pick_route_refuses_what_it_s
     assert missing.value.status_code == 404
     monkeypatch.setattr(server, "PICKS_PER_ADDRESS", 1)  # one address's picks an hour
     with pytest.raises(server.HTTPException) as flooded:
-        asyncio.run(server.make_pick(request(client="8.8.4.4"), q["id"], {"option": "draw"}, "other")) and asyncio.run(server.make_pick(request(client="8.8.4.4"), q["id"], {"option": "draw"}, "third"))
+        asyncio.run(server.make_pick(request(client="8.8.4.4"), q["id"], {"option": "draw"}, "other", None)) and asyncio.run(server.make_pick(request(client="8.8.4.4"), q["id"], {"option": "draw"}, "third", None))
     assert flooded.value.status_code == 429
     # Its link previews it, on its own game's page only.
     preview = asyncio.run(server._page_preview(f"match/lichess_chess/{address}", request(f"q={q['id']}&s=share")))  # pyright: ignore[reportPrivateUsage]
@@ -486,6 +486,34 @@ def test_the_match_page_lists_its_questions_and_the_pick_route_refuses_what_it_s
 
 
 
+
+
+def test_fans_signed_in_behind_one_network_address_dont_use_up_each_others_picks(db, redis, monkeypatch):
+    """BUG-114: a phone network can put many fans behind one address (carrier NAT), and an address's picks an hour
+    (PICKS_PER_ADDRESS) were everyone's behind it, signed in or not: on a big game they could run out. A signed-in
+    fan's picks count against their account's own hour now (accounts are made only so fast); fans without one still
+    share their address's."""
+    monkeypatch.setitem(server.state, "redis", Counts())
+    monkeypatch.setattr(server, "PICKS_PER_ADDRESS", 1)
+    monkeypatch.setattr(server, "PICKS_PER_ACCOUNT", 2, raising=False)
+    chess_board(db, soon())
+    poll(1, board(status="*"))
+    q = db.scalars(select(Question)).one()
+
+    def pick(fan: str, account: int | None = None) -> None:
+        signed = accounts.Signed(account_id=account, fan_id=fan, session_id=account) if account else None
+        asyncio.run(server.make_pick(request(client="49.36.0.1"), q.id, {"option": CARLSEN}, fan, signed))
+
+    for n, fan in enumerate(("acct-asha", "acct-ravi", "acct-meera"), start=1):
+        pick(fan, n)
+    pick("phone-1")  # the address's one an hour, for fans without an account
+    with pytest.raises(server.HTTPException) as shared:
+        pick("phone-2")
+    assert shared.value.status_code == 429
+    pick("acct-asha", 1)  # her second: an account's own hour
+    with pytest.raises(server.HTTPException) as hers:
+        pick("acct-asha", 1)
+    assert hers.value.status_code == 429
 
 
 def test_a_series_asked_days_ahead_keeps_its_later_maps_till_it_plays(db, redis):

@@ -698,8 +698,9 @@ LEAGUES_MADE_PER_HOUR = 5  # leagues one fan makes in an hour
 INVITES_PER_HOUR = 60  # invite pages one fan opens, and leagues they join, in an hour: a code can't be guessed by trying them all
 INVITES_PER_ADDRESS = 300  # invite pages opened from one client address in an hour: a request with no cookie is a new fan each time
 INVITES_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
-PICKS_PER_ADDRESS = 300  # picks from one client address in an hour: new fans from one place can't stuff a split
+PICKS_PER_ADDRESS = 300  # picks from one client address in an hour, by fans without an account: new fans from one place can't stuff a split
 PICKS_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
+PICKS_PER_ACCOUNT = 300  # a signed-in fan's in an hour, wherever from: fans behind one carrier address don't use up each other's
 # Fans without an account whose picks on one question count (Pick.counted), from one client address: any device gets
 # a fan cookie (spa), so a split is stuffed only from as many addresses as the picks it would add. A home or a phone
 # network sharing one address has this many fans' calls in a game's split; the rest are theirs, and scored.
@@ -717,7 +718,8 @@ async def make_pick(request: Request, question_id: RowId, body: dict = Body(...)
                     signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
     """Call a game (or a map): this fan's answer to one of its questions, or a new one in place of theirs, while
     it's open. No account needed. Answers with the question as the app shows it, how fans split now included.
-    A question closed is a 409, an answer it doesn't offer a 400; PICKS_PER_ADDRESS an hour from one address.
+    A question closed is a 409, an answer it doesn't offer a 400; PICKS_PER_ADDRESS an hour from one address, or for
+    a signed-in fan PICKS_PER_ACCOUNT an hour of their own (a phone network may put many fans behind one address).
     It counts in the split and in what right picks score from an account, or a fan whose cookie came with it, up to
     COUNTED_PER_ADDRESS of those on a question from one address (_counted_here): a fan this request made up (no
     cookie), or past that, has their pick, but it moves nobody else's numbers (predictions.pick)."""
@@ -725,8 +727,12 @@ async def make_pick(request: Request, question_id: RowId, body: dict = Body(...)
     if not isinstance(option, str) or not 0 < len(option) <= 64:
         raise HTTPException(400, "option is one of the question's answers")
     address = client_address(request)
-    await _take(f"picks:{address or 'unknown'}:{int(time.time() // 3600)}", PICKS_PER_ADDRESS if address else PICKS_UNKNOWN_ADDRESS, 7200,
-                "That's a lot of picks from your network. Try again in a while.")
+    hour = int(time.time() // 3600)
+    if signed is not None:
+        await _take(f"picks:fan:{fan}:{hour}", PICKS_PER_ACCOUNT, 7200, "That's a lot of picks for one hour. Try again in a while.")
+    else:
+        await _take(f"picks:{address or 'unknown'}:{hour}", PICKS_PER_ADDRESS if address else PICKS_UNKNOWN_ADDRESS, 7200,
+                    "That's a lot of picks from your network. Try again in a while.")
 
     counted = signed is not None or (_cookie_fan(request) == fan and await _counted_here(question_id, address, fan))
 
