@@ -73,7 +73,7 @@ UNPLAYABLE_PER_FAN, UNPLAYABLE_PER_ADDRESS = 10, 30
 # then it leaves only the Feeds of the fans who said so. One fan, or one network with any number of new cookies,
 # can't take a video from anyone else, while one that really won't play does so for every fan who tries it, so it's
 # soon gone for all. Three: a fan has a home and a phone network at most. The admin panel's Feed tab lists every video
-# taken out this way (admin.feed_page, "unplayable"), where approving it puts it back. A network's word is kept for
+# taken out this way (admin.taken_out), where Put back undoes it (put_back). A network's word is kept for
 # UNPLAYABLE_VOTES_FOR seconds (a month). Only an app in FEED_COUNTRY votes (counts_everywhere): fans abroad would soon
 # be three networks too.
 UNPLAYABLE_VOTES, UNPLAYABLE_VOTES_FOR = 3, 30 * 24 * 3600
@@ -733,8 +733,9 @@ def unplayable(db: Session, video: str, now: datetime | None = None) -> bool:
     """Enough fans' apps said this video ("source:id", as said_unplayable gives it) won't play inside them
     (UNPLAYABLE_VOTES): its source's player refused it (its owner keeps it off other sites, which the source's facts
     didn't say). It's marked on every player's row of it, so no Feed serves it again, and a fetch that finds it again
-    for someone else keeps the mark (candidates.keep). The admin panel's Feed tab lists it (admin.feed_page), and an
-    admin's approving or pinning it stands over the mark (rank.review): such a video is never marked. One the source
+    for someone else keeps the mark (candidates.keep). The admin panel's Feed tab lists it (admin.taken_out), where Put
+    back undoes the mark (put_back), and an admin's approving or pinning it stands over the mark (rank.review): such a
+    video is never marked. One the source
     says is gone, private or no longer embeddable goes at its weekly check (candidates.check), marked or not. True
     when this marked it; False when it was already, an admin vouched for it, or there's no such video."""
     source, _, external_id = video.partition(":")
@@ -747,6 +748,23 @@ def unplayable(db: Session, video: str, now: datetime | None = None) -> bool:
     if marked:
         log.info("feed: %s %s won't play inside the app, fans' apps said: no longer served (%d row(s))", found[0], found[1], len(marked))
     return bool(marked)
+
+
+def put_back(db: Session, row_id: int) -> str | None:
+    """An admin says the video a candidate row is plays after all, from the Feed tab's list of those fans' apps took
+    out (admin.taken_out): every player's row of it loses the mark (unplayable), and each is served again or not as
+    the judge's and any admin's word on it say: nothing is approved. Its votes are the caller's to clear
+    (unplayable_votes_key); fans' apps on as many networks as ever take it out again. The video ("source:id"), or
+    None for no such row."""
+    video = video_of_row(db, row_id)
+    if video is None:
+        return None
+    source, _, external_id = video.partition(":")
+    put = db.execute(update(FeedCandidate).where(FeedCandidate.source == source, FeedCandidate.external_id == external_id, FeedCandidate.unplayable_at.is_not(None))
+                     .values(unplayable_at=None).returning(FeedCandidate.id)).all()  # fmt: skip
+    if put:
+        log.info("feed: %s %s put back by an admin: it plays after all (%d row(s))", source, external_id, len(put))
+    return video
 
 
 def video_of_row(db: Session, row_id: int) -> str | None:

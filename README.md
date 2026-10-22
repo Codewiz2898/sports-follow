@@ -704,8 +704,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   or a script with new cookies, takes it from their own Feed alone. A fan's votes are counted so many an hour, and
   an address's (10 and 30, each count taken before the report is acted on); past either, the video still leaves
   that fan's Feed and only the vote is dropped. Reports never ask YouTube anything. The admin panel's Feed tab lists
-  every video taken out this way under Won't play, newest first, and Put back (approving it; pinning it too) says it
-  plays after all, which no app's word overrides; any word on it there starts its votes again. The weekly check
+  every video taken out this way under Won't play, once each, newest first, with the players it's kept for. Put back
+  (`POST /api/admin/feed/<row>/put-back`, `feed.put_back`) takes the mark off every row of it, each served or not as
+  the judge and any admin's word say (nothing is approved), and starts its votes again; approving or pinning it puts
+  it back too, and then no app's word overrides that. Any admin word on it starts its votes again. The weekly check
   drops one YouTube says is gone, private or no longer embeddable, marked or not, so those leave the list by
   themselves. (Whether 101/150 can also mean a block in the viewer's country alone isn't known; only apps whose
   time zone is India's vote, `SPORTS_FOLLOW_FEED_ZONES`.)
