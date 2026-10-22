@@ -365,3 +365,32 @@ def test_a_game_of_a_sport_turned_off_isnt_late_though_its_source_runs_for_anoth
     reading = metrics.live(now)
     assert reading["games"] == [(1, {"source": "many", "status": "armed"})]  # Valorant's only
     assert reading["behind"] == [(1, {"source": "many"})]  # never polled: Valorant's is late, CS2's isn't
+
+
+def test_a_push_service_label_is_one_of_a_known_few(measured):
+    # BUG-089: the push service label was the endpoint's host as stored, and Edge's are on any notify.windows.com
+    # name (one a device or a stored older subscription gives): each made a series of its own.
+    metrics.pushes([("fcm", None), ("db5p.notify.windows.com", None), ("wns2-par02p.notify.windows.com", 410), ("push.example.com", 500), (None, None)])
+    got = {(p.attributes["push_service"], p.attributes["result"]): p.value for p in points(measured)["sports_follow.pushes"]}
+    assert got == {("fcm", "delivered"): 1, ("notify.windows.com", "delivered"): 1, ("notify.windows.com", "gone"): 1, ("other", "failed"): 1, ("unknown", "delivered"): 1}
+
+
+@pytest.mark.skipif(not TEST_DB, reason="SPORTS_FOLLOW_TEST_DATABASE_URL isn't set (an empty database at alembic head)")
+def test_cards_are_counted_by_sport_whatever_its_spelling(database):
+    # BUG-089: player.sport is stored as "football" and "Football" (and "Soccer" from the agent), and the cards
+    # reading made a series of each.
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import text
+
+    now = datetime.now(timezone.utc)
+    with database.begin() as c:
+        c.execute(text("INSERT INTO player (id, slug, name, sport, status, teams) VALUES (2, 'b', 'B', 'Football', 'active', '[]'), (3, 'c', 'C', 'Soccer', 'active', '[]'),"
+                       " (4, 'd', 'D', 'Golf', 'active', '[]')"))
+        c.execute(text("INSERT INTO follow (fan_id, player_id, alert_rules) VALUES ('fan', 2, '{}'), ('fan', 3, '{}'), ('fan', 4, '{}')"))
+        for pid, age in ((1, 30), (2, 90), (3, 60), (4, 10)):
+            c.execute(text("INSERT INTO player_card (player_id, status, card, version, is_live, freshness) VALUES (:p, 'ready', '{}', 1, true, CAST(:f AS jsonb))"),
+                      {"p": pid, "f": f'{{"live": "{(now - timedelta(seconds=age)).isoformat()}"}}'})
+    read = metrics.cards(now)
+    assert sorted((labels["sport"], n) for n, labels in read["cards"]) == [("football", 3), ("other", 1)]
+    assert sorted((labels["sport"], round(age)) for age, labels in read["live_data_age"]) == [("football", 90), ("other", 10)]
