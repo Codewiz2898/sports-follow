@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, select, text, update
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import bus, notify, sports, structured, teams
@@ -178,7 +178,71 @@ def test_a_device_the_push_service_is_throttling_isnt_counted_as_failing(db):
     for _ in range(notify.MAX_FAILURES):
         notify._health(db, device_id, 500)
     db.commit()
+    assert db.scalars(select(PushSubscription.failures)).one() == notify.MAX_FAILURES  # these count
+    db.execute(update(PushSubscription).values(failing_since=datetime.now(timezone.utc) - notify.FAILING_FOR - timedelta(minutes=1)))
+    notify._health(db, device_id, 500)
+    db.commit()
     assert db.scalars(select(PushSubscription.id)).all() == []  # one that keeps failing is removed
+
+
+TIMED_OUT = "HTTPSConnectionPool(host='fcm.googleapis.com', port=443): Read timed out. (read timeout=5)"
+
+
+def test_a_push_service_outage_doesnt_remove_the_devices_it_failed(db, pushed, monkeypatch):
+    # FCM answering 503 and a Web Push service not answering in time are the push services' trouble, which FCM says
+    # to wait out: five moments of it, a few minutes on a match day, removed every fan's phone and browser (BUG-298).
+    # Their failures are still counted (their pushes go by the threads for devices in doubt), not held against them.
+    db.add(PushSubscription(fan_id="fan", transport="fcm", endpoint="phone-" + "x" * 150))
+    device(db, "fan")
+    monkeypatch.setattr(notify.fcm, "enabled", lambda: True)
+    monkeypatch.setattr(notify.fcm, "push", lambda token, payload, ttl: 503)
+    monkeypatch.setattr(notify, "push", lambda *a, **k: TIMED_OUT)
+    for n in range(1, 2 * notify.MAX_FAILURES + 1):
+        striker(db, n)
+        ids = notify.record(db, n, n, [Found("goal", "key", f"Goal: Striker {n}", "1–0 · 23'", f"goal@{n}", 85)])
+        db.commit()
+        notify.send(ids)
+    db.expire_all()
+    assert sorted(db.execute(select(PushSubscription.transport, PushSubscription.failures)).all()) == [("fcm", 10), ("webpush", 10)]
+    assert notify._proven(set(db.scalars(select(PushSubscription.id)))) == set()
+    # Back up: a push that goes through clears the count.
+    monkeypatch.setattr(notify.fcm, "push", lambda token, payload, ttl: None)
+    monkeypatch.setattr(notify, "push", lambda *a, **k: None)
+    ids = notify.record(db, 1, 1, [Found("goal", "key", "Goal: Striker 1 again", "2–0 · 60'", "goal@1b", 85)])
+    db.commit()
+    notify.send(ids)
+    db.expire_all()
+    assert db.scalars(select(PushSubscription.failures)).all() == [0, 0]
+
+
+@pytest.mark.parametrize("error", [500, 503, 400, TIMED_OUT])
+def test_a_device_is_removed_for_failing_only_once_its_failed_every_push_for_a_day(db, error):
+    device(db, "fan")
+    device_id = db.scalars(select(PushSubscription.id)).one()
+    for _ in range(3 * notify.MAX_FAILURES):  # an outage of an afternoon
+        notify._health(db, device_id, error)
+    db.commit()
+    started = db.scalars(select(PushSubscription.failing_since)).one()
+    assert started is not None and datetime.now(timezone.utc) - started < timedelta(minutes=1)
+    # Still failing past the day: it's the device, not the push service, and the next failure takes it out.
+    db.execute(update(PushSubscription).values(failing_since=datetime.now(timezone.utc) - notify.FAILING_FOR - timedelta(minutes=1)))
+    notify._health(db, device_id, error)
+    db.commit()
+    assert db.scalars(select(PushSubscription.id)).all() == []
+    # A day of failures needs MAX_FAILURES of them, though: two a week apart (a player who plays weekly) aren't.
+    device(db, "fan")
+    device_id = db.scalars(select(PushSubscription.id)).one()
+    notify._health(db, device_id, error)
+    db.execute(update(PushSubscription).values(failing_since=datetime.now(timezone.utc) - timedelta(days=7)))
+    notify._health(db, device_id, error)
+    db.commit()
+    assert db.scalars(select(PushSubscription.failures)).one() == 2
+    # A push that goes through starts the clock again.
+    notify._health(db, device_id, None)
+    notify._health(db, device_id, error)
+    db.commit()
+    started = db.scalars(select(PushSubscription.failing_since)).one()
+    assert started is not None and datetime.now(timezone.utc) - started < timedelta(minutes=1)
 
 
 # ---------------------------------------------------------------- teammates (BUG-206)

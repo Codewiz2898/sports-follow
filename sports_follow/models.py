@@ -713,7 +713,8 @@ class PushSubscription(Base):
     quiet_end: Mapped[str | None] = mapped_column(String(5))  # "07:00"
     created_at: Mapped[datetime] = _now()
     last_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    failures: Mapped[int] = mapped_column(Integer, default=0)
+    failures: Mapped[int] = mapped_column(Integer, default=0)  # failed pushes in a row (notify._health)
+    failing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # when they began; None while it works
     # The Android app's live cards (livecards.py), as the phone says (server.register_fcm, stop_live_card): whether
     # it shows them (Alerts' Live scores), and the games whose card it stopped, newest last: none goes to it.
     live_cards: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
