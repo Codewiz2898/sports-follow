@@ -50,7 +50,7 @@ import httpx
 from sqlalchemy import and_, delete, exists, or_, select, union
 from sqlalchemy.orm import Session, object_session, undefer
 
-from . import bus, faces, logs, sports
+from . import bus, faces, logs, shutdown, sports
 from .config import USER_AGENT
 from .db import session
 from .models import Athlete, Follow, Photo, Player, PlayerCard, PlayerIdentity, Starter
@@ -487,10 +487,14 @@ def refresh(limit: int = PER_RUN, now: datetime | None = None) -> dict[str, int]
         due = sorted((f for f in want if _due(known.get(f), now)), key=lambda f: (f in known, known[f].fetched_at if f in known else now))[:limit]
     try:
         for i in range(0, len(due), BATCH):
+            if shutdown.stopping.is_set():
+                break  # the worker is stopping: the rest wait for the next run
             chunk = due[i : i + BATCH]
             answers = ask(chunk)
             with session() as db:
                 for file in chunk:
+                    if shutdown.stopping.is_set():
+                        break
                     try:
                         photo = _keep(db, file, want[file], answers[file], now, db.scalar(select(Photo).where(Photo.file == file)))
                     except Unavailable:

@@ -190,3 +190,100 @@ def test_the_shutdown_hook_doesnt_wait_when_every_job_has_ended(monkeypatch, red
 
 def test_the_worker_runs_the_shutdown_hook():
     assert worker.WorkerSettings.on_shutdown is worker.wind_down
+
+
+class AsyncRedis:
+    """The worker's own Redis client (ctx["redis"]), over the same keys as bus.py's."""
+
+    def __init__(self, sync: FakeRedis):
+        self.sync = sync
+
+    async def set(self, key, value, nx=False, ex=None):
+        return self.sync.set(key, value, nx=nx, ex=ex)
+
+    async def delete(self, *keys):
+        return self.sync.delete(*keys)
+
+    async def exists(self, key):
+        return self.sync.exists(key)
+
+
+def test_a_stopping_worker_says_which_jobs_still_run(monkeypatch, redis, stopping, caplog):
+    # BUG-177: "every job ended and freed its locks", while a job's thread that holds no lock ran on, reading sources.
+    monkeypatch.setattr(worker, "STOP_WAIT", 0.3)
+    caplog.set_level(logging.INFO, logger="sports_follow.worker")
+    started, done = threading.Event(), threading.Event()
+
+    def deaf():  # a loop that never looks at the stop flag
+        started.set()
+        done.wait(10)
+
+    async def stop():
+        job = asyncio.create_task(worker.in_lane("refresh", deaf))
+        await asyncio.to_thread(started.wait, 5)
+        job.cancel()  # arq cancels it; its thread runs on
+        await worker.wind_down({})
+        done.set()
+        await asyncio.wait([job])
+
+    asyncio.run(stop())
+    assert "every job ended" not in caplog.text
+    assert "1 job thread(s) still running: test_shutdown.deaf" in caplog.text
+    assert worker.running() == []
+
+
+@pytest.mark.parametrize("job, guarded, name", [
+    ("refresh_starters", "starters", "refresh"),
+    ("import_teams", "teams", "import_all"),
+])
+def test_a_cancelled_refresh_keeps_its_guard_until_its_thread_ends(monkeypatch, redis, job, guarded, name):
+    # BUG-177: the guard ("one at a time") was a key the job's coroutine deleted when arq cancelled it (a worker
+    # stopping), while its thread ran on: the job queued again started a second one beside it.
+    runs: list[int] = []
+    entered, finish = threading.Event(), threading.Event()
+
+    def long_read():
+        runs.append(1)
+        if len(runs) == 1:  # the first runs on (a stop flag it never looks at); another would end at once
+            entered.set()
+            finish.wait(10)
+
+    monkeypatch.setattr(getattr(worker, guarded), name, long_read)
+    ctx = {"redis": AsyncRedis(redis)}
+
+    async def go():
+        first = asyncio.create_task(getattr(worker, job)(ctx))
+        await asyncio.to_thread(entered.wait, 5)
+        first.cancel()
+        await asyncio.wait([first])
+        await asyncio.wait_for(getattr(worker, job)(ctx), 5)  # queued again, while the first thread runs on
+        finish.set()
+
+    asyncio.run(go())
+    assert runs == [1]
+
+
+def test_the_warm_pass_reads_no_more_sources_once_the_worker_stops(monkeypatch, redis, stopping):
+    warmed = []
+
+    def warm(system):
+        def run():
+            warmed.append(system)
+            stopping.set()  # a deploy, while the first source is read
+            return 0
+        return run
+
+    sources = {s: type("Source", (), {"system": s, "warm": staticmethod(warm(s))})() for s in ("first", "second")}
+    monkeypatch.setattr("sports_follow.adapters.ADAPTERS", sources)
+    worker._warm_sources()
+    assert warmed == ["first"]
+
+
+def test_the_sidelined_read_asks_no_more_sources_once_the_worker_stops(monkeypatch, stopping):
+    from sports_follow import sidelined
+
+    read = []
+    monkeypatch.setattr(sidelined, "sources", lambda: [type("Source", (), {"system": s})() for s in ("first", "second")])
+    monkeypatch.setattr(sidelined, "read", lambda system: read.append(system) or stopping.set() or {})
+    sidelined.read_all()
+    assert read == ["first"]

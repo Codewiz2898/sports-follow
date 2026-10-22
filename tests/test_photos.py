@@ -538,6 +538,22 @@ def test_a_thumbnail_refused_every_time_never_holds_up_the_others(squad, commons
 
 
 @needs_db
+def test_a_stopping_worker_downloads_no_more_photos(squad, commons, monkeypatch, stopping):
+    # BUG-177: the photos job went on downloading after the worker began stopping, and the worker said every job had ended.
+    fetch = commons.download
+
+    def download_then_stop(url):
+        stopping.set()  # a deploy, while the first thumbnail comes in
+        return fetch(url)
+
+    monkeypatch.setattr(photos, "download", download_then_stop)
+    assert photos.refresh()["asked"] == 1 and len(commons.downloads) == 1
+    stopping.clear()
+    monkeypatch.setattr(photos, "download", fetch)
+    assert photos.refresh()["asked"] == 2  # the next worker's run does the rest
+
+
+@needs_db
 def test_commons_busy_leaves_the_rest_for_the_next_run(squad, commons, monkeypatch):
     def busy(files):
         raise photos.Unavailable("Commons API: 429")

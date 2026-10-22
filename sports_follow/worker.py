@@ -13,7 +13,9 @@ import contextlib
 import functools
 import inspect
 import logging
+import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import datetime, timezone
@@ -55,6 +57,10 @@ QUIET_UNDER = 10
 # How long a stopping worker gives its jobs to end and free their own locks before it frees the rest
 # itself: well inside the ten seconds Docker waits between asking a container to stop and killing it.
 STOP_WAIT = 5
+# The job threads still running, by what they run: arq cancels a stopping worker's jobs, but their threads run on
+# until they end (wind_down waits for them, and says which didn't).
+_running: Counter[str] = Counter()
+_running_guard = threading.Lock()
 
 
 def _logged(fn, quiet: bool = False, deep: bool = True):
@@ -125,14 +131,62 @@ async def _in_progress_for(ctx, name: str) -> None:
         await redis.pexpire(in_progress_key_prefix + job_id, int((_timeout(name) + 10) * 1000))
 
 
+def _counted(fn, *args):
+    """fn(*args), counted among the job threads still running for as long as it runs (running)."""
+    name = f"{getattr(fn, '__module__', '').rpartition('.')[2]}.{getattr(fn, '__name__', 'job')}"
+    with _running_guard:
+        _running[name] += 1
+    try:
+        return fn(*args)
+    finally:
+        with _running_guard:
+            _running[name] -= 1
+            if _running[name] <= 0:
+                del _running[name]
+
+
+def running() -> list[str]:
+    """What the job threads still running run ("starters.refresh"), one entry each."""
+    with _running_guard:
+        return sorted(_running.elements())
+
+
+async def on_thread(fn, *args):
+    """fn(*args) on a worker thread, counted while it runs (running)."""
+    return await asyncio.to_thread(_counted, fn, *args)
+
+
 async def in_lane(lane: str, fn, *args):
     """fn(*args) on a worker thread, its source requests in this lane (adapters/budget.py)."""
 
     def run():
         with budget.in_lane(lane):
-            return fn(*args)
+            return _counted(fn, *args)
 
     return await asyncio.to_thread(run)
+
+
+def _guarded(name: str, seconds: int, fn, done: str | None = None, keep: int = 0):
+    """fn, unless another worker's thread is running it (a restart's job beside the one before it), under a lock
+    its own thread holds until it ends: arq cancelling the job, as a stopping worker does, doesn't free it while
+    the thread runs on, and a stopping worker sees it (bus.held). Once it ends with the worker still running, the
+    mark `done` is set for `keep` seconds."""
+
+    def run():
+        token = bus.try_lock(name, seconds)
+        if token is None:
+            log.info("%s: running elsewhere; skipped", name)
+            return
+        try:
+            fn()
+            if done and not shutdown.stopping.is_set():  # one cut short by a stop is done by the next worker
+                bus.sync_redis().set(done, "1", ex=keep)
+        finally:
+            bus.release(name, token)
+
+    run.__name__ = getattr(fn, "__name__", name)
+    run.__module__ = getattr(fn, "__module__", __name__)
+    return run
 
 
 async def build_card(ctx, player_id: int) -> None:
@@ -168,18 +222,18 @@ async def poll_lane(ctx, system: str) -> None:
 
 async def send_moments(ctx, moment_ids: list[int]) -> None:
     """Moments a poll or a rebuild found but no sender claimed: the worker restarted in between."""
-    await asyncio.to_thread(notify.send, moment_ids)
+    await on_thread(notify.send, moment_ids)
 
 
 async def send_held(ctx, moment_ids: list[int]) -> None:
     """Moments a fan of both sides of a board was left to hear from the other side, late where it never said them
     (notify.send_held)."""
-    await asyncio.to_thread(notify.send_held, moment_ids)
+    await on_thread(notify.send_held, moment_ids)
 
 
 async def engine_lane(ctx) -> None:
     """Chess engine evaluations for live games, within its CPU budget (engine.py)."""
-    await asyncio.to_thread(engine.run_lane)
+    await on_thread(engine.run_lane)
 
 
 async def history_lane(ctx) -> None:
@@ -199,16 +253,17 @@ def _warm_sources() -> None:
     from that index, every six hours: roster_every) adds its players to the registry."""
     from .adapters import ADAPTERS
 
+    # A stopping worker reads no more sources: the next one's pass, ten minutes on at most, does the rest.
     for adapter in list(ADAPTERS.values()):
         warm = getattr(adapter, "warm", None)
-        if warm is None:
+        if warm is None or shutdown.stopping.is_set():
             continue
         try:
             log.info("warm %s: %s lobbies indexed", adapter.system, warm())
         except Exception:
             log.exception("warm %s failed", adapter.system)
     for adapter in list(ADAPTERS.values()):
-        if getattr(adapter, "rekey", None) is None:
+        if getattr(adapter, "rekey", None) is None or shutdown.stopping.is_set():
             continue
         try:
             if moved := structured.rekey_bound(adapter):
@@ -217,7 +272,7 @@ def _warm_sources() -> None:
             log.exception("rekey %s failed", adapter.system)
     for adapter in list(ADAPTERS.values()):
         every = getattr(adapter, "roster_every", None)
-        if every and bus.cooldown(f"registry-{adapter.system}", every):  # at most every `every` seconds
+        if every and not shutdown.stopping.is_set() and bus.cooldown(f"registry-{adapter.system}", every):  # at most every `every` seconds
             registry.import_roster(adapter)
 
 
@@ -231,7 +286,7 @@ async def warm_sources(ctx) -> None:
 async def adopt_stragglers(ctx, anon: str, account_id: int, session_id: int) -> None:
     """A minute after a sign-in: whatever a request already under way wrote to the device's anonymous
     fan after its things moved into the account (accounts.adopt_later)."""
-    moved = await asyncio.to_thread(accounts.adopt_later, anon, account_id, session_id)
+    moved = await on_thread(accounts.adopt_later, anon, account_id, session_id)
     if moved:
         log.info("accounts: %d more player(s) moved into account %d after sign-in", moved, account_id)
 
@@ -242,14 +297,8 @@ STARTERS_DONE = "starters:refreshed"  # set once a refresh finishes; a worker st
 async def refresh_starters(ctx) -> None:
     """Each sport's top players for new fans, found in their sources with their next games: once a day,
     and when a worker starts with no refresh in the last day (startup), say on a fresh server. One at a
-    time: a restart's refresh and 04:40's don't both ask the sources."""
-    if not await ctx["redis"].set("starters:refreshing", "1", nx=True, ex=2400):
-        return
-    try:
-        await in_lane('refresh', starters.refresh)
-        await ctx["redis"].set(STARTERS_DONE, "1", ex=23 * 3600)
-    finally:
-        await ctx["redis"].delete("starters:refreshing")
+    time: a restart's refresh and 04:40's don't both ask the sources (_guarded)."""
+    await in_lane('refresh', _guarded("starters-refresh", 2400, starters.refresh, STARTERS_DONE, 23 * 3600))
 
 
 async def read_live(ctx, system: str) -> None:
@@ -264,7 +313,7 @@ async def read_match(ctx, system: str, game: str) -> None:
     open and the last read is over a minute old. In the refresh lane: no fan waits on it, so it stops short of
     the allowance kept for followed players' live games."""
     await in_lane('refresh', match.read, system, game)
-    await asyncio.to_thread(predictions.made, system, game)  # the questions its board asks, if it's to come
+    await on_thread(predictions.made, system, game)  # the questions its board asks, if it's to come
 
 
 async def prepare_questions(ctx) -> None:
@@ -272,7 +321,7 @@ async def prepare_questions(ctx) -> None:
     (predictions.prepare): every ten minutes, so a fan can call a game, and be asked to, before its poller arms it."""
     if await _missed(ctx, "prepare_questions"):
         return
-    for system, game in await asyncio.to_thread(predictions.prepare):
+    for system, game in await on_thread(predictions.prepare):
         await ctx["redis"].enqueue_job("read_match", system, game, _job_id=f"read_match:{system}:{game}")
 
 
@@ -281,7 +330,7 @@ async def prediction_pushes(ctx) -> None:
     minute, at :50 (ON_THE_CLOCK)."""
     if await _missed(ctx, "prediction_pushes"):
         return
-    await asyncio.get_running_loop().run_in_executor(_pushes_pool, logs.carried(predictions_push.run))
+    await asyncio.get_running_loop().run_in_executor(_pushes_pool, logs.carried(functools.partial(_counted, predictions_push.run)))
 
 
 async def read_league(ctx, system: str) -> None:
@@ -310,7 +359,7 @@ async def read_sidelined(ctx) -> None:
 
 async def purge_sessions(ctx) -> None:
     """Sessions unused for a year end, and their devices' alerts with them."""
-    ended = await asyncio.to_thread(accounts.purge_expired)
+    ended = await on_thread(accounts.purge_expired)
     if ended:
         log.info("accounts: %d expired session(s) ended", ended)
 
@@ -327,26 +376,20 @@ TEAMS_DONE = "teams:imported"  # set once an import finishes; a worker starting 
 async def import_teams(ctx) -> None:
     """The team registry from the running sources' lists of teams (teams.import_all): weekly, and when a worker
     starts with no import in the last week (startup), say on a fresh server. A few requests a source, in the
-    import lane; one at a time."""
-    if not await ctx["redis"].set("teams:importing", "1", nx=True, ex=1800):
-        return
-    try:
-        await in_lane('import', teams.import_all)
-        await ctx["redis"].set(TEAMS_DONE, "1", ex=7 * 24 * 3600)
-    finally:
-        await ctx["redis"].delete("teams:importing")
+    import lane; one at a time (_guarded)."""
+    await in_lane('import', _guarded("teams-import", 1800, teams.import_all, TEAMS_DONE, 7 * 24 * 3600))
 
 
 async def prune(ctx) -> None:
     """Rows and hot copies nothing reads any more, once a day (retention.py)."""
-    await asyncio.to_thread(retention.prune)
+    await on_thread(retention.prune)
 
 
 async def fetch_photos(ctx) -> None:
     """Followed and starter players' photos from Wikimedia Commons, every 15 minutes (photos.py)."""
     if await _missed(ctx, "fetch_photos"):
         return
-    await asyncio.to_thread(photos.run)
+    await on_thread(photos.run)
 
 
 def _late(ctx) -> bool:
@@ -386,7 +429,8 @@ async def wind_down(ctx) -> None:
     nothing more. arq has cancelled the running jobs and queued them again, but their threads run on: they
     end at their next step (shutdown.stopping) and free their locks. Whatever is still held after STOP_WAIT,
     say a build waiting on the model, is freed here, so the next worker starts that work at once instead of
-    finding it locked for up to twenty minutes (BHA-51)."""
+    finding it locked for up to twenty minutes (BHA-51). A job thread still running then is named: the process
+    ends with it, or when Docker stops it."""
     clocked = ctx.pop("on_the_clock", [])
     for task in clocked:
         task.cancel()
@@ -394,18 +438,21 @@ async def wind_down(ctx) -> None:
         await asyncio.wait(clocked)
     shutdown.stopping.set()
     deadline = time.monotonic() + STOP_WAIT
-    while bus.held() and time.monotonic() < deadline:
+    while (bus.held() or running()) and time.monotonic() < deadline:
         await asyncio.sleep(0.1)
     freed = bus.release_held()
+    still = running()
     if freed:
         log.warning("stopping: freed %d lock(s) jobs still held: %s", len(freed), ", ".join(sorted(freed)), extra={"locks": len(freed)})
-    else:
+    if still:
+        log.warning("stopping: %d job thread(s) still running: %s", len(still), ", ".join(still), extra={"threads": len(still)})
+    if not freed and not still:
         log.info("stopping: every job ended and freed its locks")
 
 
 async def _in_tick_pool(fn):
     """The tick works on threads of its own: whatever the jobs are doing, the scheduler keeps its minute."""
-    return await asyncio.get_running_loop().run_in_executor(_tick_pool, logs.carried(fn))
+    return await asyncio.get_running_loop().run_in_executor(_tick_pool, logs.carried(functools.partial(_counted, fn)))
 
 
 async def tick(ctx) -> None:
