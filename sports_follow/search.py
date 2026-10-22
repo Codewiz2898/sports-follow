@@ -542,16 +542,28 @@ _previews: dict[str, tuple[float, dict[str, Any]]] = {}
 PREVIEW_TTL = 600
 
 
+def _kept(system: str, athlete_id: str) -> dict[str, Any] | None:
+    """A preview of this athlete made in the last PREVIEW_TTL seconds. Kept by the athlete alone: an id is one
+    athlete's in its source whatever league a link names, so a league made up for each request doesn't make
+    the source read them again."""
+    hit = _previews.get(f"{system}:{athlete_id}")
+    return hit[1] if hit and time.time() - hit[0] < PREVIEW_TTL else None
+
+
+def previewed(system: str, athlete_id: str) -> bool:
+    """Whether showing this athlete's preview now asks no source."""
+    return _kept(system, athlete_id) is not None
+
+
 def preview(system: str, athlete_id: str, league: str | None) -> dict[str, Any] | None:
     """What following this athlete would show: who they are, their next game, their last game with
     their line, and their stats. None if the source has no such athlete, or has just been turned off."""
     adapter = ADAPTERS.get(system)
     if adapter is None:
         return None
-    cache_key = f"{system}:{athlete_id}:{league}"
-    hit = _previews.get(cache_key)
-    if hit and time.time() - hit[0] < PREVIEW_TTL:
-        return hit[1]
+    hit = _kept(system, athlete_id)
+    if hit is not None:
+        return hit
     ref = adapter.player(athlete_id, league)
     if ref is None:
         return None
@@ -591,7 +603,7 @@ def preview(system: str, athlete_id: str, league: str | None) -> dict[str, Any] 
             if snap:
                 recent.append((f, snap))
     out["stats"], out["stats_note"] = adapter.stats(ref, recent)
-    _previews[cache_key] = (time.time(), out)
+    _previews[f"{system}:{athlete_id}"] = (time.time(), out)
     if len(_previews) > 500:
         for key, _ in sorted(_previews.items(), key=lambda kv: kv[1][0])[:100]:
             _previews.pop(key, None)

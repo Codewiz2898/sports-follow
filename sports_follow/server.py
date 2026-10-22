@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Any, TypeVar
+from typing import Annotated, Any, TypeVar, cast
 from urllib.parse import urlparse
 
 import redis.asyncio as aredis
@@ -43,7 +43,7 @@ from starlette.routing import Match
 from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
-from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_LOOKUPS_PER_ADDRESS, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, session
 from .models import ClipKey, Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription, Question, Team
 
@@ -946,6 +946,7 @@ async def _follow_row(row: dict[str, Any], fan: str, address: str | None, turns:
                 # On Sports Follow with a card that isn't failed (search._ours offers no other): the follow row, and
                 # the build again for a card still building, as /api/follows does, in case its job was lost.
                 def save(db: Session) -> str | None:
+                    _room_to_follow(db, fan, target["player_id"])
                     db.execute(insert(Follow).values(fan_id=fan, player_id=target["player_id"], alert_rules={}).on_conflict_do_nothing())
                     return db.scalar(select(PlayerCard.status).where(PlayerCard.player_id == target["player_id"]))
 
@@ -1077,6 +1078,22 @@ async def research(fan: str = Depends(fan_id)) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- following
 
+# Players a fan follows at once: a few whole squads from campaign pages and their favourites besides, as teams
+# (teams.MAX, 30) and games (matches.MAX, 20) have theirs. Each followed player is read every half hour for good.
+PLAYERS_MAX = 100
+
+
+def _room_to_follow(db: Session, fan: str, player_id: int | None = None) -> None:
+    """Refuse (429) a follow past PLAYERS_MAX. A player the fan follows already is no new follow. With the player,
+    in the follow's transaction: one at a time per fan, so two follows at once can't both pass the count; without,
+    before anything is asked of a source."""
+    if player_id is not None:
+        db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"follow:{fan}", 0))))
+        if db.scalar(select(Follow.id).where(Follow.fan_id == fan, Follow.player_id == player_id)) is not None:
+            return
+    if (db.scalar(select(func.count()).select_from(Follow).where(Follow.fan_id == fan)) or 0) >= PLAYERS_MAX:
+        raise HTTPException(429, f"You follow {PLAYERS_MAX} players already: unfollow one to follow another.")
+
 
 def _registry_athlete(db: Session, body: dict) -> registry.Person | None:
     qid, sport = str(body.get("qid") or ""), str(body.get("sport") or "").lower()
@@ -1134,19 +1151,22 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
 
     A registry athlete is found in their sport's live source by the id Wikidata has, or by name and a
     matching birth date; one no source confirms is built by the research agent, which counts as an
-    AI research, and without research (config.RESEARCH) can't be followed.
+    AI research, and without research (config.RESEARCH) can't be followed. Asking a source counts against
+    the fan's and their address's minute (_source_lookup), and a fan follows at most PLAYERS_MAX players.
     """
     from .config import RESEARCH
 
     person = await in_db(_registry_athlete, body) if body.get("qid") else None
     if body.get("qid") and person is None:
         raise HTTPException(404, "That athlete isn't in the player registry.")
+    await in_db(_room_to_follow, fan)
     taken: list[str] = []
     if person and not body.get("system"):
         holder = await in_db(pipeline.registry_holder, person.qid, person.sport if body.get("sport") else None)
         if holder is not None:
             player_id, created, ref = holder, False, None
         else:
+            await _source_lookup(fan, address)
             found = await _resolve(person)
             if found is None and not RESEARCH:
                 raise HTTPException(404, f"No live source has {person.name}'s games, so they can't be followed here yet.")
@@ -1173,6 +1193,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
             raise HTTPException(400, "Pick an athlete from the search results.")
         if (system, athlete_id) in await in_db(registry.blocked):
             raise HTTPException(404, f"That athlete isn't on {APP_NAME}.")  # removed by an operator (players.py)
+        await _source_lookup(fan, address)
         try:
             ref = await asyncio.to_thread(adapter.player, athlete_id, league)
         except AdapterError as exc:
@@ -1183,6 +1204,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
         player_id, created = await asyncio.to_thread(pipeline.start_from_pick, adapter, ref)
 
     def save(db: Session) -> None:
+        _room_to_follow(db, fan, player_id)
         if person and (ref is None or _same_athlete(person, ref)):
             registry.link(db, player_id, person.qid)
         db.execute(insert(Follow).values(fan_id=fan, player_id=player_id, alert_rules={}).on_conflict_do_nothing())
@@ -1247,6 +1269,7 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
             target = pipeline.resolve_or_create(db, query) if query is not None else player
         except ValueError:
             return None
+        _room_to_follow(db, fan, cast(Player, target).id)  # (a player asked for by id was found above)
         db.execute(insert(Follow).values(fan_id=fan, player_id=target.id, alert_rules={}).on_conflict_do_nothing())
         card_row = db.get(PlayerCard, target.id)
         needs_build = card_row is None or card_row.status in ("building", "failed")
@@ -2378,16 +2401,31 @@ def _search(q: str, sport: str | None, fan: str, may_ask: Callable[[], bool]) ->
         return {**found, "teams": teams.find(db, found.get("query") or q, found.get("sport"), fan)}
 
 
+async def _in_minute(kind: str, fan: str, address: str | None, per_fan: int, per_address: int) -> bool:
+    """Count one of a fan's requests of a kind against their minute and their address's; False when either is
+    over. A minute starts at its first such request."""
+    for key, limit in [(f"{kind}:fan:{fan}", per_fan), *([(f"{kind}:address:{address}", per_address)] if address else [])]:
+        used = await state["redis"].incr(key)
+        await state["redis"].expire(key, 60, nx=True)  # the minute's end, set once (a count without one would never end)
+        if used > limit:
+            return False
+    return True
+
+
 async def _source_search_allowed(fan: str, address: str | None) -> bool:
     """Count a search that goes on to the sources' own against the fan's minute and their address's.
     Over either, it doesn't go: a script sending a new name each time would otherwise keep the sources
-    (and the search's threads) busy for everyone. A minute starts at its first such search."""
-    for key in [f"sourcesearch:fan:{fan}", *([f"sourcesearch:address:{address}"] if address else [])]:
-        used = await state["redis"].incr(key)
-        await state["redis"].expire(key, 60, nx=True)  # the minute's end, set once (a count without one would never end)
-        if used > SOURCE_SEARCHES_PER_MINUTE:
-            return False
-    return True
+    (and the search's threads) busy for everyone."""
+    return await _in_minute("sourcesearch", fan, address, SOURCE_SEARCHES_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE)
+
+
+async def _source_lookup(fan: str, address: str | None) -> None:
+    """Count a preview or follow that asks a live source for an athlete not on the app yet against the fan's
+    minute (SOURCE_LOOKUPS_PER_MINUTE) and their address's (SOURCE_LOOKUPS_PER_ADDRESS); over either, a 429.
+    A script walking a source's ids would otherwise spend fans' share of it for everyone, and make a player
+    for each."""
+    if not await _in_minute("sourcelookup", fan, address, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_LOOKUPS_PER_ADDRESS):
+        raise HTTPException(429, "You've looked up a lot of new athletes this minute. Try again in a minute.")
 
 
 @app.get("/api/search")
@@ -2404,15 +2442,17 @@ async def search(request: Request, q: str, sport: str | None = None, fan: str = 
 
 
 @app.get("/api/athletes/wikidata/{qid}")
-async def registry_preview(qid: str, sport: str | None = None) -> dict[str, Any]:
+async def registry_preview(request: Request, qid: str, sport: str | None = None, fan: str = Depends(fan_id)) -> dict[str, Any]:
     """A registry athlete before following: their live-source preview once the source is found, or
-    what the registry knows when no source has them (following then builds the page with AI)."""
+    what the registry knows when no source has them (following then builds the page with AI). Looking
+    them up in their source counts against the fan's and their address's minute (_source_lookup)."""
     person = await in_db(_registry_athlete, {"qid": qid, "sport": sport})
     if person is None:
         raise HTTPException(404, "No such athlete.")
     holder = await in_db(pipeline.registry_holder, person.qid, person.sport if sport else None)
     if holder is not None:
         return {"player_id": holder}
+    await _source_lookup(fan, client_address(request))
     found = await _resolve(person)
     athlete = await in_db(registry.get, person.qid, person.sport)
     photo = await in_db(photos.of_file, athlete.image) if athlete else None
@@ -2438,14 +2478,17 @@ async def registry_preview(qid: str, sport: str | None = None) -> dict[str, Any]
 
 
 @app.get("/api/athletes/{system}/{athlete_id}")
-async def athlete_preview(system: str, athlete_id: str, league: str | None = None) -> dict[str, Any]:
+async def athlete_preview(request: Request, system: str, athlete_id: str, league: str | None = None, fan: str = Depends(fan_id)) -> dict[str, Any]:
     """What following a search result would show, before following. An athlete already on Sports
-    Follow answers with their player id; the app opens their page instead."""
+    Follow answers with their player id; the app opens their page instead. A preview not kept from a
+    moment ago asks the source, which counts against the fan's and their address's minute (_source_lookup)."""
     if system not in ADAPTERS or not _source_id_ok(system, athlete_id) or not _league_ok(league) or (system, athlete_id) in await in_db(registry.blocked):
         raise HTTPException(404, "No such athlete.")
     holder = await in_db(_holder, system, athlete_id)
     if holder is not None:
         return {"player_id": holder}
+    if not player_search.previewed(system, athlete_id):
+        await _source_lookup(fan, client_address(request))
     try:
         found = await asyncio.to_thread(player_search.preview, system, athlete_id, league)
     except AdapterError as exc:

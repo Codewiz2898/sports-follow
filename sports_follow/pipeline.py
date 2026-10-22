@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 import re
 import unicodedata
 from datetime import datetime, timedelta, timezone
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from sqlalchemy import delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -795,6 +795,25 @@ def needs_agent(db: Session, player_id: int, card: dict[str, Any] | None) -> boo
     return not _has_about(card)
 
 
+def background_hour_key(now: datetime) -> str:
+    """The count of backgrounds the research agent wrote in this UTC hour, across all players."""
+    return f"research-background-hour:{now:%Y-%m-%dT%H}"
+
+
+def take_background(now: datetime | None = None) -> bool:
+    """Count one background against the hour's allowance (config.BACKGROUNDS_PER_HOUR), or, past it, refuse it,
+    counted nowhere. Whoever made the player (a fan's pick, a campaign, a script), it's the same model budget."""
+    from .config import BACKGROUNDS_PER_HOUR
+
+    redis, key = bus.sync_redis(), background_hour_key(now or _now())
+    used = cast(int, redis.incr(key))
+    redis.expire(key, 2 * 3600)
+    if used <= BACKGROUNDS_PER_HOUR:
+        return True
+    redis.decr(key)
+    return False
+
+
 def agent_due(player_id: int, card: dict[str, Any], now: datetime | None = None) -> bool:
     """Whether a fan opening this page should send the research agent: it's on (config.AGENT), the page has a
     part it writes (needs_agent), of a sport this build runs and a player someone follows, ready, with no
@@ -872,6 +891,12 @@ def build_card(player_id: int) -> None:
             return
         with session() as db:
             background_only = structured.binding(db, player_id) is not None  # a live source has the rest
+        if background_only and not take_background():
+            # The hour's backgrounds are written: the page is whole from its source without one, and a fan opening
+            # it in a later hour sends the agent (agent_due).
+            log.info("build %s: the hour's backgrounds are written; this one waits for a fan to open the page", player_id)
+            _without_agent(player_id)
+            return
         for event in follow_player(llm(), name, structured.describe(player_id), background_only=background_only):
             if shutdown.stopping.is_set():
                 return  # the worker is stopping; the build starts over on the next one (arq queues it again)
