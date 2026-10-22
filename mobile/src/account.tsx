@@ -48,6 +48,9 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<string | null>(null)
   const [epoch, setEpoch] = useState(0)
   const who = useRef<WhoAsker | null>(null)
+  // A sign-out or deletion here under way: it starts the app over itself, saying so, so an answer meanwhile (the app
+  // back in front as it waits) isn't taken for this phone signed out elsewhere, a second start over.
+  const leaving = useRef(false)
 
   /** Forget what this phone showed and kept as the fan it was (fanChange.ts: BUG-169), and start the app over at
    * `path`, as who it is now: unknown till the server says, not the account it was (BUG-281). */
@@ -75,6 +78,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     const asker = whoAsker(ask, (now) => {
       const shown = meRef.current
       if (changedHands(shown, now)) {
+        if (leaving.current) return
         // Signed out elsewhere, this phone's devices went with its session: no end would take its live cards down.
         if (!now.signed_in) StannNotifications?.takeDownLive(null)
         startOver('/', now.signed_in ? null : SIGNED_OUT)
@@ -105,17 +109,24 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   const dismissNotice = useCallback(() => setNotice(null), [])
   const signedIn = useCallback((account: Account) => startOver('/account', welcome(account.players_added ?? 0, account.teams_dropped ?? 0)), [startOver])
   // Signed out or deleted, the phone is off the server (its session's devices go): its live cards, the account's
-  // games, would stay on the lock screen with nothing to end them, so they go now.
-  const signOut = useCallback(async (everywhere = false) => {
-    await api.signOut(everywhere)
+  // games, would stay on the lock screen with nothing to end them, so they go now. If the call fails, the phone is as
+  // it was, and who it is is asked again: the server may have ended its session all the same.
+  const leave = useCallback(async (end: () => Promise<unknown>, said: string) => {
+    if (leaving.current) return
+    leaving.current = true
+    try {
+      await end()
+    } catch (e) {
+      leaving.current = false
+      who.current?.ask(true)
+      throw e
+    }
     StannNotifications?.takeDownLive(null)
-    startOver('/', everywhere ? 'Signed out on every device.' : 'Signed out. Your players are kept in your account.')
+    startOver('/', said)  // as who it is now from here on: unknown till the server says (no change of hands from that)
+    leaving.current = false
   }, [startOver])
-  const deleteAccount = useCallback(async () => {
-    await api.deleteAccount()
-    StannNotifications?.takeDownLive(null)
-    startOver('/', 'Your account and everything kept with it are deleted.')
-  }, [startOver])
+  const signOut = useCallback((everywhere = false) => leave(() => api.signOut(everywhere), everywhere ? 'Signed out on every device.' : 'Signed out. Your players are kept in your account.'), [leave])
+  const deleteAccount = useCallback(() => leave(() => api.deleteAccount(), 'Your account and everything kept with it are deleted.'), [leave])
 
   const value = useMemo<AccountState>(
     () => ({ me, config, epoch, notice, dismissNotice, signedIn, signOut, deleteAccount }),
