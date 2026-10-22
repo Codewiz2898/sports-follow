@@ -48,8 +48,9 @@ LIVE_MOVES_KEEP = 6 * 3600  # a live board's moves so far, kept in Redis this lo
 # board waits this long for it before it's over, where Lichess doesn't say the round is first.
 GRACE = 30 * 60
 OVER_KEEP = 24 * 3600  # when such a game was first seen over, kept in Redis this long
-# Words a knockout's event or round goes by ("8-player Knockout", "Tiebreaks", "Armageddon", "Playoffs").
-KNOCKOUT = re.compile(r"\b(?:knock-?outs?|ko|tie-?breaks?|tie breaks?|armageddon|play-?offs?)\b", re.I)
+# Words a knockout's event or round goes by ("8-player Knockout", "Tiebreaks", "Rapid tie-breakers", "Armageddon",
+# "Playoffs", "Sudden death"). Not "rapid" or "blitz": a rapid event's rounds are a round robin's too.
+KNOCKOUT = re.compile(r"\b(?:knock-?outs?|ko|tie[- ]?break(?:er)?s?|armageddon|play-?offs?|sudden[- ]death)\b", re.I)
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20, follow_redirects=True)
 _lock = threading.Lock()  # one request at a time from each process, as Lichess asks
@@ -395,17 +396,19 @@ def fmt_points(x: float) -> str:
 
 def may_follow(round_data: dict[str, Any], games: list[dict[str, Any]]) -> bool:
     """Whether a player's game in a round may be followed by another with the same opponent in it: a mini-match's next
-    game, a tiebreak, an armageddon, each shown only once the one before is over. So in a knockout's round (its event's
-    or round's name, or Lichess's format for the event, says so; or a pairing in it already has several games) and in a
-    round of their pairing alone (a match's: a World Championship's tiebreak); not in a round robin's or a Swiss's."""
+    game, a tiebreak, an armageddon, each shown only once the one before is over. So in a knockout's round: its event's
+    or round's name, or Lichess's format for the event, says so (KNOCKOUT: a World Championship's "Tiebreaks"), or a
+    pairing in it already has several games. Not in a round robin's or a Swiss's, nor in a match's classical game ("Game
+    5", its pairing's alone), which is over once it's decided."""
     rnd, tour = round_data.get("round") or {}, round_data.get("tour") or {}
     if KNOCKOUT.search(" ".join(str(x or "") for x in (tour.get("name"), rnd.get("name"), (tour.get("info") or {}).get("format")))):
         return True
     pairs: dict[frozenset[str], int] = {}
     for g in round_data.get("games") or games:
-        pair = frozenset(str(p.get("fideId")) for p in g.get("players") or [])
+        # Its players by FIDE id, or by name where they have none (an open's unrated boards are each a pairing of their own).
+        pair = frozenset(str(p.get("fideId") or p.get("name") or "") for p in g.get("players") or [])
         pairs[pair] = pairs.get(pair, 0) + 1
-    return len(pairs) <= 1 or max(pairs.values()) > 1
+    return max(pairs.values(), default=0) > 1
 
 
 def round_status(round_info: dict[str, Any], games: list[dict[str, Any]], now: datetime, follows: bool = False, waited: float | None = None) -> str:

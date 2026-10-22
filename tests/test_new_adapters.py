@@ -355,8 +355,28 @@ def test_a_tiebreak_rounds_first_game_over_isnt_the_end_of_its_round(monkeypatch
     assert lichess_chess.parse_board(robin, CARLSEN).status == "final" and not lichess_chess.may_follow(robin, robin["games"][:1])
     # A knockout's round, by its event's format or its round's name, or with a mini-match in it already: one may follow.
     for knockout in ({"tour": {**robin["tour"], "info": {"format": "8-player Knockout"}}}, {"round": {**robin["round"], "name": "Armageddon"}},
+                     {"round": {**robin["round"], "name": "Rapid tiebreakers"}}, {"round": {**robin["round"], "name": "Sudden death"}},
                      {"games": [*robin["games"], {**other, "id": "otherbr2"}]}):
         assert lichess_chess.may_follow({**robin, **knockout}, robin["games"][:1]), knockout
+    # Nor in a rapid event's round, though its name says rapid.
+    rapid = {**robin, "tour": {**robin["tour"], "name": "Tata Steel India Rapid 2027", "info": {"format": "10-player round robin"}}, "round": {**robin["round"], "name": "Rapid Round 3"}}
+    assert not lichess_chess.may_follow(rapid, robin["games"][:1])
+    # An open's boards of unrated players, with no FIDE ids, are each their own pairing, by name: not a mini-match.
+    unrated = [{"id": f"open{i}", "status": "*", "fen": "", "players": [{"name": f"Player, A{i}"}, {"name": f"Player, B{i}"}]} for i in range(2)]
+    assert not lichess_chess.may_follow({**robin, "games": [*robin["games"], *unrated]}, robin["games"][:1])
+
+
+def test_a_world_championship_classical_game_is_over_once_decided():
+    # A match's classical game (BUG-210 review): "Game 5", one board, the round its pairing's alone. Decided, it's over at
+    # once, with no wait for a next game (only a tiebreak's or knockout's round has one), though Lichess hasn't said yet
+    # that the round is.
+    game5 = tiebreak("1-0")
+    game5.update(round={**game5["round"], "name": "Game 5"}, tour={**game5["tour"], "info": {"players": "Carlsen, Lazavik", "format": "14-game match"}})
+    assert game5["round"]["ongoing"] and not game5["round"]["finished"]
+    assert not lichess_chess.may_follow(game5, game5["games"])
+    snap = lichess_chess.parse_board(game5, CARLSEN)
+    assert (snap.status, snap.lines[CARLSEN].headline) == ("final", "Won with White vs Denis Lazavik")
+    assert lichess_chess.LichessChess._waited(game5, CARLSEN) is None  # nothing waits: no clock started
 
 
 def test_a_positions_moves_count_from_its_fen_and_a_games_from_its_last_move():
