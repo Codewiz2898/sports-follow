@@ -492,6 +492,8 @@ async def _take_follows(fan: str, address: str | None) -> list[str]:
         await state["redis"].expire(key, 2 * FOLLOWS_HOUR)
         if used > limit:
             await give_back_research(taken)
+            if key.startswith("follows:network:"):
+                _at_ceiling("follows", _network(address))
             raise HTTPException(429, refusal)
     return taken
 
@@ -847,14 +849,18 @@ LeagueCode = Annotated[str, InPath(min_length=4, max_length=16, pattern=r"^[A-Za
 LEAGUES_MADE_PER_HOUR = 5  # leagues one fan makes in an hour
 INVITES_PER_HOUR = 60  # invite pages one fan opens, and leagues they join, in an hour: a code can't be guessed by trying them all
 INVITES_PER_ADDRESS = 300  # invite pages opened from one client address in an hour: a request with no cookie is a new fan each time
+INVITES_PER_IPV6_48 = 1200  # an hour, from one IPv6 /48's /64s together (_address_limits)
 INVITES_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
 PICKS_PER_ADDRESS = 300  # picks from one client address in an hour, by fans without an account: new fans from one place can't stuff a split
+PICKS_PER_IPV6_48 = 1200  # an hour, from one IPv6 /48's /64s together (_address_limits)
 PICKS_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
 PICKS_PER_ACCOUNT = 300  # a signed-in fan's in an hour, wherever from: fans behind one carrier address don't use up each other's
 # Fans without an account whose picks on one question count (Pick.counted), from one client address: any device gets
 # a fan cookie (spa), so a split is stuffed only from as many addresses as the picks it would add. A home or a phone
-# network sharing one address has this many fans' calls in a game's split; the rest are theirs, and scored.
+# network sharing one address has this many fans' calls in a game's split; the rest are theirs, and scored. An IPv6
+# /48's /64s together have a few households' worth: a phone network's subscribers, or one person's free /48 (BUG-106).
 COUNTED_PER_ADDRESS = 5
+COUNTED_PER_IPV6_48 = 20
 COUNTED_FOR = 30 * 24 * 3600  # seconds an address's counted fans on a question are kept: longer than any question is open
 
 
@@ -881,8 +887,8 @@ async def make_pick(request: Request, question_id: RowId, body: dict = Body(...)
     if signed is not None:
         await _take(f"picks:fan:{fan}:{hour}", PICKS_PER_ACCOUNT, 7200, "That's a lot of picks for one hour. Try again in a while.")
     else:
-        await _take(f"picks:{address or 'unknown'}:{hour}", PICKS_PER_ADDRESS if address else PICKS_UNKNOWN_ADDRESS, 7200,
-                    "That's a lot of picks from your network. Try again in a while.")
+        await _take_address("picks", _address_limits(address, PICKS_PER_ADDRESS, PICKS_PER_IPV6_48, PICKS_UNKNOWN_ADDRESS), str(hour), 7200,
+                            "That's a lot of picks from your network. Try again in a while.")
 
     counted = signed is not None or (_cookie_fan(request) == fan and await _counted_here(question_id, address, fan))
 
@@ -899,16 +905,25 @@ async def make_pick(request: Request, question_id: RowId, body: dict = Body(...)
 
 async def _counted_here(question_id: int, address: str | None, fan: str) -> bool:
     """Whether a fan without an account counts on this question from this address: one of the first
-    COUNTED_PER_ADDRESS there, or counted there before (a changed pick)."""
-    key = f"picks-counted:{question_id}:{address or 'unknown'}"
+    COUNTED_PER_ADDRESS there, and from an IPv6 /64 of the first COUNTED_PER_IPV6_48 from its /48 (_address_limits),
+    or counted there before (a changed pick)."""
     redis = state["redis"]
-    if not await redis.sadd(key, fan):
-        return True  # counted here before
-    await redis.expire(key, COUNTED_FOR)
-    if await redis.scard(key) <= COUNTED_PER_ADDRESS:
-        return True
-    await redis.srem(key, fan)  # past the address's share: not one of them
-    return False
+    added: list[str] = []
+    for n, (who, most) in enumerate(_address_limits(address, COUNTED_PER_ADDRESS, COUNTED_PER_IPV6_48, COUNTED_PER_ADDRESS)):
+        key = f"picks-counted:{question_id}:{who}"
+        if not await redis.sadd(key, fan):
+            if n == 0:
+                return True  # counted here before
+            continue  # counted from another of the /48's /64s before
+        added.append(key)
+        await redis.expire(key, COUNTED_FOR)
+        if await redis.scard(key) > most:
+            for taken in added:
+                await redis.srem(taken, fan)  # past the address's share, or its /48's: not one of them
+            if who.endswith("/48"):
+                _at_ceiling("picks-counted", who)
+            return False
+    return True
 
 
 @app.delete("/api/predictions/{question_id}/pick")
@@ -973,8 +988,8 @@ async def league_invite(request: Request, code: LeagueCode, fan: str = Depends(f
     hour = int(time.time() // 3600)
     address = client_address(request)
     await _take(f"leagues:invites:{fan}:{hour}", INVITES_PER_HOUR, 7200, "That's a lot of invites for one hour. Try again later.")
-    await _take(f"leagues:invites-from:{address or 'unknown'}:{hour}", INVITES_PER_ADDRESS if address else INVITES_UNKNOWN_ADDRESS, 7200,
-                "That's a lot of invites from your network. Try again later.")
+    await _take_address("leagues:invites-from", _address_limits(address, INVITES_PER_ADDRESS, INVITES_PER_IPV6_48, INVITES_UNKNOWN_ADDRESS), str(hour), 7200,
+                        "That's a lot of invites from your network. Try again later.")
     counted = signed is not None or _cookie_fan(request) == fan
 
     def look(db: Session) -> dict[str, Any]:
@@ -1237,6 +1252,7 @@ async def campaign_picture(slug: str) -> Response:
 
 TAG_MOST = 60  # a link's tag, in characters (FanSource's columns)
 SOURCES_PER_ADDRESS = 100  # visits kept a UTC day from one client address: a script can't fill a campaign's numbers
+SOURCES_PER_IPV6_48 = 400  # a day, from one IPv6 /48's /64s together (_address_limits)
 SOURCES_UNKNOWN_ADDRESS = 1000  # a day, from every client without a public address together
 
 
@@ -1253,19 +1269,22 @@ async def visit_source(request: Request, body: dict = Body(...), fan: str = Depe
     utm_campaign) and its page, kept once (FanSource); a later link's are not. A tag in any other shape is
     left out (_tag), and a visit with none isn't kept. Nor is one from a fan the request itself made up (no
     cookie: the app's page, and the Android app's first request, make the device's fan before it tells this),
-    nor past SOURCES_PER_ADDRESS a day from one address: a script can't fill the launch numbers."""
+    nor past SOURCES_PER_ADDRESS a day from one address (or SOURCES_PER_IPV6_48 from an IPv6 /48's /64s together):
+    a script can't fill the launch numbers."""
     tags = {key: tag for key in ("s", "utm_source", "utm_medium", "utm_campaign") if (tag := _tag(body.get(key)))}
     landing = body.get("path")
     if not tags or not isinstance(landing, str) or not landing.startswith("/") or len(landing) > 200 or not landing.isprintable():
         return {"ok": True}
     if signed is None and _cookie_fan(request) != fan:
         return {"ok": True}
-    address = client_address(request)
-    key = f"sources:{address or 'unknown'}:{int(time.time() // DAY)}"
-    used = await state["redis"].incr(key)
-    await state["redis"].expire(key, 2 * DAY)
-    if used > (SOURCES_PER_ADDRESS if address else SOURCES_UNKNOWN_ADDRESS):
-        return {"ok": True}
+    for who, most in _address_limits(client_address(request), SOURCES_PER_ADDRESS, SOURCES_PER_IPV6_48, SOURCES_UNKNOWN_ADDRESS):
+        key = f"sources:{who}:{int(time.time() // DAY)}"
+        used = await state["redis"].incr(key)
+        await state["redis"].expire(key, 2 * DAY)
+        if used > most:
+            if who.endswith("/48"):
+                _at_ceiling("sources", who)
+            return {"ok": True}
     row = {"fan_id": fan, "tag": tags.get("s"), "utm_source": tags.get("utm_source"), "utm_medium": tags.get("utm_medium"), "utm_campaign": tags.get("utm_campaign"), "landing": landing}
 
     def keep(db: Session) -> None:
@@ -1347,14 +1366,17 @@ async def research_used(fan: str) -> int:
     return int(await state["redis"].get(player_search.research_key(fan)) or 0)
 
 
+RESEARCH_PER_IPV6_48 = 4 * RESEARCH_PER_ADDRESS  # a UTC day, from one IPv6 /48's /64s together (_address_limits)
+
+
 async def take_research(fan: str, address: str | None, used_up: str) -> list[str]:
-    """Count one AI research against the fan's UTC day, their address's day and this hour across all
-    fans. Returns the counts taken, for give_back_research; when any is used up, nothing is counted and
+    """Count one AI research against the fan's UTC day, their address's day (and an IPv6 /64's /48's) and this hour
+    across all fans. Returns the counts taken, for give_back_research; when any is used up, nothing is counted and
     the fan gets a 429 (`used_up` when it's their own three)."""
     now = datetime.now(timezone.utc)
     limits = [(player_search.research_key(fan, now), player_search.RESEARCH_PER_DAY, 2 * DAY, used_up)]
-    if address:
-        limits.append((player_search.research_address_key(address, now), RESEARCH_PER_ADDRESS, 2 * DAY, "Your network has used today's AI researches. Try again tomorrow."))
+    limits += [(player_search.research_address_key(who, now), most, 2 * DAY, "Your network has used today's AI researches. Try again tomorrow.")
+               for who, most in _address_limits(address, RESEARCH_PER_ADDRESS, RESEARCH_PER_IPV6_48)]
     limits.append((player_search.research_hour_key(now), RESEARCH_PER_HOUR, 2 * 3600, f"{APP_NAME} has done all the AI research it can this hour. Try again later."))
     taken: list[str] = []
     for key, limit, ttl, refusal in limits:
@@ -1363,6 +1385,8 @@ async def take_research(fan: str, address: str | None, used_up: str) -> list[str
         await state["redis"].expire(key, ttl)
         if used > limit:
             await give_back_research(taken)
+            if address and ":" in address and key == player_search.research_address_key(_network(address), now):
+                _at_ceiling("research", _network(address))
             raise HTTPException(429, refusal)
     return taken
 

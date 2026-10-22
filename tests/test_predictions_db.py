@@ -577,6 +577,28 @@ def test_fans_signed_in_behind_one_network_address_dont_use_up_each_others_picks
     assert hers.value.status_code == 429
 
 
+def test_picks_from_an_ipv6_48s_64s_together_stop_at_its_ceiling(db, redis, monkeypatch):
+    """BUG-106, reopened: picks from fans without an account were limited an hour per /64, and one /48 (a free tunnel,
+    many fibre plans) holds 65,536 of them. Its /64s together have a ceiling now, many /64s' worth (PICKS_PER_IPV6_48)."""
+    monkeypatch.setitem(server.state, "redis", Counts())
+    monkeypatch.setattr(server, "PICKS_PER_ADDRESS", 1)
+    monkeypatch.setattr(server, "PICKS_PER_IPV6_48", 3, raising=False)
+    chess_board(db, soon())
+    poll(1, board(status="*"))
+    q = db.scalars(select(Question)).one()
+
+    def pick(fan: str, client: str) -> int:
+        try:
+            asyncio.run(server.make_pick(request(client=client), q.id, {"option": CARLSEN}, fan, None))
+        except server.HTTPException as refused:
+            return refused.status_code
+        return 200
+
+    assert [pick("a", "2a00:1450:4009:1::1"), pick("b", "2a00:1450:4009:1::2")] == [200, 429]  # one /64's one an hour
+    assert [pick(f"c{i}", f"2a00:1450:4009:{i:x}::1") for i in range(2, 5)] == [200, 200, 429]  # the /48's three
+    assert pick("d", "2a00:1450:400a:1::1") == 200  # another /48
+
+
 def test_a_series_asked_days_ahead_keeps_its_later_maps_till_it_plays(db, redis):
     start = soon() + timedelta(days=4)
     db.add(Event(id=5, key=SERIES, sport="Valorant", title="Sentinels vs NRG", start_utc=start, status="scheduled", live_binding={"adapter": "pandascore_esports", "locator": {"match": "777"}}))

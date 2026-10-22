@@ -319,7 +319,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   in what a right pick scores (`Pick.counted`): a request without a cookie is a new fan, whose pick is theirs and
   scored but moves nobody else's numbers. Picks on questions still open move into an account on sign-in, those
   already under way stay the device's (no calling a game three ways and signing in on the right browser). A game
-  whose source is off asks nothing, and picks are limited per address. In the app: "Call it" on a match page (beside the
+  whose source is off asks nothing, and picks are limited per address (an IPv6 client's /64, its /48's /64s together
+  having a ceiling of their own, as every per-address limit does). In the app: "Call it" on a match page (beside the
   game on a wide screen, in the side column) and on a campaign page (its players' games); on Today and in the side
   column, a game's card says "Call it" until the fan has, then their pick, then "You called it · +38" or what they said
   (`GET /api/me/predictions`, `web/src/components/Calls.tsx`); `/me/leagues`, `/league/<code>` and the invite `/j/<code>`, whose sign-in comes back
@@ -1182,7 +1183,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_CLIPS_PUBLIC_BASE` | none | where fans fetch clips from: the CDN domain on the bucket (`https://clips.example.com`) |
 | `SPORTS_FOLLOW_CLIPS_KEY_FILE` | `~/.config/sports-follow/clips-key` | the bucket's access key id, then its secret, a line each |
 | `SPORTS_FOLLOW_CLIPS_REGION` | `auto` | the region the bucket's URLs are signed for: R2's `auto`, or an AWS region |
-| `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |
+| `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64; an IPv6 /48's /64s together get four times it); not counted for private addresses |
 | `SPORTS_FOLLOW_AGENT` | `1` | `0` runs without the research agent, as with no OpenRouter key: fans follow athletes their sources have (from the registry and search), those pages come from the sources (scores, games, stats, live and alerts) with their profile from Wikidata and Wikipedia and no news, nothing offers AI research, and pages the agent built before stay as they were, no longer updated |
 | `SPORTS_FOLLOW_RESEARCH` | `0` | `1` gives players no live source has a page the research agent writes whole: a typed name no source knows, a registry athlete no source has, offered as "AI research" (3 a fan a day). Off, they can't be followed, search doesn't list them, and nothing offers AI research; the agent only writes the background of a player Wikipedia has no article on |
 | `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game); only with `SPORTS_FOLLOW_RESEARCH=1` |

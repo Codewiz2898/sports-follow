@@ -331,6 +331,19 @@ def test_new_cookies_from_one_address_share_its_daily_research(api, monkeypatch)
     assert [research(api, "81.2.69.144", "one-fan").status_code for _ in range(4)] == [200, 200, 200, 429]
 
 
+def test_new_cookies_from_an_ipv6_48s_64s_together_stop_at_its_research_ceiling(api, monkeypatch):
+    """A /64's day of AI research was all that held an IPv6 client, and one /48 (a free tunnel) holds 65,536 /64s:
+    the hour's researches for every fan were one /48's to spend. Its /64s together have a ceiling of several /64s'
+    worth (the per-address rule, BUG-106 and BUG-326)."""
+    monkeypatch.setattr(server, "RESEARCH_PER_HOUR", 100, raising=False)
+    monkeypatch.setattr(server, "RESEARCH_PER_ADDRESS", 2, raising=False)
+    monkeypatch.setattr(server, "RESEARCH_PER_IPV6_48", 5, raising=False)
+    answers = [research(api, f"2a00:1450:4009:{i // 2:x}::1", f"script-{i}") for i in range(6)]
+    assert [r.status_code for r in answers] == [200] * 5 + [429]
+    assert answers[-1].json()["detail"] == "Your network has used today's AI researches. Try again tomorrow."
+    assert research(api, "2a00:1450:400a::1", "someone-else").status_code == 200  # another /48 isn't held up
+
+
 def test_researches_across_all_fans_stop_at_the_hourly_ceiling(api, monkeypatch):
     monkeypatch.setattr(server, "RESEARCH_PER_HOUR", 4, raising=False)
     answers = [research(api, f"81.2.69.{10 + i}", f"fan-{i}") for i in range(5)]
@@ -2001,6 +2014,18 @@ def test_where_fans_came_from_is_kept_for_fans_with_their_cookie_so_many_a_day_f
     assert [row["fan_id"] for row in _sources(api)] == ["fan-0", "fan-1", "fan-2", "fan-9"]
 
 
+def test_where_fans_came_from_is_kept_so_many_a_day_from_an_ipv6_48s_64s_together(api, monkeypatch):
+    """BUG-106's per-address rule: visits kept a day were counted per /64, and one /48 holds 65,536 of them. Its /64s
+    together have a ceiling of several /64s' worth (SOURCES_PER_IPV6_48)."""
+    monkeypatch.setattr(server, "SOURCES_PER_ADDRESS", 2, raising=False)
+    monkeypatch.setattr(server, "SOURCES_PER_IPV6_48", 3, raising=False)
+    body = {"utm_source": "h1probe", "path": "/gukesh"}
+    for i in range(5):
+        api.call("POST", "/api/me/source", fan=f"fan-{i}", address=f"2a00:1450:4009:{i:x}::1", body=body)
+    api.call("POST", "/api/me/source", fan="fan-9", address="2a00:1450:400a::1", body=body)  # another /48 isn't held up
+    assert [row["fan_id"] for row in _sources(api)] == ["fan-0", "fan-1", "fan-2", "fan-9"]
+
+
 def test_a_links_tags_are_kept_as_typed_spaces_and_all(api):
     """BUG-194: a tag with a space or a "|" ("Gukesh v Sindarov", "wcc|day1") was dropped, and a visit tagged only so
     wasn't kept at all. Any printable text is a tag now, its spaces trimmed and made single, up to 60 characters."""
@@ -2032,6 +2057,23 @@ def test_league_invites_are_looked_up_so_many_times_an_address_and_opened_only_b
     assert api.call("GET", "/api/leagues/38KWAS/invite", address="81.2.69.143").status_code == 200  # another address isn't held up
     assert api.call("GET", "/api/leagues/38KWAS/invite", fan="asha-phone", address="81.2.69.144").status_code == 200
     assert opened[-2:] == [("38KWAS", False), ("38KWAS", True)]  # opened: by the fan who came with their cookie only
+
+
+def test_league_invites_are_looked_up_so_many_times_from_an_ipv6_48s_64s_together(api, monkeypatch):
+    """BUG-106's per-address rule: invite pages opened an hour were counted per /64, and one /48 holds 65,536 of them,
+    so a script could try code after code from one. Its /64s together have a ceiling of several /64s' worth
+    (INVITES_PER_IPV6_48)."""
+    from sports_follow import predictions
+
+    def invite(db, code, fan, counted=True):
+        raise predictions.Refused(404, "No league has that invite: ask for a new link.")
+
+    monkeypatch.setattr(predictions, "invite", invite)
+    monkeypatch.setattr(server, "INVITES_PER_ADDRESS", 2, raising=False)
+    monkeypatch.setattr(server, "INVITES_PER_IPV6_48", 5, raising=False)
+    tries = [api.call("GET", f"/api/leagues/ZZZZZ{i}/invite", address=f"2a00:1450:4009:{i // 2:x}::1").status_code for i in range(6)]
+    assert tries == [404] * 5 + [429]
+    assert api.call("GET", "/api/leagues/ZZZZZZ/invite", address="2a00:1450:400a::1").status_code == 404  # another /48 isn't held up
 
 
 def test_a_video_that_wont_play_inside_the_app_is_voted_on_so_many_times_an_hour_and_odd_ones_are_refused_plainly(api, monkeypatch):
