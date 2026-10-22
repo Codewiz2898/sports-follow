@@ -3,7 +3,7 @@
 // row's end for the others there (filter.ts gameRow). The game picked narrows every block (filter.ts narrow).
 
 import { LinearGradient } from 'expo-linear-gradient'
-import { useLocalSearchParams, useNavigation } from 'expo-router'
+import { useLocalSearchParams, useNavigation, type NativeStackNavigationProp } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Keyboard, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -25,10 +25,10 @@ const FADE = 20 // with the search, the chips fade out under it, and the last on
  * over Today changes nothing of that page's.
  */
 export function useGame(row: GameRow): [SportInfo | null, (key: string | null) => void] {
-  const navigation = useNavigation()
+  const navigation = useNavigation<NativeStackNavigationProp<{ index: { game?: string } }>>()
   const { game: asked } = useLocalSearchParams<{ game?: string }>()
   const game = pickedGame(asked, row)
-  const pick = useCallback((key: string | null) => navigation.setParams({ game: key ?? undefined } as never), [navigation])
+  const pick = useCallback((key: string | null) => navigation.setParams({ game: key ?? undefined }), [navigation])
   const shown = useRef<string | null>(null) // the game last shown picked
   useEffect(() => {
     if (game) shown.current = game.key
@@ -97,7 +97,8 @@ export function GameChips({ row, game, onPick }: { row: GameRow; game: SportInfo
           showsHorizontalScrollIndicator={false}
           accessibilityLabel="Show games"
           contentContainerStyle={[s.chips, { paddingRight: find ? FADE : GUTTER }]}
-          onLayout={(e) => { view.current.width = e.nativeEvent.layout.width }}
+          // Its width may come after the chips' places (a link's game, laid out with the row): bring it in then.
+          onLayout={(e) => { view.current.width = e.nativeEvent.layout.width; if (picked) bring(picked) }}
           onScroll={(e) => { view.current.x = e.nativeEvent.contentOffset.x }}
           // A chip gone (a game from the search, no longer picked) leaves the row shorter: Android keeps the scroll
           // past its new end, a blank stretch before the search, where a browser would pull it back.

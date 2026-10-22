@@ -54,7 +54,7 @@ export function sportsOf(catalog: SportCatalog): Sports {
     return i.group || i.key
   }
 
-  return { catalog, info, drawn, name, running: () => catalog.sports.filter((s) => s.on), listed: () => all }
+  return { catalog, info, drawn, name, running: () => catalog.sports.filter((s) => s.on), listed: () => [...all] }
 }
 
 /** Before the server has answered: no sports, and any name is "other". */
