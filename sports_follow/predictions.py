@@ -286,8 +286,8 @@ def _rescheduled(db: Session, keys: list[str], game: dict[str, Any]) -> None:
 
 def settle(db: Session, rows: list[Question], rules: sports.Sport, status: str | None, state: dict[str, Any], now: datetime) -> list[int]:
     """What a game's board says of its questions: those under way closed, those it answers settled and their picks
-    scored (or voided), one whose answer the source changed settled again (a voided one too, once a winner it lacked
-    comes). Returns the ones settled now."""
+    scored (or voided), one whose answer the source changed settled again where its sport takes that for a correction
+    (Sport.resettles; a voided one too, once a winner it lacked comes). Returns the ones settled now."""
     done = []
     for q in rows:
         if q.status == VOIDED and q.answer != sports.VOID:
@@ -298,6 +298,8 @@ def settle(db: Session, rows: list[Question], rules: sports.Sport, status: str |
             q.status, q.closed_at = CLOSED, now
         if answer is None or answer == q.answer or (answer == sports.VOID and q.status == SETTLED):
             continue  # nothing new; or a board that lost an answer it gave doesn't take it back
+        if q.status == SETTLED and not rules.resettles(q.ask, state):
+            continue  # no correction, as its sport reads the board (a chess mini-match grown since): what was told stands
         if answer != sports.VOID and answer not in {o["key"] for o in q.options or []}:
             continue  # an answer it didn't offer (a side changed after it was asked): it waits for the sweep
         score(db, q, answer, now)
