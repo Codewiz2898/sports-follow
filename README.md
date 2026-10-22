@@ -560,7 +560,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   that keeps its athlete ids (`wikidata_property`, Liquipedia's P10918), a provider's live search and
   `recognise` for search as you type, a provider's `research` (its public API, which the research agent's
   prompt points to while it runs), `credit` for a live card carrying another's data too (OpenDota's),
-  `snapshots` for batched live polling, `live_now` for "Live now" (every game it has on, league-wide;
+  `snapshots` for batched live polling, `Snapshot.sides` on a scorecard that says which side each player is in
+  (a result is then won or lost by the side they played for, a traded player's old one too), `live_now` for "Live now" (every game it has on, league-wide;
   `sports_follow/live.py`; where a game's id isn't the fixture id a player's card has it under, its
   `LiveGame.fixtures` says those, as chess's boards do, so Today shows a fan's game once, as theirs; where
   the source rates its events, it leaves out the small ones and sets `LiveGame.tier`, the biggest first, as
@@ -805,7 +806,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `Fixture.board`: Lichess's once a round is paired; and by `board_players` and `pairing` (which meeting of the
   players it is) alerts take its fixtures for one game, each moment from the side its `voice` names), how an Android
   notification draws a game at a glance (`glance`: its two sides' short names and scores, where it's at, and how far
-  along it is, the match clock or the overs, with the goals marked), its form summary,
+  along it is, the match clock or the overs, with the goals marked), its form summary and a result's win, draw or
+  loss (`outcome`: kept with the result, from the side the player played for and the one the source marks the winner,
+  where its result is the game's own, as cricket's "India won by 57 runs"),
   how search shows its athletes, its colours (a player's page and link previews are drawn in them), what the Feed's
   content judge reads about it (`content_hints`: a few lines on what a milestone and a big moment are there, and what a
   promo, a rumour or a re-upload looks like to its fans; `restream_after`: how long a video from a channel nobody
