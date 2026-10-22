@@ -1,8 +1,8 @@
 // Today, the web's TodayPage.tsx: the day and the app's name, the fan's players as a strip, their live games as
 // scoreboards (each opening its match page) and the games they follow by themselves, a link to everything else
-// on now (the Live page), their results, the two best of their Feed (post.tsx), their games coming up
-// with the league's big ones after them, this week's big moments and the Wire, and players to follow while they follow few. A fan with no players and no
-// games gets the welcome first, once.
+// on now (the Live page), their results, their games coming up with the league's big ones after them, this
+// week's big moments and the Wire, the two best of their Feed (post.tsx), and players to follow while they follow
+// few. A fan with no players and no games gets the welcome first, once.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import Constants from 'expo-constants'
