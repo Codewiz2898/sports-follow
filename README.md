@@ -930,13 +930,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   follows goes by itself; a followed one stays.
 - **Starter players**, who a new fan is offered in each sport (the welcome, an empty Today, search's
   "Try"), find themselves, the same way for every sport (`sports_follow/starters.py`): who's playing
-  now or soon, worked out as asked from the live cards; the most followed, counted as asked; and the
+  now or soon, worked out as asked from the live cards; the most followed by signed-in fans (at least two:
+  a cookie's follow is its own), counted as asked; and the
   best known (Wikipedia editions, the home country's counting double: `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY`)
   with a game soon, which the worker finds in their sources once a day. The operator can pin a few
   ahead of them with `players starter add <registry id>` (it checks the source has them, and keeps
   them in the registry), `starter remove` (they stay kept; `restore` lets them go) and `starter list`;
-  `starter refresh` builds the best-known pool now. A sport that's turned off offers none, and removing a
-  player takes their pin with them, and takes them off every campaign page.
+  `starter refresh` builds the best-known pool now. A sport that's turned off offers none, without research
+  a page no live source has isn't offered, and removing a player takes their pin with them, and takes them off
+  every campaign page.
 - **The Feed's content judge** (`sports_follow/curate.py`, BHA-297) decides whether a share about a player (an
   unofficial video, a news headline, the player's own post) is fit to show, before any fan sees it. Given a
   `Candidate` (what was found, who posted it, and who it was found for, with their own accounts) it returns a
