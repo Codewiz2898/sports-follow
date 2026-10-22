@@ -6,7 +6,7 @@ import { Note, breakable, count, useFailure } from './shared'
 const REFRESH_MS = 30_000
 // Each window, as "a minute", "an hour", "a day".
 const SPANS: [seconds: number, per: string][] = [[60, 'a minute'], [3600, 'an hour'], [86400, 'a day']]
-const LANES: Record<string, string> = { live: 'Live games', fan: 'Fans', refresh: 'Refreshes', history: 'Older results', import: 'Registry import' }
+const LANES: Record<string, string> = { live: 'Live games', fan: 'Fans', refresh: 'Refreshes', history: 'Older results', import: 'Registry import', feed: 'Feed' }
 
 /** Every source with a switch, then every allowance its sources spend: where it stands, what each lane spent, and its limits to change. */
 export function SourcesTab() {
@@ -112,6 +112,8 @@ function summary(limits: Limits): string {
 
 function AllowanceCard({ allowance: b, onSaved }: { allowance: Allowance; onSaved: (view: SourcesView) => void }) {
   const failed = useFailure()
+  // The day its source counts from (YouTube's starts at midnight Pacific): the usage table's Today is that day.
+  const dayZone = b.limits.windows.find((w) => w.seconds === 86400 && w.zone)?.zone
   const [editing, setEditing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -163,6 +165,7 @@ function AllowanceCard({ allowance: b, onSaved }: { allowance: Allowance; onSave
       {b.changed && <span className="tiny muted">Declared: {summary(b.declared)}</span>}
       {b.usage.length > 0 && (
         <table className="usage">
+          {dayZone && <caption className="tiny muted">Today is from midnight {zoneName(dayZone)} time, as its source counts its day.</caption>}
           <thead><tr><th scope="col">Lane</th><th scope="col">Sent this hour</th><th scope="col">Today</th><th scope="col">Refused this hour</th><th scope="col">Today</th></tr></thead>
           <tbody>
             {b.usage.map((u) => (

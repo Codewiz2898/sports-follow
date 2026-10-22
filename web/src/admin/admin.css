@@ -38,6 +38,7 @@
 .usage th:first-child { text-align: left; }
 .usage tbody th { font-weight: 700; }
 .usage tr:last-child > * { border-bottom: 0; }
+.usage caption { caption-side: bottom; text-align: left; padding-top: 6px; }
 .limits-form { display: flex; flex-direction: column; gap: 12px; padding-top: 4px; border-top: 2px solid var(--line); }
 .limit-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 112px), 1fr)); gap: 10px; align-items: end; margin: 0; padding: 0; border: 0; min-width: 0; }
 .limit-row input[type='checkbox'] { width: 18px; height: 18px; accent-color: var(--text); }

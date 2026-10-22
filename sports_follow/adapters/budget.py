@@ -280,7 +280,10 @@ def _paused_key(budget: Budget) -> str:
 
 
 def _use_key(budget: Budget, lane_name: str, what: str, span: str, now: float) -> str:
-    n = int(now // (3600 if span == "h" else 86400))
+    """Where a lane's requests this hour ("h") or today ("d") are counted: today from the midnight its source's day
+    starts at, where it says (YouTube's, Pacific), so it matches what its day window has spent; else UTC's."""
+    zone = next((w.zone for w in budget.windows if w.seconds == 86400 and w.zone), None)
+    n = int(now // 3600) if span == "h" else _start(Window(86400, 0, zone=zone), now)
     return f"budget:use:{budget.name}:{lane_name}:{what}:{span}{n}"
 
 
@@ -401,7 +404,7 @@ def per(seconds: int) -> str:
 
 
 def usage(budgets: list[Budget], now: float | None = None) -> list[dict[str, Any]]:
-    """Each source's requests this hour and today, by lane: sent, and refused."""
+    """Each source's requests this hour and today (its own day, _use_key), by lane: sent, and refused."""
     now = now or time.time()
     rows = []
     for b in budgets:
