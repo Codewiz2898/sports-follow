@@ -176,7 +176,10 @@ deploy/migrate-to-server.sh deploy@<server-ip>
 5. **Checks against the live site:** `/api/health` answers healthy, `/api/credits` names no ESPN (so no
    development-only source runs), and the server's registry has as many athletes as the Mac's.
 
-Each step is one of the scripts above, and running it again is safe.
+Each step is one of the scripts above, and running it again is safe until the server's first deploy is
+live. After that it refuses: a live server's deploys come from GitHub. `seed-registry.sh` on its own
+likewise leaves a registry the server already has alone, unless given `--replace`; either way it copies
+in one transaction, so a copy that fails part way changes nothing.
 
 **Not moved, on purpose:**
 - **The Mac's games, results and news.** Much of it comes from ESPN, which only development may use.

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # From the Mac, in the repo with the development stack running: move Sports Follow off the Mac onto a
 # server that server-setup.sh has set up, in one go (README.md, "Moving off the Mac"). Each step is one of
-# the scripts here, and the whole of it is safe to run again.
+# the scripts here. It moves a new server, once: until its first deploy is live the whole of it is safe to
+# run again, and after that it refuses (a live server's deploys come from GitHub, with approval).
 #   deploy/migrate-to-server.sh deploy@<server-ip> [--check]   (--check: step 1 only, which changes nothing)
 # 1. Checks: the tokens push-secrets.sh needs, the Mac's database with the registry, the server set up.
 # 2. Secrets (push-secrets.sh): the API tokens; the server makes its own keys, and seals all of it.
@@ -37,6 +38,10 @@ mac_athletes=$(docker compose exec -T postgres psql -At -U sports -d sports_foll
 domain=$(ssh -o BatchMode=yes "$TARGET" "sed -n 's/^DOMAIN=//p' /opt/sports-follow/deploy/.env" 2>/dev/null) \
   || die "can't log in as $TARGET, or the server isn't set up: deploy/server-setup.sh (README.md, step 2)"
 [ -n "$domain" ] || die "the server has no DOMAIN in /opt/sports-follow/deploy/.env: run deploy/server-setup.sh again"
+live=$(ssh -o BatchMode=yes "$TARGET" 'cat "${XDG_STATE_HOME:-$HOME/.local/state}/sports-follow/live" 2>/dev/null || true')
+if [ -n "$live" ]; then
+  die "the server already runs ${live:0:7}: this moves a new server, once. A live one takes its deploys from GitHub (README.md, \"Deploying\"), new tokens from push-secrets.sh, and keeps its registry current itself. If an earlier run stopped after its first deploy, finish by hand: deploy/seed-registry.sh $TARGET, then step 5's checks (README.md, \"Moving off the Mac\")."
+fi
 say "Mac: $mac_athletes athletes in the registry; server: $TARGET, the app at https://$domain"
 if [ -n "$CHECK_ONLY" ]; then
   say "ready to migrate (--check: nothing was sent or changed)"
