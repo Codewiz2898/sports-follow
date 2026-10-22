@@ -26,9 +26,9 @@ export function Piece({ piece, size, style }: { piece: string; size: number; sty
  * unless the board is turned (flip), and the score (evalScore) at the end of the side ahead. Live, it's the
  * server's evaluation, the one the swing alerts go by; on an analysis board, the fan's own engine's, and none yet
  * (null) while it starts, in the board's raised colour. To a screen reader it says the score and how deep the
- * engine looked (evalWords). */
-export function EvalBar({ ev, flip, compact, pal }: { ev: ChessEval | null; flip: boolean; compact?: boolean; pal: Palette }) {
-  if (!ev) return <View accessible accessibilityRole="image" accessibilityLabel="Engine evaluation: not yet" style={[p.bar, { width: compact ? BAR.small : BAR.width, outlineColor: pal.line, backgroundColor: pal.raised }]} />
+ * engine looked (evalWords); empty, why (`none`). */
+export function EvalBar({ ev, flip, compact, pal, none = 'not yet' }: { ev: ChessEval | null; flip: boolean; compact?: boolean; pal: Palette; none?: string }) {
+  if (!ev) return <View accessible accessibilityRole="image" accessibilityLabel={`Engine evaluation: ${none}`} style={[p.bar, { width: compact ? BAR.small : BAR.width, outlineColor: pal.line, backgroundColor: pal.raised }]} />
   return <Bar ev={ev} flip={flip} compact={compact} pal={pal} />
 }
 

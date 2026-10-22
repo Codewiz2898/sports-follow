@@ -563,10 +563,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   read of the board that finds it one move on adding that move as Lichess gives it (`d5e3`, the page's `more`)
   at no request, and a read reading the PGN again only after moves were missed between looks
   (`LichessChess._moves_so_far`); the browser writes them in SAN with chess.js, and adds the board's own last
-  move where the list is one short of it. On the site, the left and right arrow keys step the board back and on
-  along them (its bar empty meanwhile: the live evaluation is the position now's), with Back to live (To the end,
-  once it's over) under it; new moves leave it where it is. The Android app draws it alike, the board as wide as
-  the screen with the moves under it (`mobile/src/sports/chess.tsx`).
+  move where the list is one short of it. The ‹ › buttons by the moves' heading step the board back and on along
+  them, as do the left and right arrow keys on the site (its bar empty meanwhile: the live evaluation is the
+  position now's), with Back to live (To the end, once it's over) under it; new moves leave it where it is. The
+  Android app draws it alike, the board as wide as the screen with the moves under it
+  (`mobile/src/sports/chess.tsx`).
 - **Play from here, on the fan's device.** A chess game's match page opens an analysis board over the page (a
   modal dialog, the board up to 720px; in the Android app a full-screen Modal, `mobile/src/sports/chessAnalysis.tsx`): the fan plays either side's legal moves from the game's position (or
   from any move in its list that replays, or the one the board was stepped back to), steps along their line (the
