@@ -21,6 +21,8 @@ import asyncio
 import errno
 import json
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
@@ -112,6 +114,23 @@ class Redis:
 
     async def delete(self, *keys):
         return sum(self.data.pop(k, None) is not None for k in keys)
+
+    async def sadd(self, key, *members):
+        held = self.data.setdefault(key, set())
+        assert isinstance(held, set)
+        new = set(members) - held
+        held.update(new)
+        return len(new)
+
+    async def scard(self, key):
+        return len(self.data.get(key) or ())  # type: ignore[arg-type]
+
+    async def srem(self, key, *members):
+        held = self.data.get(key) or set()
+        assert isinstance(held, set)
+        gone = held & set(members)
+        held.difference_update(gone)
+        return len(gone)
 
     async def expire(self, key, seconds, nx=False):
         return True
@@ -1284,6 +1303,91 @@ def test_a_device_moves_to_another_fan_only_with_its_own_keys(api):
     assert subscribe("fan-b", "new-key", "new-auth").status_code == 200 and api.devices[endpoint] == ("fan-b", "new-key", "new-auth")
     trims = [s for s in api.statements if isinstance(s, Delete) and s.table.name == "push_subscription"]
     assert len(trims) == 3  # the device cap, after each subscription that went through
+
+
+# ---------------------------------------------------------------- devices and test pushes from one network (BUG-181, BUG-182)
+
+
+def test_one_network_turns_notifications_on_for_only_so_many_new_devices_a_day(api, monkeypatch):
+    # BUG-181: new cookies are free, so the cap of a fan's devices didn't bound one network's.
+    monkeypatch.setattr(server, "DEVICES_PER_ADDRESS", 3, raising=False)
+    monkeypatch.setattr(server.fcm, "enabled", lambda: True)
+
+    def browser(fan: str, n: int, address: str = PUBLIC) -> int:
+        body = {"subscription": {"endpoint": f"https://fcm.googleapis.com/fcm/send/{n}", "keys": {"p256dh": f"k{n}", "auth": "a"}}}
+        return api.call("POST", "/api/push/subscriptions", fan=fan, address=address, body=body).status_code
+
+    def phone(fan: str, n: int, address: str = PUBLIC) -> int:
+        return api.call("POST", "/api/push/fcm", fan=fan, address=address, body={"token": f"dGVzdC1pbnN0YW5jZQ:APA91bE{n}" + "x" * 140}).status_code
+
+    assert [browser(f"script-{n}", n) for n in range(2)] + [phone("script-2", 2), browser("script-3", 3), phone("script-4", 4)] == [200, 200, 200, 429, 429]
+    # A device already counted, sent again as each start of the app sends it, is never refused; nor is another network.
+    assert browser("script-0", 0) == 200 and phone("script-2", 2) == 200
+    assert browser("someone", 9, "81.2.69.143") == 200
+    assert set(api.devices) == {"https://fcm.googleapis.com/fcm/send/0", "https://fcm.googleapis.com/fcm/send/1", "https://fcm.googleapis.com/fcm/send/9",
+                                "dGVzdC1pbnN0YW5jZQ:APA91bE2" + "x" * 140}
+
+
+@pytest.fixture
+def unanswered(api, monkeypatch):
+    """Every fan has ten devices (the cap), whose push services never answer a test push till the event is set."""
+    release = threading.Event()
+    devices = [(i, "webpush", f"https://fcm.googleapis.com/fcm/send/{i}", "k", "a") for i in range(notify.MAX_DEVICES)]
+
+    @contextmanager
+    def session():  # what send_test read the devices from before it was handed them
+        yield SimpleNamespace(scalars=lambda stmt: [SimpleNamespace(id=i, transport=t, endpoint=e, p256dh=p, auth=a) for i, t, e, p, a in devices])
+
+    tests = ThreadPoolExecutor(max_workers=4)
+    monkeypatch.setattr(notify, "public_key", lambda: "key")
+    monkeypatch.setattr(notify, "session", session)
+    monkeypatch.setattr(notify, "newest_devices", lambda db, fan: devices, raising=False)
+    monkeypatch.setattr(notify, "deliver", lambda device, payload, ttl, topic=None: release.wait(30) and "Read timed out.")
+    monkeypatch.setattr(notify, "settle", lambda results: None)
+    monkeypatch.setattr(notify, "_tests", tests, raising=False)
+    monkeypatch.setattr(notify, "TEST_WAIT", 0.3, raising=False)
+    yield release
+    release.set()
+    tests.shutdown(wait=True)
+
+
+def test_test_pushes_to_devices_that_never_answer_hold_up_no_search(unanswered):
+    # BUG-182: each test push held one of the threads search, following and sign-in run on (about six a worker),
+    # pushing its ten devices one after another: 34 at once and a search took 77 s.
+    async def go():
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=4))
+
+        async def test_push(n: int) -> httpx.Response:
+            transport = httpx.ASGITransport(app=server.app, client=(f"81.2.69.{10 + n}", 50000), raise_app_exceptions=False)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                return await client.post("/api/push/test", headers={"Cookie": f"sf_fan={server.sign_fan(f'fan-{n}')}"})
+
+        pushes = [asyncio.create_task(test_push(n)) for n in range(8)]
+        await asyncio.sleep(0.2)
+        try:
+            searched = await asyncio.wait_for(asyncio.to_thread(lambda: "found"), 2)  # as /api/search runs _search
+        except TimeoutError:
+            searched = "still waiting for a thread"
+        finally:
+            unanswered.set()
+        return searched, await asyncio.gather(*pushes)
+
+    searched, answers = asyncio.run(go())
+    assert searched == "found"
+    assert [(a.status_code, a.json()) for a in answers] == [(200, {"sent": 0})] * 8  # none answered in time
+
+
+def test_test_pushes_are_limited_for_each_fan_and_network(api, unanswered, monkeypatch):
+    unanswered.set()
+    monkeypatch.setattr(server, "PUSH_TESTS_PER_FAN", 5, raising=False)
+    monkeypatch.setattr(server, "PUSH_TESTS_PER_ADDRESS", 8, raising=False)
+
+    def test_push(fan: str, address: str = PUBLIC) -> int:
+        return api.call("POST", "/api/push/test", fan=fan, address=address).status_code
+
+    assert [test_push("fan") for _ in range(6)] == [200] * 5 + [429]
+    assert [test_push(f"cookie-{n}") for n in range(4)] == [200, 200, 200, 429]  # new cookies share their network's
+    assert test_push("someone", "81.2.69.143") == 200
 
 
 def test_starters_are_offered_as_the_fan_sees_them(api, monkeypatch):

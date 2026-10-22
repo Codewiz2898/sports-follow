@@ -1912,16 +1912,47 @@ async def admin_delete_user(account_id: RowId, body: dict = Body(...)) -> dict[s
 
 # ---------------------------------------------------------------- push notifications
 
-# Browsers hand us the address their push service delivers to. Only real push services are accepted,
-# so a crafted subscription can't make this server post to an arbitrary host.
-PUSH_HOSTS = ("fcm.googleapis.com", "android.googleapis.com", "updates.push.services.mozilla.com", ".push.apple.com", ".notify.windows.com")
+# Browsers hand us the address their push service delivers to. Only real push services are accepted: each one's own
+# host (Windows' has one a region), on the usual port with no user name, under the paths its subscriptions have. So a
+# crafted subscription can't make this server post to an arbitrary host, nor wait on a port of a real one that never
+# answers while other fans' alerts wait behind it (BUG-181), nor name a new push service in the metrics (BUG-089).
+PUSH_SERVICES = (
+    (re.compile(r"fcm\.googleapis\.com"), ("/fcm/send/", "/wp/")),  # Chrome and the browsers built on it
+    (re.compile(r"android\.googleapis\.com"), ("/gcm/send/",)),  # Chrome's older subscriptions
+    (re.compile(r"updates\.push\.services\.mozilla\.com"), ("/wpush/", "/push/")),  # Firefox
+    (re.compile(r"web\.push\.apple\.com"), ("/",)),  # Safari, and home-screen apps on an iPhone
+    (re.compile(r"[a-z0-9-]+\.notify\.windows\.com"), ("/w/",)),  # Edge on Windows
+)
 TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+DEVICES_PER_ADDRESS = 20  # new devices one client address (an IPv6 /64) turns notifications on for in a UTC day
 
 
 def _push_host_ok(endpoint: str) -> bool:
     url = urlparse(endpoint)
     host = url.hostname or ""
-    return url.scheme == "https" and any(host == h or (h.startswith(".") and host.endswith(h)) for h in PUSH_HOSTS)
+    # The host alone, or with the usual port: no other port, no user name or password.
+    if url.scheme != "https" or url.netloc not in (host, f"{host}:443"):
+        return False
+    return any(service.fullmatch(host) and url.path.startswith(paths) for service, paths in PUSH_SERVICES)
+
+
+async def device_room(request: Request, body: dict = Body(...)) -> None:
+    """Room for one more device from this client's address: a browser's subscription or the Android app's token,
+    counted once a UTC day however often it's sent again (each start of the app sends it). Past DEVICES_PER_ADDRESS,
+    a 429: new cookies are free, so a fan's own cap (notify.MAX_DEVICES) doesn't bound one network's (BUG-181)."""
+    address = client_address(request)
+    sub = body.get("subscription")
+    device = _sent_text(sub.get("endpoint"), 999) if isinstance(sub, dict) else body.get("token")
+    if address is None or not isinstance(device, str) or not (_push_host_ok(device) if isinstance(sub, dict) else fcm.valid_token(device)):
+        return  # the route itself refuses what isn't a device
+    redis = state["redis"]
+    key = f"push:devices:{address}:{datetime.now(timezone.utc).date().isoformat()}"
+    seen = hashlib.sha256(device.encode()).hexdigest()[:16]  # never the token itself: only the device has that
+    if await redis.sadd(key, seen):
+        await redis.expire(key, 2 * DAY)
+        if await redis.scard(key) > DEVICES_PER_ADDRESS:
+            await redis.srem(key, seen)
+            raise HTTPException(429, "Notifications have been turned on for a lot of devices on your network today. Try again tomorrow.")
 
 
 @app.get("/api/push")
@@ -1936,7 +1967,7 @@ def _sent_text(value: Any, longest: int) -> str | None:
     return value if isinstance(value, str) and 0 < len(value) <= longest and value.isprintable() else None
 
 
-@app.post("/api/push/subscriptions")
+@app.post("/api/push/subscriptions", dependencies=[Depends(device_room)])
 def subscribe(body: dict = Body(...), fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Turn notifications on for this device (or update its quiet hours). Signed in, the device belongs
     to this session: signing out turns it off."""
@@ -1998,7 +2029,7 @@ def _device_settings(body: dict) -> tuple[str, str | None, str | None]:
     return tz, start, end
 
 
-@app.post("/api/push/fcm")
+@app.post("/api/push/fcm", dependencies=[Depends(device_room)])
 def register_fcm(body: dict = Body(...), fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of), db: Session = Depends(get_db)) -> dict[str, Any]:
     """The Android app turns notifications on for this device with its FCM token (or updates its quiet
     hours, or its live cards: `live_cards`, Alerts' Live scores), as a browser does with its subscription.
@@ -2074,11 +2105,24 @@ def unregister_fcm(body: dict = Body(...), fan: str = Depends(fan_id), db: Sessi
     return {"ok": True}
 
 
+PUSH_TESTS_PER_FAN = 5  # an hour
+PUSH_TESTS_PER_ADDRESS = 20  # an hour, from one client address (an IPv6 /64)
+
+
 @app.post("/api/push/test")
-async def push_test(fan: str = Depends(fan_id)) -> dict[str, int]:
+async def push_test(request: Request, fan: str = Depends(fan_id)) -> dict[str, int]:
+    """A test notification to each of this fan's devices. A fan and an address send only so many an hour: past
+    either, a 429. The pushes go on notify's own threads and are waited for on none (notify.send_test), so devices
+    that never answer hold up nothing but other test pushes, never search, following or sign-in (BUG-182)."""
     if notify.public_key() is None and not fcm.enabled():
         raise HTTPException(503, "Notifications aren't set up on this server yet.")
-    return {"sent": await asyncio.to_thread(notify.send_test, fan)}
+    refused = "That's a lot of test notifications for one hour. Try again later."
+    await _take(f"pushtest:fan:{fan}", PUSH_TESTS_PER_FAN, 3600, refused)
+    address = client_address(request)
+    if address:
+        await _take(f"pushtest:address:{address}", PUSH_TESTS_PER_ADDRESS, 3600, refused)
+    devices = await in_db(notify.newest_devices, fan)
+    return {"sent": await notify.send_test(devices)}
 
 
 @app.post("/api/notifications/{notification_id}/opened")
