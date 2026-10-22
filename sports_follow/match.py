@@ -380,10 +380,13 @@ def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime 
         state = {**state, "page_detail": told}
     page = rules.match_page(state, game_events, (game or {}).get("lines") or {}, names)
     # Who won, over a finished game's board; before its first read, what the league's card says ("Arsenal beat
-    # Chelsea", or the score).
+    # Chelsea", or the score). Where the board's line under the score names the winner already (a tennis match's
+    # note), it's that line, as a cricket match's summary is: the apps say it there, once (web/src/match.ts).
     verdict = ""
     if status == "final":
         verdict = (rules.verdict(state, board.get("score") or "", board.get("clock") or "") if board else "") or (big or {}).get("line") or (big or {}).get("word") or ""
+        if verdict and board and board.get("clock") and rules.says_who_won(state, board["clock"]):
+            verdict = board["clock"]
     adapter = reader(system)
     ask = bool(adapter and adapter.fixture_pattern.fullmatch(fixture) and _age((read_ or {}).get("as_of"), now) > _fresh(status, start, read_, now))
     ids = [e.id for e in events]

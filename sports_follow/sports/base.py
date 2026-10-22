@@ -646,6 +646,12 @@ class Sport:
         and clock lines. "" where the board says it all, or for a sport no module knows."""
         return ""
 
+    def says_who_won(self, state: dict[str, Any], clock: str) -> bool:
+        """Whether a finished game's line under its score (its clock line) already names who won, so its match page
+        says it there, once, and not again big over the board (match.view: the verdict is that line then). A sport
+        whose verdict is that line already (a cricket match's summary, a chess board's result) needn't say."""
+        return False
+
     # ---- live games and cards (structured.py)
 
     def glance(self, state: dict[str, Any], score: str, clock: str, status: str | None, events: list[dict[str, Any]]) -> Glance:

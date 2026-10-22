@@ -133,6 +133,23 @@ def test_a_finished_game_says_who_won_as_its_sport_words_it(sport, state, clock,
     assert sports.of(sport).verdict(state, "", clock) == said
 
 
+TENNIS = {"kind": "tennis", "players": [{"id": "1", "name": "Carlos Alcaraz", "short": "C. Alcaraz", "winner": False}, {"id": "2", "name": "Zizou Bergs", "short": "Z. Bergs", "winner": True}]}
+NOTE = "Zizou Bergs (BEL) bt (2) Carlos Alcaraz (ESP) 7-5 7-6 (7-4)"
+
+
+@pytest.mark.parametrize(("sport", "state", "clock", "says"), [
+    ("tennis", TENNIS, NOTE, True),  # its source's note names the winner
+    ("tennis", {"kind": "tennis", "players": [{"name": "V. Hruncakova / A. Siskova", "winner": True}, {"name": "M. Drazic / M. Mattel"}]},
+     "Viktoria Hruncakova (SVK) & Anna Siskova (CZE) bt Mariana Drazic (CRO) & Marie Mattel (FRA) 6-3 6-4", True),  # a pair, by their full names
+    ("tennis", TENNIS, "Final", False),
+    ("tennis", {"kind": "tennis", "players": [{"name": "Zizou Bergs"}, {"name": "Carlos Alcaraz"}]}, "Zizou Bergs (BEL) leads Carlos Alcaraz (ESP) 7-5", False),  # no winner yet
+    ("football", FOOTBALL, "FT", False),
+])
+def test_a_sport_says_whether_its_finished_boards_line_names_the_winner(sport, state, clock, says):
+    # BUG-088: a tennis match's page said who won twice, on its board's line and big over it.
+    assert sports.of(sport).says_who_won(state, clock) is says
+
+
 # ---------------------------------------------------------------- the page
 
 
@@ -649,6 +666,22 @@ def test_a_game_called_off_and_played_again_lists_only_the_replays_moments_and_l
     page, _ = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=40))
     assert [m["title"] for m in page["moments"]] == ["Goal: Bukayo Saka"]
     assert [(p["name"], p["headline"]) for p in page["yours"]] == [("Bukayo Saka", "1 goal")]
+
+
+@needs_db
+def test_a_finished_games_board_line_that_names_the_winner_is_its_verdict(db, redis, source, monkeypatch):
+    # BUG-088: a tennis match's page said who won twice: on its board's line ("Zizou Bergs (BEL) bt (2) Carlos Alcaraz…")
+    # and again, big, over it ("Zizou Bergs won"). The verdict is that line, as a cricket match's summary is, so the
+    # apps say it once (web/src/match.ts pageResult); a board whose line doesn't name the winner has it big.
+    monkeypatch.delitem(ADAPTERS, "pitch")
+    for event_id, clock in ((42, NOTE), (43, "Final")):
+        db.add(Event(id=event_id, key=f"pitch:{event_id}", sport="Tennis", title="Carlos Alcaraz vs Zizou Bergs", status="final", start_utc=NOW))
+        db.flush()
+        db.add(EventState(event_id=event_id, as_of=NOW, status="final", score_label="C. Alcaraz 5-7 6-7 Z. Bergs", clock_label=clock, state=TENNIS))
+    db.commit()
+    page = match.view(db, "fan", "pitch", "42", NOW + timedelta(hours=1))[0]
+    assert (page["sport"], page["live"]["clock"], page["verdict"]) == ("tennis", NOTE, NOTE)
+    assert match.view(db, "fan", "pitch", "43", NOW + timedelta(hours=1))[0]["verdict"] == "Zizou Bergs won"
 
 
 @needs_db
