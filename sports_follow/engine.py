@@ -91,6 +91,7 @@ HASH_MB = int(os.environ.get("SPORTS_FOLLOW_ENGINE_HASH_MB", 128))  # the deep s
 LOOK_HASH_MB = 16  # the looks' engine, cleared before each look
 LOOK_SECONDS = 30  # a look still going this long (a stalled machine) is stopped, its score then the machine's
 HALT_SECONDS = 5  # an engine that hasn't ended a search this long after it was told to is killed
+READY_SECONDS = 30  # ...and one that hasn't answered "uci" or "isready" this long (a wrong path, a wedged start)
 SLICE = 1.0  # seconds a deep search runs before the lane looks again: about a look
 TURN = 8_000_000  # nodes a deep search goes on for while another game waits to be deepened
 DEEP_IDLE = 60  # seconds with nothing to deepen before the deep search's engine is closed (or after it failed, started again)
@@ -456,8 +457,14 @@ class Engine:
         return line
 
     def _until(self, prefix: str) -> None:
-        while not self._read().startswith(prefix):
-            pass
+        """Read up to the engine's answer (uciok, readyok). One that doesn't give it within READY_SECONDS is
+        stuck: killed, so the lane never waits on it (the next lane starts another)."""
+        deadline = time.monotonic() + READY_SECONDS
+        while (left := deadline - time.monotonic()) > 0:
+            if self._read(left).startswith(prefix):
+                return
+        self.proc.kill()
+        raise EngineError(f"the engine didn't answer {prefix} in {READY_SECONDS} s")
 
 
 # ---------------------------------------------------------------- the lane

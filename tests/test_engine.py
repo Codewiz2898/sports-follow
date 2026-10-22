@@ -395,6 +395,37 @@ def test_a_stuck_engine_is_killed_not_waited_on(tmp_path, monkeypatch):
     assert e.proc.wait(timeout=2) != 0
 
 
+@pytest.mark.parametrize("answers", ["", "uci"])
+def test_an_engine_that_never_says_its_ready_is_killed_not_waited_on(tmp_path, monkeypatch, answers):
+    # BUG-178: an engine that starts but never answers "uci" (a wrong SPORTS_FOLLOW_STOCKFISH, a wedged start), or
+    # "isready", held the lane's thread and its process for good; the lane's lock lapsed, and each tick started another.
+    mute = tmp_path / "mute-engine"
+    mute.write_text(f"#!/usr/bin/env python3\nimport sys\nfor line in sys.stdin:\n    if line.split()[:1] == [{answers!r}]:\n        print('uciok', flush=True)\n")
+    mute.chmod(0o755)
+    monkeypatch.setattr(engine, "READY_SECONDS", 0.3)
+    started: list[subprocess.Popen] = []
+    popen = subprocess.Popen
+    monkeypatch.setattr(engine.subprocess, "Popen", lambda *a, **k: started.append(popen(*a, **k)) or started[-1])
+    failed: list[Exception] = []
+
+    def start() -> None:
+        try:
+            engine.Engine(str(mute)).close()
+        except engine.EngineError as exc:
+            failed.append(exc)
+
+    thread = threading.Thread(target=start, daemon=True)
+    thread.start()
+    thread.join(5)
+    try:
+        assert not thread.is_alive() and failed  # given up on, not waited for
+        assert started[0].wait(timeout=2) is not None  # and its process is gone
+    finally:
+        for proc in started:
+            if proc.poll() is None:
+                proc.kill()
+
+
 # ---------------------------------------------------------------- the poller's side (structured._evaluate)
 
 F30, F31, F32, F33 = (f"8/8/8/8/8/8/8/8 w - - 0 {n}" for n in (30, 31, 32, 33))
