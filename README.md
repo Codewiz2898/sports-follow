@@ -531,18 +531,19 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   read of the board that finds it one move on adding that move as Lichess gives it (`d5e3`, the page's `more`)
   at no request, and a read reading the PGN again only after moves were missed between looks
   (`LichessChess._moves_so_far`); the browser writes them in SAN with chess.js, and adds the board's own last
-  move where the list is one short of it.
+  move where the list is one short of it. The Android app draws it alike, the board as wide as the screen with
+  the moves under it (`mobile/src/sports/chess.tsx`).
 - **Play from here, on the fan's device.** A chess game's match page opens an analysis board over the page (a
-  modal dialog, the board up to 720px): the fan plays either side's legal moves from the game's position (or
+  modal dialog, the board up to 720px; in the Android app a full-screen Modal, `mobile/src/sports/chessAnalysis.tsx`): the fan plays either side's legal moves from the game's position (or
   from any move in its list that replays), steps along their line, plays any of the engine's best three lines to
-  a move, with its best move as an arrow, flips, starts over, turns the engine off, and Back to live (or Escape)
-  returns to the game. A
+  a move, with its best move as an arrow, flips, starts over, turns the engine off, and Back to live (or Escape,
+  or Android's back) returns to the game. A
   Freestyle (Chess960) position that can still castle isn't offered: chess.js would castle it the standard way.
   Its bar comes from Stockfish 18 (the lite single-threaded WebAssembly build, GPL-3.0, vendored in
   `web/src/sports/engine/` with its source commit, licence and checksums) in a Web Worker of the page, each
   position to depth 18 from a cleared hash on one thread, so every device ends on the same result (a slow phone
-  later; the lite network's, which can differ from the server's full engine; the web looks for three lines and
-  the Android app for one until its board shows them, BHA-403, which can move the best line's score a little). The build names its files by
+  later; the lite network's, which can differ from the server's full engine; three lines on the web and in the
+  Android app alike, as the line count changes the search too). The build names its files by
   their content under `/assets/`, a fan's browser fetches them only when they open the board, and the service
   worker keeps them then, as it does every built asset. Moves come from chess.js in a chunk of its own
   (`web/src/sports/facts/chessLine.ts`, `chessAnalysis.tsx`). Nothing the fan plays reaches the server, so it

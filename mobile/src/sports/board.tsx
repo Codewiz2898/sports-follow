@@ -57,6 +57,9 @@ export interface BoardProps<S = unknown> {
   // The match page's board: one the fan may explore, where its sport has a way to (a chess board's Play from
   // here, an analysis board on the phone). Elsewhere a board is the game's alone.
   explore?: boolean
+  // With it, the match page's own (its sport's sections, MatchProps' page), for a board that shows some with it
+  // (a chess game's moves).
+  page?: unknown
   pal: Palette
 }
 
