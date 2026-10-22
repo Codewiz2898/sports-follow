@@ -5,8 +5,9 @@ a fan who follows nobody sees only them: GET /api/league, the same for every fan
 A source that can list its competitions' games between two days (an adapter's schedule()) is read by the
 worker (worker.read_league), at most once every FRESH seconds and only while fans are looking: the API
 serves what was last read, from Redis, and when that's older than FRESH it asks for a read, once every
-ASK seconds whatever came of the last. A read covers BACK days before today to AHEAD days after (UTC),
-and each game in it is ranked by its sport (Sport.notable), which leaves out the ones that aren't big. A
+ASK seconds whatever came of the last. A read covers the games over in the BACK days before today (so from
+as far before them as its sports' games run, Sport.lasts: a Test's days) to AHEAD days after (UTC), and
+each game in it is ranked by its sport (Sport.notable), which leaves out the ones that aren't big. A
 sport turned off isn't read: its sources don't run, and a source of several sports (esports games) reads
 only those that run. Of a sport's sources, the first that lists a schedule is read, or every one where they
 sit side by side (Sport.side_by_side: each covers its own games); a source of several sports is read once.
@@ -30,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
@@ -49,7 +51,7 @@ FRESH = 3 * 3600  # seconds a source's read is served before a fan's look asks f
 ASK = 3600  # and at most this often, so a source that's down isn't asked on every look
 SERVE = 2 * 86400  # a read older than this isn't served: a source down for days
 KEEP = 3 * 86400  # and Redis drops it after this
-BACK, AHEAD = 3, 14  # days a read covers before today (the latest day with results) and after it (Coming up's)
+BACK, AHEAD = 3, 14  # days a read covers before today (the latest day with results: games over in them) and after it (Coming up's)
 RESULTS, COMING = 40, 40  # the most games each list serves
 CACHE = 60  # seconds the API keeps what it served (cached)
 
@@ -93,7 +95,10 @@ def read(system: str, now: datetime | None = None) -> int:
         return 0
     now = now or datetime.now(timezone.utc)
     today = now.date()
-    fixtures = cast(Any, adapter).schedule(today - timedelta(days=BACK), today + timedelta(days=AHEAD))
+    # A game over in the BACK days may have started before them, as long before as its sport's games run.
+    longest = max((sports.of(key).lasts for key in adapter.sports), default=timedelta(0))
+    first = today - timedelta(days=BACK + math.ceil(longest / timedelta(days=1)))
+    fixtures = cast(Any, adapter).schedule(first, today + timedelta(days=AHEAD))
     one = adapter.sports[0] if len(adapter.sports) == 1 else ""  # a source of several names each game's sport
     games = []
     for f in fixtures:
@@ -146,7 +151,8 @@ def _results(games: list[dict[str, Any]], now: datetime, tz: int = 0) -> tuple[l
     def day_of(at: datetime) -> date:
         return (at + timedelta(minutes=tz)).date()
 
-    finished = [g for g in games if g["status"] == "final" and _start(g) <= now]
+    # Over in the BACK days a read covers: one that started before them (a read reaches back further) and ended in them.
+    finished = [g for g in games if g["status"] == "final" and _start(g) <= now and _over(g).date() >= now.date() - timedelta(days=BACK)]
     since = day_of(now) - timedelta(days=1)
     shown = [g for g in finished if day_of(_over(g)) >= since]
     day = None
