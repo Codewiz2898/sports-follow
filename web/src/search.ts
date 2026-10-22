@@ -28,15 +28,33 @@ export function sections(data: SearchResponse, app: string): Section[] {
 // names: "aja" is the start of A'ja, "ode" of Ødegaard.
 export const fold = (s: string) => plainLetters(s).normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/['’`]/g, '').toLowerCase()
 
-/** The name in parts, the typed start of each word bold: "Caitl" in Caitlin Clark. */
+// Letters with a second plain spelling, as the server's naming.NATIVE has them: Đ is "dj" in English (Novak
+// Djokovic), and ü, ö, ä are "ue", "oe", "ae" in German (Thomas Mueller).
+const NATIVE: Record<string, string> = { đ: 'dj', Đ: 'Dj', Ð: 'Dj', ü: 'ue', Ü: 'Ue', ö: 'oe', Ö: 'Oe', ä: 'ae', Ä: 'Ae' }
+const foldNative = (s: string) => fold(s.normalize('NFC').replace(/[đĐÐüÜöÖäÄ]/g, (c) => NATIVE[c]))
+// Each way a name is spelt plainly, as the server's naming.spellings: fold, then with those letters spelt out.
+const SPELLINGS = [fold, foldNative]
+
+/** A text folded in each of its plain spellings: "Müller" is "muller" and "mueller", "Kohli" only "kohli". */
+function folds(s: string): string[] {
+  return [...new Set(SPELLINGS.map((spell) => spell(s)))]
+}
+
+/** Whether two names are the same in some spelling of each: "borussia moenchengladbach" is Borussia Mönchengladbach. */
+const sameName = (a: string, b: string) => folds(a).some((x) => folds(b).includes(x))
+
+/** The name in parts, the typed start of each word bold: "Caitl" in Caitlin Clark, and in either spelling the
+ * server finds a name by: "djok" in Đoković, "muell" in Müller. */
 export function highlightParts(name: string, query: string): { text: string; bold: boolean }[] {
-  const typed = fold(query).split(/[\s.'-]+/).filter(Boolean)
+  const typed = [...new Set(folds(query).flatMap((q) => q.split(/[\s.'-]+/)).filter(Boolean))]
   return name.split(/(\s+)/).flatMap((part) => {
-    const word = fold(part)
-    const hit = typed.filter((t) => word.startsWith(t)).sort((a, b) => b.length - a.length)[0]
-    if (!hit || !part.trim()) return [{ text: part, bold: false }]
+    if (!part.trim()) return [{ text: part, bold: false }]
+    // The longest typed start of the word, and the spelling it's the start of.
+    const hit = SPELLINGS.flatMap((spell) => typed.filter((t) => spell(part).startsWith(t)).map((t) => ({ t, spell })))
+      .sort((a, b) => b.t.length - a.t.length)[0]
+    if (!hit) return [{ text: part, bold: false }]
     let n = 0
-    while (n < part.length && fold(part.slice(0, n)).length < hit.length) n++
+    while (n < part.length && hit.spell(part.slice(0, n)).length < hit.t.length) n++
     return [{ text: part.slice(0, n), bold: true }, { text: part.slice(n), bold: false }]
   })
 }
@@ -58,14 +76,14 @@ export function teamNext(t: TeamSummary, now = Date.now()): { text: string; live
  * ("lakers": before the spellings it might have meant). Else they come after the athletes. */
 export function teamsFirst(data: SearchResponse): boolean {
   const teams = data.teams ?? []
-  return teams.some((t) => fold(t.name) === fold(data.query)) || (teams.length > 0 && !data.results.length)
+  return teams.some((t) => sameName(t.name, data.query)) || (teams.length > 0 && !data.results.length)
 }
 
-/** The team Enter (or the keyboard's search key) opens, if any: one called just what was typed ("Arsenal"), or the
- * only team when no athlete has the name ("lakers"). */
+/** The team Enter (or the keyboard's search key) opens, if any: one called just what was typed ("Arsenal", in either
+ * spelling: "borussia moenchengladbach"), or the only team when no athlete has the name ("lakers"). */
 export function enterTeam(data: SearchResponse): TeamSummary | undefined {
   const teams = data.teams ?? []
-  return teams.find((t) => fold(t.name) === fold(data.query)) ?? (!data.results.length && teams.length === 1 ? teams[0] : undefined)
+  return teams.find((t) => sameName(t.name, data.query)) ?? (!data.results.length && teams.length === 1 ? teams[0] : undefined)
 }
 
 /** The line under a result: its page being set up, its game on now, or its next game. */
@@ -79,8 +97,9 @@ export function nextLine(r: SearchResult): { text: string; live: boolean } | nul
 /** The name the namesakes go by ("Ronaldo", not "Ronaldo da Silva Souza", whose alias it is); when only
  * aliases have it ("Silva"), the name as typed. */
 export function exactName(data: SearchResponse): string {
-  const plain = (s: string) => fold(s).split(/[^a-z0-9]+/).filter(Boolean).sort().join(' ')
-  return data.results.find((r) => r.exact && plain(r.name) === plain(data.query))?.name ?? data.query.replace(/(^|\s)\S/g, (c) => c.toUpperCase())
+  const plain = (s: string) => folds(s).map((f) => f.split(/[^a-z0-9]+/).filter(Boolean).sort().join(' '))
+  const typed = plain(data.query)
+  return data.results.find((r) => r.exact && plain(r.name).some((p) => typed.includes(p)))?.name ?? data.query.replace(/(^|\s)\S/g, (c) => c.toUpperCase())
 }
 
 /** What's left of the fan's AI researches today, or when more come; and whether they're out. */
