@@ -159,6 +159,16 @@ def test_chess_bands_need_a_margin_to_change():
     assert chess.band({"cp": -20, "mate": 4}) == 2 and chess.band({"mate": -2}) == -2
 
 
+def test_mate_on_the_board_is_the_mating_sides():
+    # BUG-217: Stockfish scores a position whose side to move is checkmated "mate 0", whoever mated: it was banded -2
+    # (Black winning) either way, and its swing read "facing mate in 0". The side to move is the one mated.
+    white_mated = "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3"
+    black_mated = "R5k1/5ppp/8/8/8/8/8/6K1 b - - 1 40"
+    mated = lambda fen: chess.settle(None, {"cp": None, "mate": 0, "look": {"cp": None, "mate": 0, "depth": 0}, "at": 1, "fen": fen})["band"]  # noqa: E731
+    assert (mated(white_mated), mated(black_mated)) == (-2, 2)
+    assert (chess._score({"mate": 0}, 1), chess._score({"mate": 0}, -1)) == ("checkmate", "checkmate")
+
+
 def look(cp: int, at: int, fen: str) -> dict:
     """A position's first look, as the engine's latest has it (engine.py): shown, and what the band goes by."""
     return {"cp": cp, "mate": None, "look": {"cp": cp, "mate": None, "depth": 20}, "at": at, "fen": fen}

@@ -35,8 +35,11 @@ def _level(cp: int) -> int:
     return 2 if cp >= WINNING else 1 if cp >= BETTER else -2 if cp <= -WINNING else -1 if cp <= -BETTER else 0
 
 
-def band(ev: dict[str, Any], current: int = 0) -> int:
+def band(ev: dict[str, Any], current: int = 0, fen: str | None = None) -> int:
     if ev.get("mate") is not None:
+        if ev["mate"] == 0:  # mate on the board ("mate 0"): the side to move in its position (fen) is the one mated
+            fields = (fen or "").split()
+            return {"w": -2, "b": 2}.get(fields[1] if len(fields) > 1 else "", 0)
         return 2 if ev["mate"] > 0 else -2
     cp = ev.get("cp") or 0
     new = _level(cp)
@@ -75,7 +78,7 @@ def settle(before: dict[str, Any] | None, ev: dict[str, Any]) -> dict[str, Any]:
         return {**ev, "move": held.get("move", move), "raw": held.get("raw"), "band": held.get("band", 0), "told": held.get("told", 0),
                 "since": held.get("since"), "since_look": held.get("since_look"), "prev": prev}
     settled = prev["band"]
-    raw = band(ev["look"], settled)
+    raw = band(ev["look"], settled, ev.get("fen"))
     moved = before is None or raw == before.get("raw")
     new = raw if moved else settled
     told = prev["told"]
@@ -95,12 +98,12 @@ def _fullmove(fen: str | None) -> int | None:
 
 def _score(ev: dict[str, Any], side: int) -> str:
     """An evaluation from the player's side: "+3.6", "0.0", "+12" (past ten pawns, whole ones), "mate in 4",
-    "facing mate in 4". Halves round away from zero, counted in whole centipawns as the app's evaluation bar
+    "facing mate in 4", "checkmate" (mate on the board, whichever side; its band says whose). Halves round away from zero, counted in whole centipawns as the app's evaluation bar
     counts them (evalScore in web/src/sports/facts/chess.ts), so the two agree: a float's own rounding made
     -1.35 "-1.4" but 1.25 "+1.2"."""
     if ev.get("mate") is not None:
         mate = ev["mate"] * side
-        return f"mate in {mate}" if mate > 0 else f"facing mate in {-mate}"
+        return "checkmate" if not mate else f"mate in {mate}" if mate > 0 else f"facing mate in {-mate}"
     cp = int(ev.get("cp") or 0) * side
     tenths = (abs(cp) + 5) // 10
     if not tenths:
