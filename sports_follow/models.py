@@ -568,6 +568,20 @@ class TeamFollow(Base):
     created_at: Mapped[datetime] = _now()
 
 
+class FanSport(Base):
+    """A sport a fan said they watch (fansports.py, BHA-653): the welcome's first step, and Following's Edit. In the
+    fan's order. A sport the app doesn't offer now (turned off) stays, out of sight, for when it's back."""
+
+    __tablename__ = "fan_sport"
+    __table_args__ = (UniqueConstraint("fan_id", "sport"),)  # its index is the fan's too
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fan_id: Mapped[str] = mapped_column(String(64))
+    sport: Mapped[str] = mapped_column(String(40))  # its key (sports.ALL)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = _now()
+
+
 class MatchFollow(Base):
     """A game a fan follows by itself (matches.py: the match page's Follow), whoever plays in it: its key
     moments from both sides reach them, by their level, until it ends. Then the follow lapses on its own

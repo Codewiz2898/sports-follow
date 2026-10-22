@@ -43,9 +43,10 @@ class Rows(list):
 
 class Db:
     """Answers the few queries the async routes make; the statements themselves aren't checked, but for the
-    games the fan follows by themselves, of which GAMES are, and the teams they follow, none."""
+    games the fan follows by themselves, of which `games` are, the teams they follow, none, and their sports, `sports`."""
 
     games: list[int] = []
+    sports: list[str] = []
 
     def execute(self, stmt):
         if "match_follow" in str(stmt) or "team_follow" in str(stmt):
@@ -55,6 +56,8 @@ class Db:
     def scalars(self, stmt):
         if "team_follow" in str(stmt):
             return Rows([])  # the fan's teams' games: none
+        if "fan_sport" in str(stmt):
+            return Rows(self.sports)
         if "match_follow" in str(stmt):
             return Rows(self.games)
         return Rows(player_id for player_id, _ in FOLLOWS)
@@ -163,8 +166,8 @@ def test_the_fan_stream_opens_with_the_fans_players_and_holds_no_session(api):
     event, held = first_frame(response, api)
     assert event["type"] == "following"
     assert [(p["player_id"], p["version"], p["live"]["score"], p["alerts"]) for p in event["players"]] == [(1, 4, "1-0", "key"), (2, 9, "2-2", "off")]
-    assert event["matches"] == [] and event["teams"] == []
-    assert held == 0 and api.opened == ["thread"] * 4  # the follow ids, the players, the followed games, the teams: each closed at once
+    assert event["matches"] == [] and event["teams"] == [] and event["sports"] == []
+    assert held == 0 and api.opened == ["thread"] * 5  # the follow ids, the players, the followed games, the teams, the sports: each closed at once
     # Read once subscribed, so a card published while the stream connects can't fall in a gap. The fan's own channel
     # too: a follow on another device (BUG-165).
     assert api.redis.log == ["subscribe player:1 player:2 follows:fan", "mget card:1 card:2", "close"]  # every card in one request (BUG-269)
@@ -177,7 +180,7 @@ def test_a_fan_who_follows_nothing_hears_so_first(api, monkeypatch):
     monkeypatch.setattr(sys.modules[__name__], "FOLLOWS", [])
     response = asyncio.run(server.my_stream(Request(), fan=""))
     event, held = first_frame(response, api)
-    assert event == {"type": "following", "players": [], "matches": [], "teams": []} and held == 0
+    assert event == {"type": "following", "players": [], "matches": [], "teams": [], "sports": []} and held == 0
 
 
 def test_the_fan_stream_carries_the_games_the_fan_follows_by_themselves(api, monkeypatch):
@@ -223,14 +226,20 @@ def frames(response, n: int, between) -> list[dict]:
 def test_a_follow_on_another_device_reaches_the_fans_open_streams(api, monkeypatch, before):
     """BUG-165: a stream's channels are fixed as it connects, and a follow or unfollow elsewhere told it nothing, so
     an open app never saw a player followed on the fan's phone. Every fan stream listens on the fan's own channel too
-    (with nothing else to hear yet as well), and answers a word there by sending the fan's list again."""
+    (with nothing else to hear yet as well), and answers a word there by sending the fan's list again: their sports
+    too (BHA-653)."""
     module = sys.modules[__name__]
     monkeypatch.setattr(module, "FOLLOWS", before)
     monkeypatch.setattr(api.redis, "pubsub", lambda: Told(api.redis.log))
     response = asyncio.run(server.my_stream(Request(), fan="fan"))
-    first, again = frames(response, 2, lambda: monkeypatch.setattr(module, "FOLLOWS", [(2, {"level": "off"})]))  # followed elsewhere
-    assert [p["player_id"] for p in first["players"]] == [p for p, _ in before]
-    assert again == {"type": "following", "players": [{**again["players"][0], "player_id": 2, "alerts": "off"}], "matches": [], "teams": []}
+
+    def elsewhere():
+        monkeypatch.setattr(module, "FOLLOWS", [(2, {"level": "off"})])
+        monkeypatch.setattr(Db, "sports", ["chess", "cricket"])
+
+    first, again = frames(response, 2, elsewhere)
+    assert [p["player_id"] for p in first["players"]] == [p for p, _ in before] and first["sports"] == []
+    assert again == {"type": "following", "players": [{**again["players"][0], "player_id": 2, "alerts": "off"}], "matches": [], "teams": [], "sports": ["chess", "cricket"]}
     assert api.redis.log[0].startswith("subscribe") and api.redis.log[0].endswith("follows:fan")
 
 

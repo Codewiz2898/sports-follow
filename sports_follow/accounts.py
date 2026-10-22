@@ -22,13 +22,13 @@ from sqlalchemy import case, delete, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import clips, matches, notify, predictions, teams
+from . import clips, fansports, matches, notify, predictions, teams
 from .db import session
-from .models import Account, AccountSession, ClipReport, Event, FanSource, FeedFeedback, Follow, LeagueMember, MatchFollow, Notification, NotificationMute, Pick, PushSubscription, TeamFollow
+from .models import Account, AccountSession, ClipReport, Event, FanSource, FanSport, FeedFeedback, Follow, LeagueMember, MatchFollow, Notification, NotificationMute, Pick, PushSubscription, TeamFollow
 
 FAN_PREFIX = "acct-"  # an account's fan id: never taken from a fan cookie (server._unsigned_fan)
 # The rows kept under a fan id here; predictions.py keeps its own (picks, places in leagues: predictions.forget).
-FAN_ROWS = (Follow, MatchFollow, TeamFollow, NotificationMute, Notification, PushSubscription, FanSource, FeedFeedback, ClipReport)
+FAN_ROWS = (Follow, MatchFollow, TeamFollow, FanSport, NotificationMute, Notification, PushSubscription, FanSource, FeedFeedback, ClipReport)
 SESSION_COOKIE = "sf_session"
 SESSION_LIFE = timedelta(days=365)  # since the device last opened the app
 COOKIE_MAX_AGE = 400 * 24 * 3600  # browsers keep a cookie at most 400 days; the app renews it daily
@@ -234,6 +234,7 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int | None) -> Mo
     }))
     db.execute(delete(MatchFollow).where(MatchFollow.fan_id == anon))
     teams_dropped = teams.merge(db, anon, fan)  # the teams followed (teams.py), as players are, at most teams.MAX
+    fansports.merge(db, anon, fan)  # the sports they watch (fansports.py): the account's first, then the device's others
     predictions.merge(db, anon, fan)  # the games called (predictions.py): a question both picked keeps the account's pick
     clips.merge(db, anon, fan)  # clips reported (clips.py): one each
     muted = insert(NotificationMute).from_select(
