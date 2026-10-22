@@ -1,6 +1,8 @@
-// Who this phone is signed in as (sports_follow/accounts.py), as the web's account.tsx: asked once at start,
-// which also renews the session. Signing in, out or deleting the account starts the app over: every list and
-// cached answer belonged to the fan this phone was a moment ago (the fan's providers start over on `epoch`).
+// Who this phone is signed in as (sports_follow/accounts.py), as the web's account.tsx: asked at start, which also
+// renews the session, and again each time the app comes back to the front. Signing in, out or deleting the account
+// starts the app over: every list and cached answer belonged to the fan this phone was a moment ago (the fan's
+// providers start over on `epoch`, and this phone's alerts are registered again as who it is now: push.ts). So does
+// finding it signed out elsewhere (everywhere from another device, the account deleted or blocked).
 //
 // The first request at start is POST /api/me/start, which also makes this phone's anonymous fan (its cookie) if it
 // has none: a read makes none (server._fan), so until a phone has its fan the screens wait for that answer, and the
@@ -8,8 +10,9 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { router } from 'expo-router'
-import { createContext, use, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Pressable, Text } from 'react-native'
+import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { AppState, Pressable, Text } from 'react-native'
+import { changedHands } from '../../web/src/resync'
 import { api, type Account, type Me, type ServerConfig } from './api'
 import { CloseIcon } from './icons'
 import { t } from './theme'
@@ -39,6 +42,8 @@ function welcome(added: number): string {
 
 export function AccountProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null)
+  const meRef = useRef(me)
+  meRef.current = me
   const [ready, setReady] = useState(false) // the fan's screens wait for this phone's fan, the first time
   const [config, setConfig] = useState<ServerConfig | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -69,6 +74,19 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       router.replace(path as never)
     })
   }, [start])
+
+  // Back in front: asked again who this phone is. Signed out elsewhere, the account page kept the old account and
+  // this phone's alerts stopped without a word (BUG-162): it starts over as who it is now, alerts registered again.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active' || meRef.current === null) return
+      api.account().then((now) => {
+        if (changedHands(meRef.current, now)) startOver('/', now.signed_in ? null : SIGNED_OUT)
+        else setMe(now)
+      }).catch(() => { /* offline: asked again next time */ })
+    })
+    return () => sub.remove()
+  }, [startOver])
 
   const dismissNotice = useCallback(() => setNotice(null), [])
   const signedIn = useCallback((account: Account) => startOver('/account', welcome(account.players_added ?? 0)), [startOver])
