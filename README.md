@@ -144,7 +144,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Previews and follows that ask a source for an athlete not on the app yet (a whole
   team's follow on a campaign page asks once for each such player) are limited to 30 a minute a fan and 120 a
   client address (`SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_MINUTE`, `SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_ADDRESS`), past
-  which they're a 429; a player already here costs nothing. Follows of every kind (a player, a team, a game; a
+  which they're a 429; a player already here costs nothing. A minute here, as for searches that go on to the
+  sources (20 a minute), is the last minute, whenever it began, and one refused isn't counted. Follows of every kind (a player, a team, a game; a
   campaign page's whole team in one tap is one) are limited to 150 an hour a fan, and 300 an IPv6 /64, 1,200 its
   /48 and 1,200 an IPv4 address (a phone network's may be shared by thousands of fans) (`server.FOLLOWS_PER_FAN`,
   `FOLLOWS_PER_ADDRESS`, `FOLLOWS_PER_IPV6_48`, `FOLLOWS_PER_IPV4`), past which they're a 429; one refused isn't counted.
@@ -698,8 +699,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   The research agent's `fetch_url` spends the same budget when it reads a source's API (`Budget.urls`).
   Counts are kept in Redis, so the API and the worker spend from one allowance. A minute's allowance (a
   rate limit) is counted over the last minute, whenever it began, so a burst across a minute's edge can't
-  send twice it; an hour's or a day's from its start, as the source resets it. Every request is in a
-  lane, set once where the work starts: `live` (polls), `fan` (every API request: search, previews,
+  send twice it, and so is fans' share of it; an hour's or a day's from its start, as the source resets
+  it. Every request is in a lane, set once where the work starts: `live` (polls), `fan` (every API request: search, previews,
   following), `refresh`, `history`, `import` and `feed` (the curator's). The background lanes stop at the reserve; a fan loop
   stops at its share and is logged, so live games keep the rest of the reserve. `python -m sports_follow.usage` shows each
   source's spend this hour and today, by lane.

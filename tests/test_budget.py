@@ -231,6 +231,31 @@ def test_a_minutes_allowance_holds_across_the_edge_of_a_minute(monkeypatch):
         budget.take(pubg.BUDGET, lane_name="live")
 
 
+def test_the_fans_share_of_a_minute_holds_across_the_edge_of_a_minute_too(monkeypatch):
+    """BUG-275: BUG-134 made a minute's window rolling, but the fans' share of it was still counted in minutes from the
+    epoch: PUBG's fans got their 3 just before a minute began and 3 more just after, twice their share in two seconds,
+    and the live lobbies were left 3 of the 9 that minute. The share is counted over the last minute, as its window."""
+    edge = _at(2026, 10, 22, 10, 0)
+    clock = [edge - 1]
+    monkeypatch.setattr(budget, "time", SimpleNamespace(time=lambda: clock[0]))
+
+    def burst(lane: str) -> int:
+        sent = 0
+        with contextlib.suppress(budget.RateLimited):
+            while True:
+                budget.take(pubg.BUDGET, lane_name=lane)
+                sent += 1
+        return sent
+
+    assert burst("fan") == pubg.BUDGET.fan
+    clock[0] = edge + 1
+    assert burst("fan") == 0  # two seconds on, across the minute's edge
+    assert burst("live") == pubg.PER_MINUTE - pubg.MARGIN - pubg.BUDGET.fan
+    clock[0] = edge + 61  # a minute after the fans' burst
+    assert burst("fan") == pubg.BUDGET.fan
+    assert budget.standing(pubg.BUDGET)["windows"][0]["bucket"] == ""  # still counted in the window, not a bucket
+
+
 def test_the_fans_share_is_counted_in_the_window_not_shown_as_a_bucket_of_its_own():
     """BUG-135: the fans' share is counted under keys of its own, which the panel and the metrics took for a bucket
     (":fan"). A fan's request counts in the window it's sent in; a real bucket (Sportmonks' entities) is still shown."""

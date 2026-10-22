@@ -73,7 +73,7 @@ def _logged(fn, quiet: bool = False, deep: bool = True):
 
     @functools.wraps(fn)
     async def job(ctx, *args, trace: dict | None = None, **kwargs):
-        await _in_progress_for(ctx, fn.__name__)
+        await _in_progress_for(ctx, job)
         given = signature.bind_partial(ctx, *args, **kwargs).arguments
         fields = {k: given[k] for k in FIELDS if k in given}
         logs.begin(rid=(trace or {}).get("rid") or logs.new_id(), job=fn.__name__, **fields)
@@ -109,26 +109,35 @@ def _logged(fn, quiet: bool = False, deep: bool = True):
     return job
 
 
-def _timeout(name: str) -> float:
-    """The seconds arq lets a job of this name run before cancelling it: the timeout it was given (func() or cron()),
-    or the worker's job_timeout. The longest, where it's given more than one."""
-    jobs: list[Any] = [*WorkerSettings.functions, *WorkerSettings.cron_jobs]  # a job, or arq's Function or CronJob of one
-    given = [getattr(job, "timeout_s", None) or WorkerSettings.job_timeout for job in jobs if getattr(job, "coroutine", job).__name__ == name]
-    return max(given, default=WorkerSettings.job_timeout)
+# The arq settings whose jobs (_logged's) keep their in-progress marks for their own timeouts: the worker's, below, and
+# the curator's, which curator.py adds.
+SETTINGS: list[Any] = []
 
 
-async def _in_progress_for(ctx, name: str) -> None:
+def _timeout(job) -> float | None:
+    """The seconds arq lets this job run before cancelling it: the timeout its process's settings give it (func() or
+    cron()), or else their job_timeout. None for a job no settings here list (BUG-316: the curator's were sized from the
+    worker's settings, which don't list them)."""
+    for settings in SETTINGS:
+        for given in [*settings.functions, *settings.cron_jobs]:  # a job, or arq's Function or CronJob of one
+            if getattr(given, "coroutine", given) is job:
+                return getattr(given, "timeout_s", None) or settings.job_timeout
+    return None
+
+
+async def _in_progress_for(ctx, job) -> None:
     """arq marks a job it starts as in progress, so no worker starts it again and its id can't be queued again, for
     the longest timeout of any job (the weekly import's six hours); only a worker that ends the job takes the mark
     off. After a worker died mid-job (an OOM kill, a host reboot), a job queued under a fixed id (a source's poll
     lane, the engine lane, the moment sweep, the history lane, a player's refresh) was stuck for six hours: no live
     scores from that source meanwhile (BUG-272). The mark lasts as long as this job may run instead, with arq's own
-    ten seconds over, and then the next worker runs it again."""
-    redis, job_id = ctx.get("redis"), ctx.get("job_id")
-    if redis is None or not job_id:
+    ten seconds over, and then the next worker runs it again. Never shorter: a mark gone while the job still runs
+    lets the same worker start it a second time (BUG-316), so a job of unknown timeout keeps arq's."""
+    redis, job_id, seconds = ctx.get("redis"), ctx.get("job_id"), _timeout(job)
+    if redis is None or not job_id or seconds is None:
         return
     with contextlib.suppress(Exception):  # Redis not answering fails the job's own steps, not this
-        await redis.pexpire(in_progress_key_prefix + job_id, int((_timeout(name) + 10) * 1000))
+        await redis.pexpire(in_progress_key_prefix + job_id, int((seconds + 10) * 1000))
 
 
 def _counted(fn, *args):
@@ -576,3 +585,6 @@ class WorkerSettings:
     max_jobs = MAX_JOBS
     job_timeout = 900
     keep_result = 0
+
+
+SETTINGS.append(WorkerSettings)

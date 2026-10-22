@@ -460,6 +460,40 @@ def test_a_lane_whose_worker_died_mid_poll_runs_again_within_its_own_timeout(mon
     assert rounds == [lane, lane], f"the lane was marked in progress for {left} s"
 
 
+def test_a_curator_job_still_running_keeps_its_in_progress_mark_for_its_own_timeout(monkeypatch):
+    """BUG-316: the mark a running job keeps (BUG-272) was sized from the worker's settings, which don't list the
+    curator's jobs, so theirs lasted the worker's 900 s. The curator then started a job still running a quarter of an
+    hour in a second time (the daily check, a sweep, a slow judge run), and both runs logged failures. Each job's mark
+    lasts as long as its own process lets it run; a job no settings list keeps the mark arq gave it."""
+    from sports_follow import bus, candidates, curator, sweeps
+
+    monkeypatch.setattr(bus, "try_lock", lambda name, seconds: "token")
+    monkeypatch.setattr(bus, "release", lambda name, token=None: None)
+    monkeypatch.setattr(candidates, "check", lambda: {})
+    monkeypatch.setattr(sweeps, "run", lambda: {})
+    monkeypatch.setattr(curator, "rank_new", lambda: {})
+    redis = Expiring()
+
+    async def mark_left(coroutine, job_id: str) -> float | None:
+        """How long the job's in-progress mark has left once the job has set it, from arq's: the longest timeout of any
+        of the curator's jobs, and ten seconds."""
+        key = f"arq:in-progress:{job_id}"
+        await redis.psetex(key, 3610 * 1000, b"1")
+        await coroutine({"redis": redis, "job_id": job_id})
+        return redis.ttl.get(key)
+
+    now = int(time.time() * 1000)
+    jobs = {j.name: j for j in curator.CuratorSettings.cron_jobs}
+    assert (jobs["cron:check_videos"].timeout_s, jobs["cron:sweep"].timeout_s) == (3600, curator.POLL_LOCK)
+    assert asyncio.run(mark_left(jobs["cron:check_videos"].coroutine, f"cron:check_videos:{now}")) == 3610
+    assert asyncio.run(mark_left(jobs["cron:sweep"].coroutine, f"cron:sweep:{now}")) == curator.POLL_LOCK + 10
+
+    async def elsewhere(ctx) -> None:
+        return None
+
+    assert asyncio.run(mark_left(worker._logged(elsewhere), "elsewhere")) == 3610
+
+
 class Queue:
     """arq's pool as its scheduler uses it: the cron runs it queues, by job id."""
 
