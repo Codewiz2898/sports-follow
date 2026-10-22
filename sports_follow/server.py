@@ -375,14 +375,20 @@ async def account_of(request: Request) -> accounts.Signed | None:
 
 def fan_id(request: Request, response: Response, signed_in: accounts.Signed | None = Depends(account_of)) -> str:
     """Whose follows, levels, mutes and devices a request reads and writes: the signed-in account's, else
-    the anonymous fan in the cookie this server signed, else a new anonymous fan. The request's log lines
-    name the fan by a hash (logs.fan)."""
+    the anonymous fan in the cookie this server signed, else a new anonymous fan, whose cookie only a write
+    sets (_fan). The request's log lines name the fan by a hash (logs.fan)."""
     fan = _fan(request, response, signed_in)
     logs.bind(fan=logs.fan(fan))
     return fan
 
 
-def _fan(request: Request, response: Response, signed_in: accounts.Signed | None) -> str:
+def _fan(request: Request, response: Response, signed_in: accounts.Signed | None, make: bool | None = None) -> str:
+    """The fan, as fan_id says. A device without a fan of its own keeps a new one (its cookie) only from a request
+    that `make`s one: by default a write, not a read. A read is answered as a new fan who owns nothing, for that
+    request alone, and sets no cookie: an app's first requests go out together, before any cookie is back, and each
+    keeping a fan of its own left the device with whichever answered last, and a follow made in between with a fan
+    no device holds (BUG-152). The app's page makes one (spa), as does the Android app's first request (POST
+    /api/me/start)."""
     if signed_in is not None:
         return signed_in.fan_id
     value = request.cookies.get(FAN_COOKIE) or ""
@@ -391,8 +397,12 @@ def _fan(request: Request, response: Response, signed_in: accounts.Signed | None
         fan, day = signed
         if _today() - day < REFRESH_DAYS:
             return fan
+    elif _unsigned_fan(value):
+        fan = value
     else:
-        fan = value if _unsigned_fan(value) else secrets.token_urlsafe(24)
+        fan = secrets.token_urlsafe(24)
+        if not (request.method not in ("GET", "HEAD") if make is None else make):
+            return fan
     _set_fan(request, response, fan)
     return fan
 
@@ -1357,15 +1367,19 @@ def set_alerts(player_id: RowId, body: dict = Body(...), fan: str = Depends(fan_
 # ---------------------------------------------------------------- accounts (accounts.py)
 
 CODE_LIFE = 600  # seconds an emailed code works
-CODE_TRIES = 5  # wrong codes before it stops working
+CODE_TRIES = 5  # wrong codes from one network (_network) before it stops working there
+CODE_TRIES_ELSEWHERE = 10  # wrong codes from every network but the one that asked for it, together: then it works only there
 RESEND_AFTER = 60  # seconds before another code to the same address
 CODES_PER_EMAIL = 5  # an hour
 CODES_PER_ADDRESS = 20  # an hour, from one client address (an IPv6 /64)
 CODES_UNKNOWN_ADDRESS = 100  # an hour, from every client without a public address together
 CODES_PER_ADDRESS_DAY = 20  # a UTC day, from one client address: one network can't spend the day's mail
+CODES_PER_NETWORK_DAY = 40  # a UTC day, from one IPv6 /48 (a site's): its 65,536 /64s can't each take twenty
 CODES_PER_HOUR = 200  # an hour, to everyone: the mail provider's bill
-FAILS_PER_DAY = 20  # wrong codes for one address in a UTC day, across new codes
+KEPT_FOR_ACCOUNTS = 0.3  # of the day's codes (MAIL_CODES_PER_DAY), kept for addresses with an account: made-up ones can't spend them
+FAILS_PER_DAY = 20  # wrong codes for one address from one network in a UTC day, across new codes
 BLOCKED = "This account has been blocked."  # by an admin (admin.py)
+TOO_MANY_WRONG = "Too many wrong codes. Ask for a new one."
 
 
 async def _take(key: str, limit: int, ttl: int, refusal: str) -> None:
@@ -1374,6 +1388,15 @@ async def _take(key: str, limit: int, ttl: int, refusal: str) -> None:
     await state["redis"].expire(key, ttl)
     if used > limit:
         raise HTTPException(429, refusal)
+
+
+def _network(address: str | None) -> str:
+    """Where a client's wrong codes are counted, and a site's codes: an IPv6 client's /48 (a home or an office may
+    hold all of it; client_address gives its /64), else its address; "unknown" without a public one."""
+    if not address:
+        return "unknown"
+    network = ipaddress.ip_network(address, strict=False)
+    return str(network.supernet(new_prefix=48)) if network.version == 6 else address
 
 
 def _clear_cookies_for_anonymous(request: Request, response: Response) -> None:
@@ -1431,9 +1454,22 @@ async def my_account(request: Request, response: Response, signed: accounts.Sign
     return about
 
 
+@app.post("/api/me/start")
+async def app_start(request: Request, response: Response, signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
+    """The Android app's first request as it starts (mobile/src/account.tsx): who this device is signed in as,
+    as GET /api/me/account answers, and, signed in to nothing, its anonymous fan, made now if it has none, so
+    the requests the app sends together next are all one fan's (a read makes none: _fan). The web app's page
+    does the same (spa)."""
+    about = await my_account(request, response, signed)
+    if not about.get("signed_in"):
+        await asyncio.to_thread(_fan, request, response, None, True)
+    return about
+
+
 @app.post("/api/auth/email/start")
 async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any]:
-    """Email a 6-digit sign-in code. The answer is the same whether or not the address has an account."""
+    """Email a 6-digit sign-in code. The answer is the same whether or not the address has an account, until
+    the day's codes for addresses without one are spent (KEPT_FOR_ACCOUNTS)."""
     if not mail.configured(_secure(request)):
         raise HTTPException(503, "Signing in by email isn't set up on this server yet.")
     email = accounts.normal_email(body.get("email"))
@@ -1441,19 +1477,27 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
         raise HTTPException(400, "That doesn't look like an email address.")
     who, now = accounts.email_key(email), datetime.now(timezone.utc)
     hour, day = now.strftime("%Y-%m-%dT%H"), now.strftime("%Y-%m-%d")
-    if int(await state["redis"].get(f"auth-fails:{who}:{day}") or 0) >= FAILS_PER_DAY:
+    address = client_address(request)
+    network = _network(address)
+    # Wrong codes from this network only: anyone's elsewhere don't shut the fan out for the day (BUG-092).
+    if int(await state["redis"].get(f"auth-fails:{who}:{network}:{day}") or 0) >= FAILS_PER_DAY:
         raise HTTPException(429, "Too many wrong codes for this address today. Try again tomorrow.")
     if not await state["redis"].set(f"auth-wait:{who}", "1", nx=True, ex=RESEND_AFTER):
         # Asked again within the minute (a second tap, the app reloaded): the code sent then is the one.
         return {"ok": True, "resend_in": max(int(await state["redis"].ttl(f"auth-wait:{who}")), 1)}
-    address = client_address(request)
     try:
         await _take(f"auth-email:{who}:{hour}", CODES_PER_EMAIL, 2 * 3600, "That's a lot of codes for one address. Try again in an hour.")
         await _take(f"auth-address:{address or 'unknown'}:{hour}", CODES_PER_ADDRESS if address else CODES_UNKNOWN_ADDRESS, 2 * 3600, "Your network has asked for a lot of codes. Try again in an hour.")
         if address:
             await _take(f"auth-address-day:{address}:{day}", CODES_PER_ADDRESS_DAY, 2 * DAY, "Your network has asked for a lot of codes today. Try again tomorrow.")
+        if network != (address or "unknown"):  # an IPv6 client: its site's day too
+            await _take(f"auth-network-day:{network}:{day}", CODES_PER_NETWORK_DAY, 2 * DAY, "Your network has asked for a lot of codes today. Try again tomorrow.")
+        used_up = f"{APP_NAME} has sent all the sign-in codes it can today. Try again tomorrow."
+        # Part of the day's codes is kept for fans with an account: made-up addresses can't leave none (BUG-093).
+        if not await in_db(accounts.known, email):
+            await _take(f"auth-day-new:{day}", MAIL_CODES_PER_DAY - round(MAIL_CODES_PER_DAY * KEPT_FOR_ACCOUNTS), 2 * DAY, used_up)
         await _take(f"auth-hour:{hour}", CODES_PER_HOUR, 2 * 3600, f"{APP_NAME} is sending a lot of codes right now. Try again in a few minutes.")
-        await _take(f"auth-day:{day}", MAIL_CODES_PER_DAY, 2 * DAY, f"{APP_NAME} has sent all the sign-in codes it can today. Try again tomorrow.")
+        await _take(f"auth-day:{day}", MAIL_CODES_PER_DAY, 2 * DAY, used_up)
     except HTTPException:
         # No code went out: asking again within the minute mustn't answer "the code sent then is the one".
         await state["redis"].delete(f"auth-wait:{who}")
@@ -1463,12 +1507,13 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
         await state["redis"].delete(f"auth-wait:{who}")
         raise HTTPException(403, BLOCKED)
     code = f"{secrets.randbelow(10**6):06d}"
+    # A new code: its tries are counted afresh, and the network that asked for it keeps its own (_code_tries).
     await state["redis"].set(f"auth-code:{who}", mac("code", f"{email}:{code}"), ex=CODE_LIFE)
-    await state["redis"].delete(f"auth-tries:{who}")
+    await state["redis"].set(f"auth-asked:{who}", network, ex=CODE_LIFE)
     try:
         await asyncio.to_thread(mail.send_code, email, code)
     except mail.MailError as exc:
-        await state["redis"].delete(f"auth-code:{who}", f"auth-wait:{who}")
+        await state["redis"].delete(f"auth-code:{who}", f"auth-asked:{who}", f"auth-wait:{who}")
         if isinstance(exc, mail.Undeliverable):
             # The address, not the server: a 400, so a typo isn't counted as the API failing.
             raise HTTPException(400, "Emails can't be sent to that address. Check it, or use another one.")
@@ -1484,24 +1529,37 @@ async def email_verify(request: Request, response: Response, body: dict = Body(.
     if email is None or not re.fullmatch(r"\d{6}", code):
         raise HTTPException(400, "Enter the 6-digit code from the email.")
     who, day = accounts.email_key(email), datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    network = _network(client_address(request))
     expected = await state["redis"].get(f"auth-code:{who}")
     if not expected:
         raise HTTPException(400, "That code has run out. Ask for a new one.")
-    # Counted before it's checked, so tries sent at once can't all get in under the limit.
-    tries = await state["redis"].incr(f"auth-tries:{who}")
-    await state["redis"].expire(f"auth-tries:{who}", CODE_LIFE)
-    if tries > CODE_TRIES:
-        await state["redis"].delete(f"auth-code:{who}")
-        raise HTTPException(429, "Too many wrong codes. Ask for a new one.")
+    tries = f"auth-tries:{who}:{expected[:16]}"  # this code's: a new one's are counted afresh
+    if not await _code_tries(tries, network, network == await state["redis"].get(f"auth-asked:{who}")):
+        raise HTTPException(429, TOO_MANY_WRONG)
     if not hmac.compare_digest(expected, mac("code", f"{email}:{code}")):
-        await state["redis"].incr(f"auth-fails:{who}:{day}")
-        await state["redis"].expire(f"auth-fails:{who}:{day}", 2 * DAY)
+        fails = f"auth-fails:{who}:{network}:{day}"
+        await state["redis"].incr(fails)
+        await state["redis"].expire(fails, 2 * DAY)
         raise HTTPException(400, "That code isn't right. Check the email and try again.")
-    await state["redis"].delete(f"auth-code:{who}", f"auth-tries:{who}", f"auth-wait:{who}")
+    await state["redis"].delete(f"auth-code:{who}", f"auth-asked:{who}", f"auth-wait:{who}", tries, f"{tries}:{network}")
     if await in_db(accounts.blocked, email):
         raise HTTPException(403, BLOCKED)
     account_id = await in_db(accounts.find_or_create, email)
     return await _sign_in(request, response, account_id, signed)
+
+
+async def _code_tries(tries: str, network: str, asked_here: bool) -> bool:
+    """Count a try at a code (its count's key `tries`) from this network, before it's checked, so tries sent at once
+    can't all get in under the limit; whether it may be tried. Each network has CODE_TRIES at it, and every network
+    but the one that asked for it CODE_TRIES_ELSEWHERE between them: wrong codes sent from elsewhere never end it for
+    the fan it was sent to (BUG-092), and guesses at it stay few."""
+    counts = [(f"{tries}:{network}", CODE_TRIES), *([] if asked_here else [(tries, CODE_TRIES_ELSEWHERE)])]
+    allowed = True
+    for key, limit in counts:
+        used = await state["redis"].incr(key)
+        await state["redis"].expire(key, CODE_LIFE)
+        allowed = allowed and used <= limit
+    return allowed
 
 
 def _google_callback(request: Request) -> str:
@@ -1549,11 +1607,15 @@ async def google_callback(request: Request, state: str = "", code: str = "", err
 @app.post("/api/auth/signout")
 async def sign_out(request: Request, response: Response, body: dict | None = Body(None), signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
     """Sign this device out, or every device ({"everywhere": true}). Their alerts stop; this device
-    becomes a new, empty anonymous fan."""
+    becomes a new, empty anonymous fan. A device signed in to nothing (signed out in another tab, or
+    everywhere from another device) keeps the fan it has, and what it followed since (BUG-094); only a
+    session cookie that ended elsewhere goes."""
     if signed is not None:
         everywhere = bool((body or {}).get("everywhere"))
         await _forget_sessions(await in_db(accounts.end_sessions, signed.account_id, None if everywhere else signed.session_id))
-    _clear_cookies_for_anonymous(request, response)
+        _clear_cookies_for_anonymous(request, response)
+    elif request.cookies.get(accounts.SESSION_COOKIE):
+        response.delete_cookie(accounts.SESSION_COOKIE, httponly=True, samesite="lax", secure=_secure(request))
     return {"signed_in": False}
 
 
@@ -1575,7 +1637,7 @@ async def _forget_account(gone: accounts.Deleted | None) -> None:
     if gone is not None:
         await _forget_sessions(gone.token_hashes)
         who = accounts.email_key(gone.email)
-        await state["redis"].delete(player_search.research_key(gone.fan_id), f"auth-code:{who}", f"auth-tries:{who}")
+        await state["redis"].delete(player_search.research_key(gone.fan_id), f"auth-code:{who}", f"auth-asked:{who}")
 
 
 # ---------------------------------------------------------------- clips (clips.py)
@@ -2724,15 +2786,20 @@ async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingRe
     they follow by themselves, and of their teams' games on now or soon (teams.event_ids), with their teams."""
     ids, games = await in_db(lambda db: (db.scalars(select(Follow.player_id).where(Follow.fan_id == fan)).all(),
                                          list(dict.fromkeys([*matches.event_ids(db, fan), *teams.event_ids(db, fan)]))))
+
+    async def first() -> list[dict[str, Any]]:
+        return [{"type": "following", "players": await _following(fan), "matches": await in_db(matches.mine, fan), "teams": await in_db(teams.mine, fan)}]
+
     if not ids and not games:
         async def idle():
+            # Nothing to hear yet, but the fan's list still comes first, as on any stream: an app whose fan was signed
+            # out elsewhere (it reads as nobody now), or stopped following everyone there, drops what it shows (BUG-162).
+            for event in await first():
+                yield f"data: {json.dumps(event, default=str)}\n\n"
             while not await request.is_disconnected():
                 yield PING
                 await asyncio.sleep(HEARTBEAT)
         return _sse(idle())
-
-    async def first() -> list[dict[str, Any]]:
-        return [{"type": "following", "players": await _following(fan), "matches": await in_db(matches.mine, fan), "teams": await in_db(teams.mine, fan)}]
 
     places = _hold_streams(request, fan)
     return _sse(_stream([*(bus.channel(i) for i in ids), *(bus.match_channel(e) for e in games)], first, request), places)
@@ -2953,7 +3020,15 @@ async def spa(path: str, request: Request) -> Response:
     if isinstance(found, Path):
         cache = "no-cache" if found.name in NO_CACHE else "public, max-age=86400"
         return FileResponse(found, media_type=MEDIA.get(found.suffix), headers={"Cache-Control": cache})
-    return HTMLResponse(share.page(found, await _page_preview(path, request), _site(request)), headers={"Cache-Control": "no-cache", **_not_indexed(path)})
+    response = HTMLResponse(share.page(found, await _page_preview(path, request), _site(request)), headers={"Cache-Control": "no-cache", **_not_indexed(path)})
+    # The app's page is its first request: it makes this device's fan (a read doesn't: _fan), so the calls the app
+    # sends together as it starts are all one fan's (BUG-152). Not a signed-in device's, which is its account.
+    if not request.cookies.get(accounts.SESSION_COOKIE):
+        try:
+            await asyncio.to_thread(_fan, request, response, None, True)
+        except Exception:  # noqa: BLE001 — the page is the app: without its fan for now, its first write makes one
+            log.warning("the app's page: couldn't make this device's fan", exc_info=True)
+    return response
 
 
 def _not_indexed(path: str) -> dict[str, str]:

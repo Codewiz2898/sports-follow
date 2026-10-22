@@ -1052,10 +1052,12 @@ TODAY = datetime.now(timezone.utc).toordinal()  # the day a cookie says it was i
 
 def test_a_cookie_the_server_didnt_mint_is_a_new_fan(api):
     # An id minted since signing is only taken signed, even one with follows: seeing it in the database
-    # isn't enough to be that fan.
+    # isn't enough to be that fan. A read is nobody's; the first write makes the new fan.
     api.follows.add(("A" * 32, 1))
     for cookie in ("anything-I-like", "A" * 32, f"{'A' * 32}.{TODAY}.forged"):
-        answer = api.call("GET", "/api/me/following", cookie=cookie)
+        read = api.call("GET", "/api/me/following", cookie=cookie)
+        assert read.json()["players"] == [] and _fan_of(read) is None
+        answer = api.call("PUT", "/api/me/mutes/5", cookie=cookie)
         fan = _fan_of(answer)
         assert fan is not None and server.NEW_ID.fullmatch(fan) and fan != "A" * 32
         assert _fan_seen(api) == fan
@@ -1070,7 +1072,7 @@ def test_a_fan_from_before_signing_keeps_their_id_now_signed(api):
     again = api.call("GET", "/api/me/following", cookie=first.cookies["sf_fan"])
     assert _fan_of(again) is None and _fan_seen(api) == LEGACY
     # A bare id that owns nothing here was never a fan.
-    stranger = api.call("GET", "/api/me/following", cookie="Qq3kQ9_vYb2mN7pR4tW8zA1c")
+    stranger = api.call("PUT", "/api/me/mutes/5", cookie="Qq3kQ9_vYb2mN7pR4tW8zA1c")
     assert _fan_of(stranger) not in (None, "Qq3kQ9_vYb2mN7pR4tW8zA1c")
 
 
@@ -1079,8 +1081,53 @@ def test_a_cookie_is_issued_again_after_a_week_and_ends_with_its_lifetime(api):
     assert _fan_of(six_days) is None and _fan_seen(api) == "fan-a"
     renewed = api.call("GET", "/api/me/following", cookie=server.sign_fan("fan-a", TODAY - 7))
     assert _fan_of(renewed) == "fan-a" and renewed.cookies["sf_fan"] == server.sign_fan("fan-a", TODAY)
-    expired = api.call("GET", "/api/me/following", cookie=server.sign_fan("fan-a", TODAY - 5 * 365 - 1))
+    expired = api.call("PUT", "/api/me/mutes/5", cookie=server.sign_fan("fan-a", TODAY - 5 * 365 - 1))
     assert _fan_of(expired) not in (None, "fan-a")
+
+
+INDEX = '<!doctype html><html><head><meta name="description" content="Your players, live." /></head><body></body></html>'
+
+
+def test_a_read_without_a_cookie_makes_no_fan_and_a_write_or_the_apps_page_does(api, monkeypatch, tmp_path):
+    """BUG-152 (BHA-473): every request without a cookie made a new fan and set its cookie, reads too. An app's first
+    requests go out together, before any cookie is back: each made a different fan, the cookie jar kept whichever
+    answered last, and a follow made in between was left with a fan no device holds. A read is now answered as nobody
+    and sets no cookie; a write makes the fan, as do the app's page (the web's first request) and POST /api/me/start
+    (Android's)."""
+    read = api.call("GET", "/api/me/mutes")
+    assert read.status_code == 200 and read.json() == {"event_ids": []} and "set-cookie" not in read.headers
+    write = api.call("PUT", "/api/me/mutes/5")
+    fan = _fan_of(write)
+    assert fan is not None and server.NEW_ID.fullmatch(fan) and _fan_seen(api) == fan
+
+    (tmp_path / "index.html").write_text(INDEX)
+    (tmp_path / "sw.js").write_text("self.addEventListener('fetch', () => {})")
+    monkeypatch.setattr(server, "WEB_DIST", tmp_path)
+    page = api.call("GET", "/gukesh")
+    made = _fan_of(page)
+    assert page.status_code == 200 and made is not None and server.NEW_ID.fullmatch(made)
+    assert _fan_of(api.call("GET", "/player/1", cookie=page.cookies["sf_fan"])) is None  # the same fan from then on
+    assert "set-cookie" not in api.call("GET", "/sw.js").headers  # a file of the build isn't the app's page
+    assert "set-cookie" not in api.call("GET", "/", headers={"Cookie": "sf_session=a-session"}).headers  # a signed-in device is its account
+
+    started = api.call("POST", "/api/me/start")
+    assert started.json() == {"signed_in": False} and server.NEW_ID.fullmatch(_fan_of(started) or "")
+    again = api.call("POST", "/api/me/start", cookie=started.cookies["sf_fan"])
+    assert again.json() == {"signed_in": False} and "set-cookie" not in again.headers
+
+
+PATH_VALUES = {"player_id": "1", "team_id": "1", "event_id": "5", "code": "K7Q2MX", "slug": "gukesh", "system": "lichess_chess", "game": "abc12345",
+               "athlete_id": "1", "qid": "Q1"}
+FAN_READS = sorted(r.path for r in server.app.routes if isinstance(r, server.APIRoute) and r.methods == {"GET"} and r.path != "/api/me/stream"
+                   and any(d.call is server.fan_id for d in r.dependant.dependencies))
+
+
+@pytest.mark.parametrize("path", FAN_READS)
+def test_every_read_that_takes_a_fan_answers_without_a_cookie_and_sets_none(api, monkeypatch, path):
+    """BUG-152 (BHA-473): what used to make a fan on the way works for nobody (the fan stream's is test_streams')."""
+    monkeypatch.setattr(server.player_search, "run", lambda db, q, sport, fan, may_ask: {"query": q, "results": [], "partial": []})
+    answer = api.call("GET", path.format(**PATH_VALUES) + ("?q=someone" if path == "/api/search" else ""))
+    assert answer.status_code < 500 and "sf_fan" not in answer.cookies, (answer.status_code, answer.text[:300])
 
 
 def test_a_fan_from_before_signing_is_known_by_anything_they_own():
@@ -1212,8 +1259,9 @@ def test_the_card_is_private_and_its_etag_changes_with_anything_in_it(api):
     etag = first.headers["etag"]
     unchanged = get(etag)
     assert unchanged.status_code == 304 and unchanged.headers["etag"] == etag
-    # A new fan's cookie still reaches them on a 304.
-    assert "sf_fan=" in api.call("GET", "/api/players/1/card", headers={"If-None-Match": etag}).headers["set-cookie"]
+    # A fan's cookie renewed still reaches them on a 304.
+    renewed = api.call("GET", "/api/players/1/card", cookie=server.sign_fan("fan", TODAY - 8), headers={"If-None-Match": etag})
+    assert renewed.status_code == 304 and "sf_fan=" in renewed.headers["set-cookie"]
     api.follows.add(("fan", 1))
     followed = get(etag)
     assert followed.status_code == 200 and (followed.json()["following"], followed.json()["alerts"]) == (True, "key")

@@ -86,6 +86,9 @@ class Accounts:
             del self.sessions[h]
         return ended
 
+    def known(self, db, email):
+        return email in self.emails.values()
+
     def delete_account(self, db, account_id):
         hashes = self.end_sessions(db, account_id)
         return accounts.Deleted(fan_id=f"acct-{account_id}", email=self.emails.pop(account_id), token_hashes=hashes)
@@ -94,7 +97,7 @@ class Accounts:
 @pytest.fixture
 def store(api, monkeypatch):
     fake = Accounts()
-    for name in ("find_or_create", "find_or_create_google", "sign_in", "session_for", "describe", "bump", "end_sessions", "delete_account", "blocked"):
+    for name in ("find_or_create", "find_or_create_google", "sign_in", "session_for", "describe", "bump", "end_sessions", "delete_account", "blocked", "known"):
         monkeypatch.setattr(accounts, name, getattr(fake, name))
     return fake
 
@@ -157,17 +160,64 @@ def test_an_address_that_isnt_one_is_refused(api, store, outbox, email):
     assert outbox == {}
 
 
-def test_five_wrong_codes_end_the_code(api, store, outbox):
+def wrong_to(right: str) -> str:
+    return "000000" if right != "000000" else "111111"
+
+
+def verify(api: Api, code: str, address: str = PUBLIC):
+    return api.call("POST", "/api/auth/email/verify", body={"email": EMAIL, "code": code}, address=address)
+
+
+def test_five_wrong_codes_end_the_code_where_they_came_from(api, store, outbox):
     api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=PUBLIC)
-    right = outbox["fan@example.com"]
-    wrong = "000000" if right != "000000" else "111111"
+    right = outbox.pop("fan@example.com")
     for _ in range(server.CODE_TRIES):
-        answer = api.call("POST", "/api/auth/email/verify", body={"email": EMAIL, "code": wrong})
+        answer = verify(api, wrong_to(right))
         assert answer.status_code == 400 and "isn't right" in answer.json()["detail"]
-    answer = api.call("POST", "/api/auth/email/verify", body={"email": EMAIL, "code": right})
-    assert answer.status_code == 429  # even the right one: the code is gone
-    assert api.call("POST", "/api/auth/email/verify", body={"email": EMAIL, "code": right}).json()["detail"] == "That code has run out. Ask for a new one."
+    for _ in range(2):
+        answer = verify(api, right)
+        assert answer.status_code == 429 and answer.json()["detail"] == "Too many wrong codes. Ask for a new one."  # even the right one
     assert store.sessions == {}
+    api.redis.data.pop(f"auth-wait:{accounts.email_key('fan@example.com')}")  # a minute later
+    api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=PUBLIC)
+    assert verify(api, outbox["fan@example.com"]).status_code == 200  # a new code starts over
+
+
+ELSEWHERE = "81.2.69.200"  # someone else's network, who knows the fan's address
+
+
+def test_wrong_codes_from_another_network_neither_end_the_fans_code_nor_shut_them_out_for_the_day(api, store, outbox):
+    """BUG-092 (BHA-414): wrong codes were counted per email address, whoever sent them, so anyone who knew a fan's
+    address could end the code in their inbox, and with twenty in a day shut them out of signing in until UTC
+    midnight. Now each network's wrong codes are its own."""
+    assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=PUBLIC).status_code == 200
+    code = outbox.pop("fan@example.com")
+    assert [verify(api, wrong_to(code), ELSEWHERE).status_code for _ in range(server.CODE_TRIES + 1)] == [400] * server.CODE_TRIES + [429]
+    assert verify(api, code).status_code == 200  # the fan's code still works where they asked for it
+
+    # The rest of a day's wrong codes from there, to codes that network asked for (and the fan was sent).
+    who = accounts.email_key("fan@example.com")
+    for _ in range(server.FAILS_PER_DAY // server.CODE_TRIES - 1):
+        for key in [k for k in api.redis.data if k.startswith(("auth-wait:", "auth-email:"))]:
+            del api.redis.data[key]  # a minute, and an hour, later
+        assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=ELSEWHERE).status_code == 200
+        right = outbox.pop("fan@example.com")
+        assert all(verify(api, wrong_to(right), ELSEWHERE).status_code == 400 for _ in range(server.CODE_TRIES))
+    api.redis.data.pop(f"auth-wait:{who}")
+    refused = api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=ELSEWHERE)
+    assert refused.status_code == 429 and refused.json()["detail"] == "Too many wrong codes for this address today. Try again tomorrow."
+    assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=PUBLIC).status_code == 200  # but not the fan
+    assert verify(api, outbox["fan@example.com"]).status_code == 200
+
+
+def test_networks_other_than_the_one_that_asked_share_a_few_tries_at_a_code(api, store, outbox):
+    """However many networks guess at a code, they get CODE_TRIES_ELSEWHERE tries between them; the network that
+    asked for it keeps its own."""
+    assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=PUBLIC).status_code == 200
+    code = outbox["fan@example.com"]
+    tries = [verify(api, wrong_to(code), f"81.2.69.{20 + i // 4}").status_code for i in range(server.CODE_TRIES_ELSEWHERE + 2)]
+    assert tries == [400] * server.CODE_TRIES_ELSEWHERE + [429, 429]  # four a network: each under its own five
+    assert verify(api, code).status_code == 200
 
 
 def test_a_new_code_waits_a_minute_and_an_address_gets_five_an_hour(api, store, outbox):
@@ -216,6 +266,7 @@ def test_clients_without_a_public_address_share_only_the_hourly_bucket(api, stor
 def test_codes_stop_at_the_mail_plans_daily_allowance(api, store, outbox, monkeypatch):
     """Past it the mail provider refuses anyway: the fan hears "tomorrow" instead of a failed send."""
     monkeypatch.setattr(server, "MAIL_CODES_PER_DAY", 3)
+    store.emails.update({i + 1: f"fan{i}@example.com" for i in range(4)})  # fans with accounts: the whole allowance is theirs
     answers = [api.call("POST", "/api/auth/email/start", body={"email": f"fan{i}@example.com"}, address=f"81.2.69.{10 + i}") for i in range(4)]
     assert [a.status_code for a in answers] == [200, 200, 200, 429]
     assert "sent all the sign-in codes it can today" in answers[-1].json()["detail"] and len(outbox) == 3
@@ -224,11 +275,32 @@ def test_codes_stop_at_the_mail_plans_daily_allowance(api, store, outbox, monkey
     assert again.status_code == 429
 
 
-def test_an_address_with_twenty_wrong_codes_today_gets_no_more(api, store, outbox):
+def test_an_address_with_twenty_wrong_codes_today_from_one_network_gets_no_more_there(api, store, outbox):
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    api.redis.data[f"auth-fails:{accounts.email_key('fan@example.com')}:{day}"] = server.FAILS_PER_DAY
-    assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}).status_code == 429
+    api.redis.data[f"auth-fails:{accounts.email_key('fan@example.com')}:{PUBLIC}:{day}"] = server.FAILS_PER_DAY
+    assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=PUBLIC).status_code == 429
     assert outbox == {}
+    assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address="81.2.69.143").status_code == 200
+
+
+def test_made_up_addresses_cant_spend_the_days_codes_kept_for_fans_with_accounts(api, store, outbox, monkeypatch):
+    """BUG-093 (BHA-415): the day's codes (the mail plan's) were everyone's, so a few networks asking codes for made-up
+    addresses could leave none for the day, and nobody could sign in. Part of them is kept for addresses that have an
+    account (KEPT_FOR_ACCOUNTS); the answer is the same for both until the rest is spent."""
+    monkeypatch.setattr(server, "MAIL_CODES_PER_DAY", 10)
+    store.emails.update({i + 1: f"fan{i}@example.com" for i in range(4)})
+    start = lambda email, i: api.call("POST", "/api/auth/email/start", body={"email": email}, address=f"81.2.69.{10 + i}").status_code  # noqa: E731
+    assert [start(f"made-up{i}@example.com", i) for i in range(8)] == [200] * 7 + [429]
+    assert [start(f"fan{i}@example.com", 20 + i) for i in range(4)] == [200, 200, 200, 429]  # then the whole day's are spent
+
+
+def test_one_ipv6_site_gets_forty_codes_a_day_whichever_of_its_64s_ask(api, store, outbox):
+    """BUG-093 (BHA-415): a client's limits went by its /64, and a site (a home, an office, a server) holds 65,536 of
+    them: its /48 has a day's limit too."""
+    start = lambda i, site="2a01:4f8:c0c": api.call(  # noqa: E731
+        "POST", "/api/auth/email/start", body={"email": f"fan{i}@example.com"}, address=f"{site}:{i:x}::1").status_code
+    assert [start(i) for i in range(server.CODES_PER_NETWORK_DAY + 1)] == [200] * server.CODES_PER_NETWORK_DAY + [429]
+    assert start(99, site="2a01:4f8:c0d") == 200  # another site
 
 
 def test_a_code_that_couldnt_be_sent_can_be_asked_for_again_at_once(api, store, monkeypatch):
@@ -300,7 +372,7 @@ def test_signing_in_brings_this_devices_fan_and_counts_its_researches(api, store
 def test_an_accounts_fan_id_is_never_taken_from_a_fan_cookie(api, store, monkeypatch):
     """Ids from before cookies were signed are taken unsigned if they hold something; an account's never is."""
     monkeypatch.setattr(server, "_owns_anything", lambda db, fan: True)
-    taken = server._signed(api.call("GET", "/api/me/research", cookie="acct-AbCdEfGhIjKlMnOpQrStUvWx").cookies["sf_fan"])
+    taken = server._signed(api.call("POST", "/api/me/source", body={}, cookie="acct-AbCdEfGhIjKlMnOpQrStUvWx").cookies["sf_fan"])
     assert taken and not taken[0].startswith("acct-")  # a new anonymous fan instead
     assert server._signed(api.call("GET", "/api/me/research", cookie="an-old-unsigned-id").cookies["sf_fan"])[0] == "an-old-unsigned-id"
 
@@ -369,6 +441,19 @@ def test_signing_out_ends_the_session_and_leaves_a_new_empty_fan(api, store, out
     assert api.call("GET", "/api/me/account", headers=cookies(session=other)).json()["signed_in"] is not everywhere
 
 
+def test_signing_out_when_already_signed_out_keeps_the_devices_fan(api, store, outbox):
+    """BUG-094 (BHA-416): "Sign out" in a tab left from before (signed out in another, or everywhere from the phone)
+    gave the device a new, empty anonymous fan, so what it had followed since was gone. Signed in to nothing, it
+    keeps its fan; a session cookie that ended elsewhere goes."""
+    answer = api.call("POST", "/api/auth/signout", body={}, headers=cookies(fan="anon-1"))
+    assert answer.json() == {"signed_in": False} and set_cookies(answer) == {}
+    token = set_cookies(sign_in(api, outbox))["sf_session"][0]
+    store.sessions.clear()  # signed out everywhere from another device
+    answer = api.call("POST", "/api/auth/signout", body={}, headers=cookies(fan="anon-2", session=token))
+    jar = set_cookies(answer)
+    assert answer.json() == {"signed_in": False} and jar["sf_session"][1] and "sf_fan" not in jar
+
+
 ENDINGS = {  # each way a session ends that another device or the admin panel sets off
     "signed out everywhere": lambda api, other, panel: api.call("POST", "/api/auth/signout", body={"everywhere": True}, headers=cookies(session=other)),
     "account deleted": lambda api, other, panel: api.call("DELETE", "/api/me/account", body={"confirm": True}, headers=cookies(session=other)),
@@ -396,9 +481,9 @@ def test_a_request_under_way_when_the_session_ends_doesnt_sign_the_device_back_i
         return found
 
     monkeypatch.setattr(accounts, "session_for", under_way)
-    during = api.call("GET", "/api/me/research", headers=cookies(session=token))
+    during = api.call("POST", "/api/me/source", body={}, headers=cookies(session=token))
     assert not pending and "sf_fan" not in set_cookies(during)  # the request under way was still signed in
-    after = api.call("GET", "/api/me/research", headers=cookies(session=token))
+    after = api.call("POST", "/api/me/source", body={}, headers=cookies(session=token))
     assert "sf_fan" in set_cookies(after)  # the next one isn't: a new anonymous fan
 
 

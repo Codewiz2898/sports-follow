@@ -226,3 +226,21 @@ def test_a_league_page_keeps_its_open_calls_however_many_settled_lately(db, redi
     listed = predictions.league(db, "acct-asha", code)["questions"]
     assert listed[0]["id"] == q.id and listed[0]["waiting"] == [] and {item["sport"] for item in listed} == {"chess"}
     assert len([item for item in listed if item["status"] == "settled"]) >= 1  # and the settled ones after it
+
+
+def test_signing_in_counts_a_devices_open_picks_and_leaves_a_closed_ones_split_as_it_stood(db, redis):  # noqa: F811
+    """A pick from a fan the request made up (counted False) moved into an account (merge, BUG-091): on a question
+    still open it counts from now, as an account's does; on one closed it stays as it was, so a split already shown
+    doesn't move."""
+    now = datetime.now(timezone.utc)
+    still = open_question(db, now + timedelta(hours=3))
+    gone = open_question(db, now + timedelta(hours=3), game="g2", event_id=2)
+    for q in (still, gone):
+        predictions.pick(db, "device", q.id, "w", counted=False)
+    gone.locks_at = now - timedelta(minutes=1)
+    db.commit()
+    predictions.merge(db, "device", "acct-asha")
+    db.commit()
+    db.expire_all()
+    rows = {qid: (counted, late) for qid, counted, late in db.execute(select(Pick.question_id, Pick.counted, Pick.moved_late).where(Pick.fan_id == "acct-asha"))}
+    assert rows == {still.id: (True, False), gone.id: (False, True)}

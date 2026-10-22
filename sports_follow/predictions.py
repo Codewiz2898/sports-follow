@@ -685,12 +685,13 @@ def mine(db: Session, fan: str) -> list[dict[str, Any]]:
 
 def table(db: Session, league: League) -> list[dict[str, Any]]:
     """A league's table: each member's points on the questions settled since it was made, how many they called
-    right of those they picked, best first; members level on points share a place."""
+    right of those they picked, best first; members level on points share a place. Not a pick brought in on
+    signing in once its question had closed (moved_late: merge)."""
     members: dict[str, str] = {f: n for f, n in db.execute(select(LeagueMember.fan_id, LeagueMember.name).where(LeagueMember.league_id == league.id))}
     scored = {fan: (int(pts or 0), int(right or 0), int(played or 0)) for fan, pts, right, played in db.execute(
         select(Pick.fan_id, func.sum(Pick.points), func.count().filter(Pick.points > 0), func.count(Pick.points))
         .join(Question, Question.id == Pick.question_id)
-        .where(Pick.fan_id.in_(list(members)), Question.status == SETTLED, Question.settled_at >= league.created_at)
+        .where(Pick.fan_id.in_(list(members)), Question.status == SETTLED, Question.settled_at >= league.created_at, ~Pick.moved_late)
         .group_by(Pick.fan_id))}
     rows = sorted(({"fan": f, "name": n, "points": scored.get(f, (0, 0, 0))[0], "right": scored.get(f, (0, 0, 0))[1], "played": scored.get(f, (0, 0, 0))[2]}
                    for f, n in members.items()), key=lambda r: (-r["points"], -r["right"], r["name"].lower()))
@@ -739,16 +740,21 @@ def league(db: Session, fan: str, code: str, now: datetime | None = None) -> dic
 
 
 def merge(db: Session, anon: str, fan: str) -> None:
-    """An anonymous fan's picks on questions still open into their account's (accounts.adopt): a question both picked
-    keeps the account's. Those on games under way or over stay the device's, in the split but in no league's table:
-    else a fan could call a game three ways on three browsers and sign in on the one that was right. An anonymous
-    fan is in no league: leagues need an account."""
+    """An anonymous fan's picks into their account's (accounts.adopt): a question both picked keeps the account's.
+    Those on games under way or over come too (BUG-091: signing in to join a friend's league mid-game lost them, their
+    points and how they went), marked moved_late: the fan sees them, but no league's table counts them, else a fan
+    could call a game three ways on three browsers and sign in on the one that was right. Where the account picked
+    one of those too, the device's stays where it was, in the split only. An anonymous fan is in no league: leagues
+    need an account."""
     still = select(Question.id).where(Question.status == OPEN, or_(Question.locks_at.is_(None), Question.locks_at > func.now()))
-    theirs = (Pick.fan_id == anon, Pick.question_id.in_(still))
-    moved = insert(Pick).from_select(["question_id", "fan_id", "option", "points", "created_at", "updated_at"],
-                                     select(Pick.question_id, literal(fan), Pick.option, Pick.points, Pick.created_at, Pick.updated_at).where(*theirs))
-    db.execute(moved.on_conflict_do_nothing())
-    db.execute(delete(Pick).where(*theirs))
+    late = ~Pick.question_id.in_(still)
+    # An account's pick counts (Pick.counted): one still open does from now; one closed as it did, its split shown.
+    moved = insert(Pick).from_select(["question_id", "fan_id", "option", "points", "counted", "moved_late", "created_at", "updated_at"],
+                                     select(Pick.question_id, literal(fan), Pick.option, Pick.points, or_(Pick.counted, ~late), or_(Pick.moved_late, late),
+                                            Pick.created_at, Pick.updated_at)
+                                     .where(Pick.fan_id == anon))
+    came = list(db.scalars(moved.on_conflict_do_nothing().returning(Pick.question_id)))
+    db.execute(delete(Pick).where(Pick.fan_id == anon, or_(Pick.question_id.in_(still), Pick.question_id.in_(came))))
 
 
 def forget(db: Session, fan: str) -> None:

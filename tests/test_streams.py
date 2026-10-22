@@ -11,6 +11,7 @@ import asyncio
 import inspect
 import json
 import os
+import sys
 import time
 from collections import Counter
 from contextlib import contextmanager
@@ -162,6 +163,16 @@ def test_the_fan_stream_opens_with_the_fans_players_and_holds_no_session(api):
     assert held == 0 and api.opened == ["thread"] * 4  # the follow ids, the players, the followed games, the teams: each closed at once
     # Read once subscribed, so a card published while the stream connects can't fall in a gap.
     assert api.redis.log == ["subscribe player:1 player:2", "get card:1", "get card:2", "unsubscribe"]
+
+
+def test_a_fan_who_follows_nothing_hears_so_first(api, monkeypatch):
+    """BUG-162 (BHA-483): with nothing to follow (a fan signed out elsewhere reads as nobody, as does one who stopped
+    following everyone there) the stream only pinged, so an open app kept the list it showed. It opens with the empty
+    list, as any stream opens with the fan's list."""
+    monkeypatch.setattr(sys.modules[__name__], "FOLLOWS", [])
+    response = asyncio.run(server.my_stream(Request(), fan=""))
+    event, held = first_frame(response, api)
+    assert event == {"type": "following", "players": [], "matches": [], "teams": []} and held == 0
 
 
 def test_the_fan_stream_carries_the_games_the_fan_follows_by_themselves(api, monkeypatch):

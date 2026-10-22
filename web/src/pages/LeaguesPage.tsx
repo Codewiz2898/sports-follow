@@ -271,7 +271,7 @@ export function InvitePage() {
           <>
             {band}
             <span className="dsp" style={{ fontSize: 26 }}>Sign in to join</span>
-            <span className="small muted" style={{ fontWeight: 700 }}>Calls you made on this device for games still to start come with you; those already under way stay on this device.</span>
+            <span className="small muted" style={{ fontWeight: 700 }}>Calls you made on this device come with you; those on games already under way count in no league's table.</span>
           </>
         )} />
       )}

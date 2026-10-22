@@ -11,9 +11,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select, text
 
-from sports_follow import campaigns, notify, predictions, predictions_push
+from sports_follow import accounts, campaigns, notify, predictions, predictions_push
 from sports_follow.adapters import pandascore_esports as ps
-from sports_follow.models import (Athlete, Campaign, Event, EventPlayer, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerIdentity, PushSubscription,
+from sports_follow.models import (Account, Athlete, Campaign, Event, EventPlayer, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerIdentity, PushSubscription,
                                   Question, Team, TeamFollow)
 from sports_follow.moments import Found
 
@@ -187,6 +187,28 @@ def test_how_a_pick_went_goes_once_to_who_picked_with_their_league_place(db, red
     db.commit()
     predictions_push.run()
     assert heard(pushed)["acct-ravi"]["title"] == "You got it right: Draw"
+
+
+def test_a_call_made_on_a_phone_before_it_signed_in_mid_game_is_told_there(db, redis, pushed):  # noqa: F811
+    """BUG-091 (BHA-413): a fan calls the game on their phone, it starts, and they sign in (to join a friend's league).
+    How it went reaches that phone, now the account's. The pick used to stay with the phone's anonymous id, whose
+    devices had gone to the account, so no one was told."""
+    start = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=3)
+    chess_board(db, start)
+    carlsen(db)
+    poll(1, board(status="*"))
+    q = db.scalars(select(Question)).one()
+    predictions.pick(db, "phone", q.id, CARLSEN)
+    db.add(Account(id=1, email="sana@example.com", fan_id="acct-sana"))
+    db.commit()
+    devices(db, "phone")
+    poll(1, board(status="*", ongoing=True))  # the first move: it closes
+    accounts.sign_in(db, 1, "phone")
+    db.commit()
+    poll(1, board(0))  # the recorded result: Carlsen won
+    predictions_push.run()
+    told = heard(pushed)
+    assert list(told) == ["phone"] and told["phone"]["title"] == "You got it right: Magnus Carlsen"
 
 
 def test_a_map_voided_tells_no_one_till_a_winner_comes(db, redis, pushed):  # noqa: F811
