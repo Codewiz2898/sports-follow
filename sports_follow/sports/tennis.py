@@ -65,10 +65,14 @@ class Tennis(Sport):
     def outcome(self, result: str, teams: list[str], board: dict[str, Any] | None = None, side: str | None = None) -> str | None:
         """As every sport's, but a result with no score wasn't played: a walkover kept before walkovers were told
         apart ("Lost ", where it's "Lost (w/o)" now) is no more form than one kept since. A retirement counts."""
-        word, _, score = (result or "").strip().partition(" ")
-        if word in ("Won", "Lost") and not score.strip():
+        if not self.played(result):
             return None
         return super().outcome(result, teams, board, side)
+
+    def played(self, result: str) -> bool:
+        """As every sport's, and a win or a loss with no score wasn't (outcome)."""
+        word, _, score = (result or "").strip().partition(" ")
+        return super().played(result) and not (word in ("Won", "Lost") and not score.strip())
 
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
         winner = next((p for p in state.get("players") or [] if p.get("winner")), None)

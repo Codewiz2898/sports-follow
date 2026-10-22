@@ -280,10 +280,16 @@ def num(value: str | None) -> float:
     return float(match.group(1)) if match else 0.0
 
 
+def played(result: str) -> bool:
+    """Whether a result put from the player's side was played: a walkover or a forfeit wasn't ("Won (w/o)", "Lost by
+    forfeit"), so it isn't form (as the tennis Win–loss leaves it out)."""
+    return "(w/o)" not in (result or "") and " by forfeit" not in (result or "")
+
+
 def outcome(result: str) -> str | None:
-    """W, D or L from a result put from the player's side ("Won 2–1"); None if it doesn't say."""
-    if "(w/o)" in (result or "") or " by forfeit" in (result or ""):
-        return None  # a walkover or a forfeit wasn't played, so it isn't form (as the tennis Win–loss leaves it out)
+    """W, D or L from a result put from the player's side ("Won 2–1"); None if it doesn't say, or wasn't played."""
+    if not played(result):
+        return None
     word = (result or "").split(" ", 1)[0]
     return {"Won": "W", "Drew": "D", "Lost": "L"}.get(word)
 
@@ -741,6 +747,11 @@ class Sport:
         they played for in it, where known: a sport whose result is the game's own ("India won by 57 runs") reads them.
         Decided as a result is kept (structured.result_item), so the app shows it rather than guessing from names."""
         return outcome(result)
+
+    def played(self, result: str) -> bool:
+        """Whether a result's game was played, as outcome() reads it: one given by forfeit or a walkover wasn't, so
+        form's note doesn't count it among the games its record covers (form.py)."""
+        return played(result)
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         """Numbers over the player's last results (each {"result", …}) and the lines stored with them."""

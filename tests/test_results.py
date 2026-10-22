@@ -157,6 +157,19 @@ def test_a_walkover_isnt_form():
     assert {s["label"]: s["value"] for s in tennis}["W–L"] == "1–0"
 
 
+def test_forms_note_says_how_many_of_its_games_werent_played():
+    # BUG-322: the note counted every result and the record only those played, so two forfeits read "W–L 7–1 · Last 10
+    # series". It says how many weren't played, as it says how many are still loading.
+    said = ["Won 2–1", "Won by forfeit", "Lost 0–2", "Lost by forfeit", "Won 2–0"]
+    stats, note = form.summarize("Valorant", [(result(r), None) for r in said], [])
+    assert ({s["label"]: s["value"] for s in stats}["W–L"], note) == ("2–1", "Last 5 series (2 not played)")
+    tennis = [(result("Won (w/o)"), None), (result("Lost "), None), (result("Won 6-4 6-3", scorecard=False), None)]
+    assert form.summarize("Tennis", tennis, [])[1] == "Last 3 matches (2 not played, 1 still loading)"
+    assert form.summarize("Valorant", [(result("Won 2–1"), None)], [])[1] == "Last 1 series"
+    # A result whose win or loss can't be told (a traded player's old side) was played, all the same.
+    assert form.summarize("Football", [(result("Arsenal 2–1 Chelsea"), None), (result("Won 1–0"), None)], [])[1] == "Last 2 games"
+
+
 def test_a_walkover_kept_before_walkovers_were_told_apart_isnt_form_either():
     # BUG-141: Alcaraz's walkover in Barcelona was kept as "Lost " (no score) before BUG-040's fix, and counted as a
     # loss in his W–L for good: a result with no score wasn't played. A retirement still counts.
