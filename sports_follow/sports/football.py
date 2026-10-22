@@ -468,9 +468,10 @@ class Football(Sport):
             elif abs(goals[0] - goals[1]) >= ROUT or sum(goals) >= GOALS:
                 bonus, said = 10, f"{sum(goals)} goals"
         line = ""
-        if home.get("pens") is not None and away.get("pens") is not None and (won := _on_penalties(home, away)) is not None:
-            lost = away if won is home else home
-            line = f"{won.get('name')} beat {lost.get('name')} {won['pens']}–{lost['pens']} on penalties" if won.get("name") and lost.get("name") else ""
+        took = _on_penalties(home, away) if home.get("pens") is not None and away.get("pens") is not None else None
+        beaten = away if took is home else home
+        if took is not None and took.get("name") and beaten.get("name"):
+            line = f"{took['name']} beat {beaten['name']} {took['pens']}–{beaten['pens']} on penalties"
         return Notable(min(100, rank + bonus), word=f"{home.get('score')}–{away.get('score')}", line=line, why=why or said)
 
     def out_fact(self, who: str, kind: str, what: str, until: date | None) -> Fact | None:
