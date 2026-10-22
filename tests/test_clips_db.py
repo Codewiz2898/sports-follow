@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import clips, clipstore, match
+from sports_follow import clips, clipstore, match, pipeline
 from sports_follow.models import Clip, Player
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
@@ -238,6 +238,22 @@ def test_removed_players_come_off_clips(db, bucket, page):
     with db() as s:
         assert s.query(Clip).filter_by(slug=slug).one().players == [8]
         assert clips.listed(s, player=7) == []
+
+
+def test_a_page_folded_into_another_keeps_its_clips(db, bucket, page):
+    # BUG-226: a page folded into the one that holds its athlete (pipeline._fold: the same player found twice) left
+    # its clips tagged with an id no page has, so they dropped out of the merged page's.
+    key_id, _ = _key(db)
+    with db() as s:
+        s.add_all([Player(id=7, slug="larl", name="Larl", sport="dota2"), Player(id=8, slug="larl-dota", name="Larl", sport="dota2"),
+                   Player(id=9, slug="noone", name="Noone", sport="dota2")])
+    a, _ = _publish(db, bucket, key_id, players=[8, 9])
+    b, _ = _publish(db, bucket, key_id, players=[7, 8])
+    with db() as s:
+        pipeline._fold(s, s.get(Player, 8), s.get(Player, 7))  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+    with db() as s:
+        assert {c.slug: c.players for c in s.query(Clip)} == {a: [7, 9], b: [7]}
+        assert {c["id"] for c in clips.listed(s, player=7)} == {a, b}
 
 
 def test_reports_move_with_a_sign_in(db, bucket, page):

@@ -182,6 +182,7 @@ class Cricket(Sport):
     team = True
     follow_teams = True
     wikidata = {"espn_cricket": "P2697"}
+    wikidata_sport = ("Q5375",)
     honours = {
         "Q7526820": "ICC Cricketer of the Year", "Q8027398": "Wisden Leading Cricketer in the World",
         "Q26910896": "Wisden Leading Woman Cricketer in the World", "Q3569447": "Wisden Cricketer of the Year",

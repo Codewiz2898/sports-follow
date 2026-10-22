@@ -33,6 +33,7 @@ from .config import AGENT_LIVE
 from .db import session
 from .models import (
     Athlete,
+    Clip,
     Event,
     EventPlayer,
     EventState,
@@ -325,7 +326,7 @@ def placeholder_card(player: Player) -> dict[str, Any]:
 
 
 def _fold(db: Session, player: Player, into: Player) -> int:
-    """Fold a player into the one who holds their athlete: move the aliases and follows over and delete
+    """Fold a player into the one who holds their athlete: move the aliases, follows and clips over and delete
     this row. Returns the id folded away."""
     for alias in db.scalars(select(PlayerAlias).where(PlayerAlias.player_id == player.id)):
         alias.player_id = into.id
@@ -335,6 +336,8 @@ def _fold(db: Session, player: Player, into: Player) -> int:
             db.delete(follow)
         else:
             follow.player_id = into.id
+    for clip in db.scalars(select(Clip).where(Clip.players.contains([player.id]))):  # tags are ids in a list: nothing else moves them
+        clip.players = list(dict.fromkeys(into.id if p == player.id else p for p in clip.players))
     db.flush()
     moved_from = player.id
     db.delete(player)

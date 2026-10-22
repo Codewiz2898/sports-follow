@@ -221,6 +221,7 @@ class Football(Sport):
     follow_teams = True
     # Women's players are on Soccerdonna (Transfermarkt's women's site) and FBref, rarely Transfermarkt.
     wikidata = {"espn_soccer": "P3681", "transfermarkt": "P2446", "soccerdonna": "P4381", "fbref": "P5750"}
+    wikidata_sport = ("Q2736", "Q606060")  # association football, women's association football
     honours = {
         "Q166177": "Ballon d'Or", "Q2291862": "Ballon d'Or", "Q59411480": "Ballon d'Or Féminin",
         "Q182529": "FIFA World Player of the Year", "Q10869150": "FIFA World Player of the Year",

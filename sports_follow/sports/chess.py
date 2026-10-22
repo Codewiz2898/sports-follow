@@ -151,6 +151,7 @@ class Chess(Sport):
     label = "Chess"
     kinds = ("chess",)
     wikidata = {"lichess_chess": "P1440"}
+    wikidata_sport = ("Q718",)
     athletes = 24_247
     wikidata_title = "P2962"
     profile_role = ("P2962",)  # their title: "Grandmaster"

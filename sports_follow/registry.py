@@ -181,10 +181,11 @@ def fetch(sport: str, qids: list[str]) -> tuple[list[dict], list[dict], list[dic
       UNION {{ ?p skos:altLabel ?n FILTER(LANG(?n) IN ({named_in})) BIND("alias" AS ?kind) }} }}""")
     teams: list[dict] = []
     if kind.team:
-        teams = sparql(f"""SELECT ?p ?team ?teamLabel ?start (LANG(?teamLabel) AS ?lang) WHERE {{
+        teams = sparql(f"""SELECT ?p ?team ?teamLabel ?start ?teamSport (LANG(?teamLabel) AS ?lang) WHERE {{
           VALUES ?p {{ {values} }}
           ?p p:P54 ?st . ?st ps:P54 ?team . FILTER NOT EXISTS {{ ?st pq:P582 [] }}
           OPTIONAL {{ ?st pq:P580 ?start }}
+          OPTIONAL {{ ?team wdt:P641 ?teamSport }}
           ?team rdfs:label ?teamLabel FILTER(LANG(?teamLabel) IN ({named_in})) }}""")
     return core, names, teams
 
@@ -211,10 +212,14 @@ def team_name(label: str) -> str:
     return side.group(1) if side else NATIONAL.sub("", label).strip()
 
 
-def keeps_team(kind: sports.Sport, label: str) -> bool:
+def keeps_team(kind: sports.Sport, label: str, plays: Iterable[str] = ()) -> bool:
     """Whether a team Wikidata lists for one of a sport's athletes is one the app shows: not a youth, reserve
-    or college side, and one of the sport's."""
-    return bool(label) and not YOUTH.search(label) and not COLLEGE.search(label) and kind.team_ok(label)
+    or college side, and one of the sport's: by its name (Sport.team_ok), and not one Wikidata says plays another
+    of the app's sports and not this one, by the sports it names for the team (P641: `plays`, their items)."""
+    plays = set(plays)
+    others = {item for s in sports.ALL if s is not kind for item in s.wikidata_sport}
+    elsewhere = bool(plays & others) and not plays & set(kind.wikidata_sport)
+    return bool(label) and not YOUTH.search(label) and not COLLEGE.search(label) and kind.team_ok(label) and not elsewhere
 
 
 def team_list(kind: sports.Sport, stints: list[tuple[str, str, bool]]) -> list[str]:
@@ -266,15 +271,18 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
             labels.setdefault(qid, {})[r.get("lang", "")] = r["n"]
         else:
             aliases.setdefault(qid, []).append((r.get("lang") or "en", r["n"]))
-    # A team named in English and in "mul" is one team, by its English name.
+    # A team named in English and in "mul" is one team, by its English name; with each sport Wikidata says it plays.
     team_labels: dict[tuple[str, str, str], dict[str, str]] = {}
+    team_sports: dict[tuple[str, str, str], set[str]] = {}
     for r in teams:
         stint = (_qid(r["p"]), r.get("team") or r.get("teamLabel") or "", r.get("start") or "")
         team_labels.setdefault(stint, {})[r.get("lang") or "en"] = r.get("teamLabel") or ""
+        if r.get("teamSport"):
+            team_sports.setdefault(stint, set()).add(_qid(r["teamSport"]))
     current_teams: dict[str, list[tuple[str, str, bool]]] = {}
-    for (qid, _, start), by_lang in team_labels.items():
+    for (qid, team, start), by_lang in team_labels.items():
         label = next((by_lang[lang] for lang in NAME_LANGS if lang in by_lang), "")
-        if not keeps_team(kind, label):
+        if not keeps_team(kind, label, team_sports.get((qid, team, start), ())):
             continue
         current_teams.setdefault(qid, []).append((start, team_name(label), is_national(label)))
 
@@ -627,10 +635,14 @@ def near(db: Session, query: str, sport: str | None = None, limit: int = 10) -> 
     return list(db.scalars(stmt.order_by(func.word_similarity(folded, Athlete.search_text).desc(), Athlete.sitelinks.desc()).limit(limit)))
 
 
-def get(db: Session, qid: str, sport: str | None = None) -> Athlete | None:
+def get(db: Session, qid: str, sport: str | None = None, only_running: bool = False) -> Athlete | None:
+    """An athlete by registry id: in this sport, or the best known of their rows (a person in two sports is two);
+    only_running: of the sports that run (running)."""
     stmt = select(Athlete).where(Athlete.qid == qid)
     if sport:
         stmt = stmt.where(Athlete.sport == sport)
+    if only_running:
+        stmt = running(stmt)
     return db.scalars(stmt.order_by(Athlete.sitelinks.desc()).limit(1)).first()
 
 

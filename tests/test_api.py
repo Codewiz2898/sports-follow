@@ -35,7 +35,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
-from sports_follow import alerts, bus, db as db_module, feed, league, live, logs, match, notify, pipeline, registry, server, starters, structured, web_errors
+from sports_follow import alerts, bus, db as db_module, feed, league, live, logs, match, notify, pipeline, registry, server, sports, starters, structured, web_errors
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef, Snapshot
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -196,7 +196,7 @@ class Db:
         if model is PlayerCard and key == 1:
             return SimpleNamespace(player_id=1, status="ready", card={})
         if model is Player and key == 1:
-            return SimpleNamespace(id=1, name="Player One")
+            return SimpleNamespace(id=1, name="Player One", sport="Football")
         return SimpleNamespace(id=key) if model is Event and key == 5 else None
 
     def scalar(self, stmt):
@@ -358,7 +358,7 @@ def test_asking_again_for_a_name_no_one_followed_here_has_costs_no_research_that
 
     def get(self, model, key):
         if key == 2:
-            return failed if model is PlayerCard else SimpleNamespace(id=2, name="Caitlyn Clark") if model is Player else None
+            return failed if model is PlayerCard else SimpleNamespace(id=2, name="Caitlyn Clark", sport="Basketball") if model is Player else None
         return plain_get(self, model, key)
 
     def scalar(self, stmt):  # the card that holds a typed name's alias
@@ -518,6 +518,27 @@ def test_a_fan_follows_at_most_so_many_players(api, a_source, monkeypatch):
     assert api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"player_id": 1}).status_code == 200  # one followed already: no new follow
     assert api.call("POST", "/api/follows", fan="another", address=PUBLIC, body={"player_id": 1}).status_code == 200
     assert not [s for s in api.statements if isinstance(s, Insert) and s.table.name == "follow" and _param(s, "fan_id") == "fan" and _param(s, "player_id") != 1]
+
+
+def test_a_turned_off_games_pro_isnt_previewed_or_followed_by_their_source_id(api, monkeypatch):
+    # BUG-097: a source of several games runs while any of them does, so a pro of a game turned off could still be
+    # previewed and followed by their id there, and their page made and polled.
+    adapter = KNOWN["pandascore_esports"]
+    monkeypatch.setitem(ADAPTERS, adapter.system, adapter)
+    monkeypatch.setattr(adapter, "player", lambda athlete_id, league=None: PlayerRef(adapter.system, athlete_id, "s1mple", [], [], league="cs-go"))
+    monkeypatch.setattr(adapter, "preview_fixtures", False)
+    monkeypatch.setattr(adapter, "stats", lambda ref, recent: ([], ""))
+    monkeypatch.setattr(server.player_search, "_previews", {})
+    made = []
+    monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: made.append(ref.athlete_id) or (100, True))
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "cs2"))
+    body = {"system": adapter.system, "athlete_id": "7398"}
+    assert api.call("GET", f"/api/athletes/{adapter.system}/7398", fan="fan").status_code == 404
+    assert api.call("POST", "/api/follows", fan="fan", body=body).status_code == 404
+    assert made == []
+    monkeypatch.setattr(sports, "ENABLED", sports.ALL)
+    assert api.call("GET", f"/api/athletes/{adapter.system}/7398", fan="fan").json()["sport"] == "CS2"
+    assert api.call("POST", "/api/follows", fan="fan", body=body).status_code == 200 and made == ["7398"]
 
 
 def test_limits_count_the_public_address_a_client_comes_from():

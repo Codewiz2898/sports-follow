@@ -15,14 +15,14 @@ follows goes.
     .venv/bin/python -m sports_follow.teams restore <system> <team id>
 
 **A follow** (TeamFollow) is a fan, a team and their level. A followed team's games are read from its source
-(refresh: Adapter.team_fixtures, as often as a followed player's) and linked to it (EventTeam), and from then on
-each is followed as a game followed by itself is (matches.py): armed by its sport's lead, polled in the live lane
-by the same allowances, its own moments from both sides (Sport.game_moments) reaching the team's fans by their
-level, and its result told from the team's side (Sport.side_final) in place of the game's own (alerts.plan). A
-fan who follows a player in it as well hears each moment once; one who mutes a game of it hears nothing more of
-that game. The refresh keeps each result from the team's side (EventTeam.result), and the team's page (its card):
-its games to come, its last results and its squad (Adapter.team, read daily), each player followable as a search
-result is. A fan follows at most MAX teams.
+(refresh: Adapter.team_fixtures, as often as a followed player's near a game, every QUIET otherwise: stale) and
+linked to it (EventTeam), and from then on each is followed as a game followed by itself is (matches.py): armed
+by its sport's lead, polled in the live lane by the same allowances, its own moments from both sides
+(Sport.game_moments) reaching the team's fans by their level, and its result told from the team's side
+(Sport.side_final) in place of the game's own (alerts.plan). A fan who follows a player in it as well hears each
+moment once; one who mutes a game of it hears nothing more of that game. The refresh keeps each result from the
+team's side (EventTeam.result), and the team's page (its card): its games to come, its last results and its squad
+(Adapter.team, read daily), each player followable as a search result is. A fan follows at most MAX teams.
 """
 
 from __future__ import annotations
@@ -54,8 +54,11 @@ SQUAD_MOST = 40  # players a squad lists: a club's first team with its youngster
 UPCOMING = 5  # games to come a team's page shows
 RECENT = 5  # and results
 LIMIT = 6  # teams a search answers with
+NAMESAKES = 20  # and teams with exactly the name typed, however many past LIMIT: Team Liquid in each of its titles
 REFRESH_LOCK = 20 * 60  # as a player's refresh (structured.REFRESH_LOCK)
 LOOK_AGAIN = 10 * 60  # a page nobody follows the team of asks its source again at most this often
+SOON = timedelta(hours=48)  # a team with a game on or this soon has its games read as often as a followed player's
+QUIET = timedelta(hours=6)  # and one without, this often: a schedule days off doesn't change by the half hour
 READS = 6  # and pages ask at most this many reads a minute of one source's allowance, whichever teams (as match.READS)
 STREAM_AHEAD = timedelta(hours=36)  # a fan's teams' games this soon are on their stream (event_ids)
 NO_SOURCE = "This team's games can't be followed now: its source isn't running."
@@ -220,20 +223,29 @@ def restore(db: Session, system: str, team_id: str) -> bool:
     return bool(db.execute(delete(TeamOverride).where(TeamOverride.system == system, TeamOverride.external_id == team_id).returning(TeamOverride.id)).first())
 
 
-def removed(db: Session) -> set[tuple[str, str]]:
-    return {(s, x) for s, x in db.execute(select(TeamOverride.system, TeamOverride.external_id).where(TeamOverride.action == "remove")).all()}
-
-
 # ---------------------------------------------------------------- search
 
 
 def find(db: Session, query: str, sport: str | None = None, fan: str | None = None, limit: int = LIMIT) -> list[dict[str, Any]]:
     """Teams whose name or code has a word starting with every typed word (search as you type, beside players):
-    a whole name typed first, then the fan's own, then the most followed, the biggest, the shortest name. Only
-    teams of sports running whose source runs. `sport` narrows to one sport, or a group's (esports)."""
+    a whole name typed first (every team with it, up to NAMESAKES), then the fan's own, then the most followed, the
+    biggest, the shortest name, `limit` in all unless more have the whole name. Only teams of sports running whose
+    source runs. `sport` narrows to one sport, or a group's (esports); so does a sport's name typed with a team's
+    ("india cricket", "liquid valorant"), when the words together find no team."""
     typed = registry.words(query)
     if not typed or len(" ".join(typed)) < 2:
         return []
+    found = _find(db, typed, sport, fan, limit)
+    for i, word in enumerate(typed if not found else []):
+        named, rest = sports.get(word), typed[:i] + typed[i + 1:]
+        if named is not None and rest and (not sport or named.key in sports.within(sport)):
+            found = _find(db, rest, named.key, fan, limit)
+            if found:
+                break
+    return found
+
+
+def _find(db: Session, typed: list[str], sport: str | None, fan: str | None, limit: int) -> list[dict[str, Any]]:
     keys = [s.key for s in sports.ENABLED if s.follow_teams]
     if sport:
         keys = [k for k in keys if k in sports.within(sport)]
@@ -244,9 +256,10 @@ def find(db: Session, query: str, sport: str | None = None, fan: str | None = No
     exact = or_(Team.search_text.like(f" {whole} |%"), Team.search_text.like(f"%| {whole} |%"))
     mine = Team.id.in_(select(TeamFollow.team_id).where(TeamFollow.fan_id == fan)) if fan else None
     order = [exact.desc(), *([mine.desc()] if mine is not None else []), func.coalesce(fans.c.n, 0).desc(), Team.tier.desc(), func.length(Team.name), Team.id]
-    rows = db.execute(select(Team, func.coalesce(fans.c.n, 0)).outerjoin(fans, fans.c.team_id == Team.id)
+    rows = db.execute(select(Team, func.coalesce(fans.c.n, 0), exact).outerjoin(fans, fans.c.team_id == Team.id)
                       .where(*[Team.search_text.like(f"% {w}%") for w in typed], Team.sport.in_(keys), Team.system.in_(list(ADAPTERS)))
-                      .order_by(*order).limit(limit)).all()
+                      .order_by(*order).limit(max(limit, NAMESAKES))).all()
+    rows = [(t, n) for i, (t, n, named) in enumerate(rows) if i < limit or named]
     theirs = _following(db, fan, [t.id for t, _ in rows])
     return [summary(t, n, t.id in theirs) for t, n in rows]
 
@@ -289,10 +302,17 @@ def follow(db: Session, fan: str, team_id: int) -> Team:
     db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"team-follow:{fan}", 0))))
     if db.scalar(select(TeamFollow.id).where(TeamFollow.fan_id == fan, TeamFollow.team_id == team.id)) is not None:
         return team
-    if (db.scalar(select(func.count()).select_from(TeamFollow).where(TeamFollow.fan_id == fan)) or 0) >= MAX:
+    if counted(db, fan) >= MAX:
         raise Refused(429, f"You follow {MAX} teams already: unfollow one to follow this.")
     db.execute(insert(TeamFollow).values(fan_id=fan, team_id=team.id, alert_rules={}).on_conflict_do_nothing())
     return team
+
+
+def counted(db: Session, fan: str) -> int:
+    """The teams a fan follows that count toward MAX: those of the sports that run. A turned-off sport's stay
+    followed, out of sight (mine), and the fan can't unfollow them to make room."""
+    return db.scalar(select(func.count()).select_from(TeamFollow).join(Team, Team.id == TeamFollow.team_id)
+                     .where(TeamFollow.fan_id == fan, Team.sport.in_(sports.running_keys()))) or 0
 
 
 def unfollow(db: Session, fan: str, team_id: int) -> None:
@@ -309,16 +329,23 @@ def set_level(db: Session, fan: str, team_id: int, level: str) -> bool:
 
 
 def stale(team: Team, now: datetime | None = None) -> bool:
-    """Whether a team's games are due to be read again (as a followed player's: FIXTURES_MAX_AGE)."""
+    """Whether a team's games are due to be read again: as often as a followed player's (FIXTURES_MAX_AGE) while
+    it has a game on or within SOON, as its last read had them, else every QUIET. A game of it that ends has them
+    read at the next tick (ended)."""
     from .config import FIXTURES_MAX_AGE
 
-    return team.fetched_at is None or team.fetched_at < (now or _now()) - timedelta(seconds=FIXTURES_MAX_AGE)
+    now = now or _now()
+    if team.fetched_at is None:
+        return True
+    soon = any(g.get("status") in ("armed", "live") or (g.get("start_utc") and datetime.fromisoformat(g["start_utc"]) <= now + SOON)
+               for g in (team.card or {}).get("upcoming") or [])
+    return team.fetched_at < now - (timedelta(seconds=FIXTURES_MAX_AGE) if soon else QUIET)
 
 
 def due(db: Session, now: datetime) -> list[int]:
-    """The followed teams whose games are due to be read again (the tick, pipeline.due_work): of a sport running,
-    from a source running that can say them and isn't down to what its live games need (structured.spare), not
-    failing lately (structured.retry_at), and not being read now."""
+    """The followed teams whose games are due to be read again (the tick, pipeline.due_work: stale): of a sport
+    running, from a source running that can say them and isn't down to what its live games need (structured.spare),
+    not failing lately (structured.retry_at), and not being read now."""
     from .config import FIXTURES_MAX_AGE
 
     running = dict(ADAPTERS.items())
@@ -326,7 +353,7 @@ def due(db: Session, now: datetime) -> list[int]:
     out = []
     for team in db.scalars(select(Team).where(Team.id.in_(select(TeamFollow.team_id)), or_(Team.fetched_at.is_(None), Team.fetched_at < now - timedelta(seconds=FIXTURES_MAX_AGE)))):
         adapter = running.get(team.system)
-        if not readable(adapter) or not followable(team.sport):
+        if not stale(team, now) or not readable(adapter) or not followable(team.sport):
             continue
         retry = structured.retry_at(team.health)
         if retry and now < retry:
@@ -721,6 +748,12 @@ def look_again(team: Team) -> bool:
     return stale(team) and readable(ADAPTERS.get(team.system)) and bus.cooldown(f"teamlook:{team.id}", LOOK_AGAIN)
 
 
+def look_later(team_id: int) -> None:
+    """A page's ask (look_again) that the minute's reads had no room for (READS): the next page may ask, not only
+    one LOOK_AGAIN on, so a burst of other pages can't keep this one empty."""
+    bus.release(f"teamlook:{team_id}")
+
+
 def merge(db: Session, anon: str, fan: str) -> int:
     """An anonymous fan's team follows into their account's (accounts.adopt): a team both follow keeps the
     account's level and the earlier date. The account follows at most MAX: of this device's others, the earliest
@@ -728,7 +761,7 @@ def merge(db: Session, anon: str, fan: str) -> int:
     account's own follows (follow's lock), so a follow on another device as this one signs in can't pass MAX."""
     db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"team-follow:{fan}", 0))))
     have = set(db.scalars(select(TeamFollow.team_id).where(TeamFollow.fan_id == fan)))
-    room, dropped = MAX - len(have), 0
+    room, dropped = MAX - counted(db, fan), 0
     for row in db.scalars(select(TeamFollow).where(TeamFollow.fan_id == anon).order_by(TeamFollow.created_at, TeamFollow.id)):
         if row.team_id in have:
             db.execute(update(TeamFollow).where(TeamFollow.fan_id == fan, TeamFollow.team_id == row.team_id).values(created_at=func.least(TeamFollow.created_at, row.created_at)))
@@ -739,12 +772,6 @@ def merge(db: Session, anon: str, fan: str) -> int:
             dropped += 1
     db.execute(delete(TeamFollow).where(TeamFollow.fan_id == anon))
     return dropped
-
-
-def muted_games(db: Session, fan: str, team_id: int) -> set[int]:
-    """The games of a team this fan muted: each stays muted while they follow it."""
-    return set(db.scalars(select(NotificationMute.event_id).join(EventTeam, EventTeam.event_id == NotificationMute.event_id)
-                          .where(NotificationMute.fan_id == fan, EventTeam.team_id == team_id)))
 
 
 # ---------------------------------------------------------------- the command

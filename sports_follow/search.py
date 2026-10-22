@@ -28,7 +28,7 @@ from sqlalchemy import case, func, literal, or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from . import naming, pipeline, registry, sports, structured
-from .adapters import ADAPTERS, Adapter, AdapterError, PlayerRef, Provider, SearchResult, budget, providers, source_name
+from .adapters import ADAPTERS, Adapter, AdapterError, PlayerRef, Provider, SearchResult, budget, cache, providers, source_name
 from .models import Athlete, Follow, Player, PlayerAlias, PlayerCard, PlayerIdentity
 from .pipeline import slugify
 
@@ -308,10 +308,7 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         # Too new or too obscure for Wikidata: ask the sources' own searches (adapters.base.LiveSearch).
         # A name the registry knows well ("bumrah") doesn't need them.
         live = _live(query, sport)
-        jobs = {provider.name: _pool.submit(budget.carry(provider.search.find), query, sport, adapters) for provider, adapters in live} if live and ask() else {}
-        answers, partial = _collect(jobs)
-        if live and not jobs:
-            partial = [provider.name for provider, _ in live]
+        answers, partial = _ask({provider.name: (provider, query, adapters) for provider, adapters in live}, sport, ask)
         # A live hit with the name of a player here or a registry athlete in the same sport is that athlete:
         # the row found here, confirmed by birth date when followed, stands for both, and is listed though it
         # was only alike to what was typed (the source knows "leo messi" is Lionel Messi).
@@ -415,14 +412,34 @@ def _ours(db: Session, rows: list[SearchResult], fan: str | None) -> None:
             r.player_id, r.following, r.followers, r.status, r.next = pid, pid in mine, int(followers.get(pid, 0)), status, next_up(card or {})
 
 
-def _collect(jobs: dict[str, Any]) -> tuple[list[list[SearchResult]], list[str]]:
-    """Each job's results, in the jobs' order, and the names of those that didn't answer in time."""
-    answers: list[list[SearchResult]] = []
+def _ask(searches: dict[str, tuple[Provider, str, list[Adapter]]], sport: str | None, may_ask: Callable[[], bool]) -> tuple[list[list[SearchResult]], list[str]]:
+    """Each of these sources' searches (by name: its provider, what it's asked, its adapters), answered from what the
+    sources answered lately (their cache, adapters/cache.py) where they can be, and the rest by the sources
+    themselves if may_ask says so: a client's limit counts only a search that would send something. Returns their
+    results, in the searches' order, and the names of those that didn't answer (in time, or at all)."""
+    finds = {name: (provider.search.find, query, adapters) for name, (provider, query, adapters) in searches.items() if provider.search}
+    kept: dict[str, list[SearchResult]] = {}
+    for name, (find, query, adapters) in finds.items():
+        try:
+            kept[name] = cache.kept_only(find)(query, sport, adapters)
+        except (cache.NotKept, AdapterError):
+            pass
+    rest = {name: f for name, f in finds.items() if name not in kept}
+    jobs = {name: _pool.submit(budget.carry(find), query, sport, adapters) for name, (find, query, adapters) in rest.items()} if rest and may_ask() else {}
+    asked, partial = _collect(jobs)
+    if rest and not jobs:
+        partial = list(rest)
+    return [got for name in finds if (got := kept.get(name, asked.get(name))) is not None], partial
+
+
+def _collect(jobs: dict[str, Any]) -> tuple[dict[str, list[SearchResult]], list[str]]:
+    """Each job's results, by its name, and the names of those that didn't answer in time."""
+    answers: dict[str, list[SearchResult]] = {}
     partial: list[str] = []
     deadline = time.monotonic() + SOURCE_TIMEOUT
     for name, job in jobs.items():
         try:
-            answers.append(job.result(timeout=max(0.05, deadline - time.monotonic())))
+            answers[name] = job.result(timeout=max(0.05, deadline - time.monotonic()))
         except FutureTimeout:
             partial.append(name)
         except AdapterError as exc:
@@ -460,10 +477,9 @@ def suggest(db: Session, query: str, mine: list[SearchResult], sport: str | None
     close = sorted(((closeness(query, r.name), r) for r in pool.values()), key=lambda x: -(x[0] + 0.1 * math.log10(1 + x[1].popularity)))
     words = [w for w in _key(query) if len(w) >= 3][:3]
     by_word = _live(query, sport, by_word=True) if words else []
-    if any(score >= SUGGEST_MIN for score, _ in close) or not by_word or live is None or not live():
+    if any(score >= SUGGEST_MIN for score, _ in close) or not by_word or live is None:
         return [r for score, r in close if score >= SUGGEST_MIN][:3]
-    jobs = {f"{provider.name}:{w}": _pool.submit(budget.carry(provider.search.find), w, sport, adapters) for provider, adapters in by_word for w in words}
-    answers, _ = _collect(jobs)
+    answers, _ = _ask({f"{provider.name}:{w}": (provider, w, adapters) for provider, adapters in by_word for w in words}, sport, live)
     for r in (r for hits in answers for r in hits):
         if (not sport or sports.family(r.sport) in sports.within(sport)) and r.live_scores and sports.on(r.sport):
             pool.setdefault(r.key, r)
@@ -479,7 +495,9 @@ def offered(db: Session, athletes: list[Athlete], fan: str | None) -> list[Searc
 
 
 def offered_pairs(db: Session, athletes: list[Athlete], fan: str | None) -> list[tuple[Athlete, SearchResult]]:
-    """offered, each row with the athlete it stands for."""
+    """offered, each row with the athlete it stands for. Not one of a sport turned off (a group campaign's pro of a
+    game that's off)."""
+    athletes = [a for a in athletes if sports.on(a.sport)]
     rows = [from_athlete(a, "") for a in athletes]
     _ours(db, rows, fan)
     return [(a, r) for a, r in zip(athletes, rows) if r.player_id or (r.system and r.athlete_id)]
@@ -568,15 +586,16 @@ def previewed(system: str, athlete_id: str) -> bool:
 
 def preview(system: str, athlete_id: str, league: str | None) -> dict[str, Any] | None:
     """What following this athlete would show: who they are, their next game, their last game with
-    their line, and their stats. None if the source has no such athlete, or has just been turned off."""
+    their line, and their stats. None if the source has no such athlete, or has just been turned off, or their
+    sport has (a source of several games runs while any of them does)."""
     adapter = ADAPTERS.get(system)
     if adapter is None:
         return None
     hit = _kept(system, athlete_id)
     if hit is not None:
-        return hit
+        return hit if sports.on(hit.get("sport")) else None
     ref = adapter.player(athlete_id, league)
-    if ref is None:
+    if ref is None or not sports.on(structured.sport_name(adapter, ref)):
         return None
     out: dict[str, Any] = {
         "system": system,

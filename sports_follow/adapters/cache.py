@@ -138,6 +138,27 @@ def sending() -> None:
         stack[-1][0] = time.time()
 
 
+class NotKept(Exception):
+    """A read under kept_only that only the source could answer."""
+
+
+def kept_only(fn: Callable[..., T]) -> Callable[..., T]:
+    """fn, run so that each read it makes through a Cache is answered from what's kept (this process's copy, then
+    Redis), and one that would ask the source, or only looks (peek) and finds nothing, raises NotKept instead: to
+    tell whether a call would send anything before counting it against a limit (search.run). Only reads through a
+    Cache are held back."""
+
+    def kept(*args: Any, **kwargs: Any) -> T:
+        before = getattr(_fetching, "kept_only", False)
+        _fetching.kept_only = True
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _fetching.kept_only = before
+
+    return kept
+
+
 _caches: weakref.WeakSet[Cache] = weakref.WeakSet()
 
 
@@ -161,6 +182,8 @@ class Cache:
         A failed fetch keeps nothing. With ttl 0 (or less), fetched every time and never kept. What's fetched
         stays in Redis for keep seconds where that's longer than ttl: for a caller whose next read may take a
         longer ttl (OpenDota's match, asked again every few minutes till it's parsed, then never)."""
+        if getattr(_fetching, "kept_only", False):
+            return self._kept(key, ttl)
         if ttl <= 0:
             return fetch()
         hit = self._local(key, ttl)
@@ -183,8 +206,17 @@ class Cache:
 
     def peek(self, key: str, ttl: float) -> Any:
         """A kept document younger than ttl seconds, or None: never fetched, nor waited for."""
+        if getattr(_fetching, "kept_only", False):
+            return self._kept(key, ttl)
         hit = self._local(key, ttl) or self._shared(key, ttl)
         return hit[1] if hit is not None else None
+
+    def _kept(self, key: str, ttl: float) -> Any:
+        """Under kept_only: the kept document, or NotKept."""
+        hit = (self._local(key, ttl) or self._shared(key, ttl)) if ttl > 0 else None
+        if hit is None:
+            raise NotKept(key)
+        return hit[1]
 
     def _local(self, key: str, ttl: float) -> tuple[float, Any] | None:
         hit = self.entries.get(key)

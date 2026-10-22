@@ -127,13 +127,23 @@ def pushes(results: Iterable[tuple[str | None, int | str | None]], waited: float
     counted: Counter[tuple[str, str]] = Counter()
     for service, error in results:
         result = "delivered" if error is None else "gone" if error in (404, 410) else "failed"
-        counted[(service or "unknown", result)] += 1
+        counted[(push_label(service), result)] += 1
     counter = _instrument("counter", "sports_follow.pushes", "{push}", "Pushes to devices by push service and result")
     for (service, result), n in counted.items():
         counter.add(n, {"push_service": service, "result": result})
     if waited is not None:
         _instrument("histogram", "sports_follow.push.wait", "s", "How long a batch's oldest moment waited for its pushes",
                     explicit_bucket_boundaries_advisory=SECONDS).record(max(0.0, waited))
+
+
+def push_label(service: str | None) -> str:
+    """A push service as the push metrics label it: FCM or one of the browsers' (PUSH_SERVICES), Edge's by its
+    domain (each device is on a host of its own under it), else "other": a host a device sent can't make a series."""
+    if service is None:
+        return "unknown"
+    if service in ("fcm", "android.googleapis.com", *PUSH_SERVICES):  # android: Chrome's older subscriptions
+        return service
+    return "notify.windows.com" if service.endswith(".notify.windows.com") else "other"
 
 
 def moment(kind: str) -> None:
@@ -379,6 +389,7 @@ def cards(now: datetime | None = None) -> dict[str, Reading]:
             select(Player.sport, PlayerCard.freshness).join(Player, Player.id == PlayerCard.player_id)
             .where(PlayerCard.is_live.is_(True), PlayerCard.player_id.in_(followed))
         ).all()
+    # By the sport's key (sport_label): a player's sport is stored as written ("football", "Football", "Soccer").
     worst: dict[str, float] = {}
     for sport, freshness in live_rows:
         stamp = (freshness or {}).get("live")
@@ -387,9 +398,12 @@ def cards(now: datetime | None = None) -> dict[str, Reading]:
         except ValueError:
             at = None
         if at is not None:
-            worst[sport or "other"] = max(worst.get(sport or "other", 0.0), (now - at).total_seconds())
+            worst[sport_label(sport)] = max(worst.get(sport_label(sport), 0.0), (now - at).total_seconds())
+    counted: Counter[tuple[str, str]] = Counter()
+    for status, sport, n in statuses:
+        counted[(status, sport_label(sport))] += n
     return {
-        "cards": [(n, {"status": status, "sport": sport or "other"}) for status, sport, n in statuses],
+        "cards": [(n, {"status": status, "sport": sport}) for (status, sport), n in counted.items()],
         "live_data_age": [(age, {"sport": sport}) for sport, age in worst.items()],
     }
 

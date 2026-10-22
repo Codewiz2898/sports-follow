@@ -22,7 +22,7 @@ from sqlalchemy.orm import sessionmaker
 
 from types import SimpleNamespace
 
-from sports_follow import adapters, bus, players, registry, sports, starters
+from sports_follow import adapters, bus, photos, players, registry, sports, starters
 from sports_follow.adapters import Adapter, AdapterError, Fixture, PlayerRef, Roster, Rostered, pubg
 from sports_follow.adapters.budget import RateLimited
 from sports_follow.models import Account, Athlete, AthleteOverride, AthleteUnmatch, Follow, Moment, Photo, Player, PlayerCard, PlayerIdentity, Starter
@@ -93,6 +93,26 @@ def test_removing_a_page_takes_everything_with_it_and_blocks_the_athlete(db):
     registry.upsert(db, [athlete("Q213854", "cricket", "Virat Kohli", {"espn_cricket": "253802"}), athlete("Q1", "cricket", "Someone Else")])
     db.commit()
     assert [a.qid for a in db.scalars(select(Athlete))] == ["Q1"]
+
+
+def test_removing_a_player_takes_their_photo_off_the_credits_page_at_once(db):
+    # BUG-220: removing a player left their photo on the Credits page, and its file served, until the photos job
+    # forgot it, up to 30 days on. One another athlete's row still shows stays.
+    kohli(db)
+    registry.upsert(db, [athlete("Q213854", "chess", "Virat Kohli", {"lichess_chess": "vk"}, image="Kohli 2019.jpg")])  # the same person in a sport he isn't removed from
+    db.execute(update(Athlete).where(Athlete.sport == "cricket").values(image="Virat Kohli 2019.jpg"))
+    db.add(Player(id=2, slug="virat-kohli-chess", name="Virat Kohli", sport="Chess", wikidata_qid="Q213854"))
+    db.flush()
+    db.add(Follow(fan_id="c", player_id=2, alert_rules={}))
+    now = datetime.now(timezone.utc)
+    db.add_all([Photo(file="Virat Kohli 2019.jpg", name="Virat Kohli", status="ok", digest="a" * 32, media_type="image/jpeg", data=b"jpeg", fetched_at=now),
+                Photo(file="Kohli 2019.jpg", name="Virat Kohli", status="ok", digest="b" * 32, media_type="image/jpeg", data=b"jpeg", fetched_at=now)])
+    db.commit()
+    assert len(photos.used(db)) == 2 and photos.serve(db, f"{'a' * 32}.jpg") is not None
+    assert players.main(["remove", "1", "--yes"]) == 0
+    db.expire_all()
+    assert [p["name"] for p in photos.used(db)] == ["Virat Kohli"] and photos.serve(db, f"{'a' * 32}.jpg") is None
+    assert photos.serve(db, f"{'b' * 32}.jpg") is not None  # his chess page's
 
 
 def test_removing_asks_first(db, capsys):
@@ -294,6 +314,29 @@ def test_unmatching_takes_the_photo_off_a_card_nobody_follows_now(db, monkeypatc
     assert card is not None and "photo" not in card.card["player"] and published == {3: card.card}
 
 
+def test_unmatching_takes_the_persons_profile_off_the_card_at_once(db, monkeypatch):
+    # BUG-255: unmatching took back the photo but left that person's About, birth date and honours on the card until
+    # the next monthly profile read, though the command says it's off every card at once.
+    from sports_follow import pipeline
+
+    tenz(db)
+    wrong = {"born": "1975-01-01", "nationality": "Someland", "honours": ["Someone's award (2001)"], "summary": "Someone else, a cyclist.",
+             "about": {"source": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Someone"},
+             "profile_from": {"born": "wikidata", "nationality": "wikidata", "honours": "wikidata", "summary": "wikipedia"}}
+    card = db.get(PlayerCard, 3)
+    assert card is not None
+    card.card = {**card.card, "player": {**card.card["player"], **wrong}}
+    db.commit()
+    monkeypatch.setattr(pipeline, "session", players.session)
+    published: dict[int, dict] = {}
+    monkeypatch.setattr(bus, "store_card", published.__setitem__)
+    assert players.main(["unmatch", "3"]) == 0
+    db.expire_all()
+    shown = db.get(PlayerCard, 3).card["player"]  # pyright: ignore[reportOptionalMemberAccess]
+    assert not {"born", "nationality", "honours", "summary", "about", "photo"} & set(shown) and shown["profile_from"] == {}
+    assert published[3]["player"] == shown and shown["name"] == "TenZ"
+
+
 def test_unmatching_takes_back_only_a_match_to_the_person_named(db, capsys):
     tenz(db)
     assert players.main(["unmatch", "pandascore:20401", "Q1"]) == 0  # he's matched to Q113450352
@@ -407,6 +450,25 @@ def test_a_sport_thats_off_offers_no_starters(db, monkeypatch):
     assert players.main(["starter", "add", "Q10"]) == 0
     monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ENABLED if s.key != "chess"))
     assert starters.offer(db, "fan") == []
+
+
+def test_a_turned_off_sports_registry_row_isnt_found_by_its_id_alone(db, monkeypatch):
+    # BUG-097: a registry id with no sport took any sport's row, so a turned-off sport's athlete was previewed and
+    # followed by it; and one in two sports was the better-known row's even with that sport off.
+    from sports_follow import server
+
+    registry.upsert(db, [athlete("Q5812", "tennis", "Novak Djokovic", {"espn_tennis": "296"}),
+                         athlete("Q2", "cricket", "Yuzvendra Chahal", {"espn_cricket": "430246"}, sitelinks=5),
+                         athlete("Q2", "chess", "Yuzvendra Chahal", {"lichess_chess": "yuzi"}, sitelinks=9)])
+    db.commit()
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key not in ("tennis", "chess")))
+    assert server._registry_athlete(db, {"qid": "Q5812"}) is None  # pyright: ignore[reportPrivateUsage]
+    assert server._registry_athlete(db, {"qid": "Q5812", "sport": "tennis"}) is None  # pyright: ignore[reportPrivateUsage]
+    chahal = server._registry_athlete(db, {"qid": "Q2"})  # pyright: ignore[reportPrivateUsage]
+    assert chahal is not None and chahal.sport == "cricket"
+    monkeypatch.setattr(sports, "ENABLED", sports.ALL)
+    djokovic, chahal = server._registry_athlete(db, {"qid": "Q5812"}), server._registry_athlete(db, {"qid": "Q2"})  # pyright: ignore[reportPrivateUsage]
+    assert djokovic is not None and djokovic.name == "Novak Djokovic" and chahal is not None and chahal.sport == "chess"
 
 
 def test_removing_a_starter_or_the_athlete_takes_the_starter_out(db, capsys):
