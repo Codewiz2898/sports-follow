@@ -34,7 +34,10 @@ def include_object(obj, name, type_, reflected, compare_to):
 def run_migrations_online() -> None:
     connectable = engine_from_config(config.get_section(config.config_ini_section, {}), prefix="sqlalchemy.", poolclass=pool.NullPool)
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata, include_object=include_object)
+        # Each migration in a transaction of its own. The migrations run while the old code serves (deploy/deploy.sh):
+        # an ALTER's lock on its table is held until its own migration commits, not until the last of the deploy's
+        # does; and one that fails leaves those before it in, for the next deploy to go on from.
+        context.configure(connection=connection, target_metadata=target_metadata, include_object=include_object, transaction_per_migration=True)
         with context.begin_transaction():
             context.run_migrations()
 
