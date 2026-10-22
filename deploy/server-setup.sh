@@ -29,8 +29,9 @@ ufw allow 443/tcp
 ufw allow 443/udp
 ufw --force enable
 
-# 2 GB of swap, so a registry import or a build never meets the out-of-memory killer.
-if ! swapon --show | grep -q /swapfile; then
+# 2 GB of swap, so a registry import or a build never meets the out-of-memory killer. grep reads swapon's
+# list to its end, as in deploy.sh: under pipefail, -q could fail the check and remove the swap file in use.
+if ! swapon --show | grep /swapfile >/dev/null; then
   if fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile; then
     grep -q /swapfile /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab
   else

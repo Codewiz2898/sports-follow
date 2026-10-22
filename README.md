@@ -1052,8 +1052,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   reads `app.json`). Internal names keep the old ones, as
   `sports_follow` does: the notifications module (`mobile/modules/stann-notifications`, `io.stann.notifications`,
   its `stann_*` resources) and the app's own storage keys (`stann.*`), which no fan sees.
-- CI (`.github/workflows/ci.yml`) runs on every pull request: the tests against a real Postgres with
-  Stockfish installed, so none are skipped; one migration head, `alembic upgrade head` on an empty
+- CI (`.github/workflows/ci.yml`) runs on every pull request: the tests against a real Postgres, so none
+  are skipped (no test needs Stockfish: the engine's tests talk to stand-in engines); one migration head, `alembic upgrade head` on an empty
   database and `alembic check`; the web app's type-check and build; and the Android app's type-check
   (route names are checked only locally, where Expo has generated their types). In `web/src`,
   `tests/test_web_names.py` lets only a sport's view name a sport, and holds the files that still name a
@@ -1089,12 +1089,16 @@ and a fourth for the feed's videos, with a YouTube key (`~/.config/sports-follow
 The checks CI runs on every pull request, after `.venv/bin/pip install -r requirements-dev.txt`:
 
 ```bash
-.venv/bin/python -m pytest
+.venv/bin/python -m pytest -n 4                             # four workers, each on its own copy of the test database
 .venv/bin/ruff check .                                      # lint: rules that find bugs (pyproject.toml)
 .venv/bin/basedpyright --pythonpath .venv/bin/python       # types: fails on errors not in .basedpyright/baseline.json
 cd web && npm run build                                     # type-check and build the app
 cd mobile && npm run typecheck                              # type-check the Android app
 ```
+
+The database tests run with `SPORTS_FOLLOW_TEST_DATABASE_URL` set to a throwaway database at alembic head
+(they empty its tables). Under `-n`, each worker makes a copy of it for the run (`<name>_<run>_gw0`, …)
+and drops it at the end; nothing may be connected to that database while the copies are made.
 
 The type baseline holds the errors from before CI checked types. After fixing some, run basedpyright
 with `--writebaseline` to shrink it; never add to it to get a pull request through.

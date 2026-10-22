@@ -368,11 +368,13 @@ def test_the_lane_stops_once_its_lock_has_gone(monkeypatch, stopping):
     assert looked == [] and r.zcard(engine.QUEUE) == 1 and freed == ["token"]  # left for the lane that has it
 
 
-def script(tmp_path, name: str, body: str) -> str:
-    """A stand-in UCI engine: answers uci and isready, then does what `body` says with each other line (`word`)."""
+def script(tmp_path, name: str, body: str, head: str = "") -> str:
+    """A stand-in UCI engine: answers uci and isready, then does what `body` says with each other line (`word`).
+    `head` runs first."""
     path = tmp_path / name
     path.write_text(f"""#!/usr/bin/env python3
 import sys
+{head}
 for line in sys.stdin:
     word = (line.split() or [""])[0]
     if word in ("uci", "isready"):
@@ -622,9 +624,13 @@ def test_scores_turn_to_whites_side():
     assert engine.from_white(E4E5, 30, None) == (30, None)
 
 
-@pytest.mark.skipif(not engine.enabled(), reason="Stockfish isn't installed")
-def test_the_engine_finds_mate_for_either_side():
-    e = engine.Engine()
+def test_a_mate_is_told_from_whites_side_whoever_is_to_move(tmp_path):
+    # The engine scores for the side to move, as Stockfish does: mate in one for whoever's turn it is.
+    mates = script(tmp_path, "mate-engine", """    elif word == "go":
+        print("info depth 1 seldepth 1 score mate 1 nodes 40", flush=True)
+        print("bestmove d1d8", flush=True)
+""")
+    e = engine.Engine(mates)
     try:
         white = e.evaluate("6k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1", nodes=100_000)  # Rd8#
         black = e.evaluate("3r2k1/5ppp/8/8/8/8/5PPP/6K1 b - - 0 1", nodes=100_000)  # ...Rd1#
@@ -636,24 +642,55 @@ def test_the_engine_finds_mate_for_either_side():
 MIDDLEGAME = "r2qr1k1/4bpp1/1np2n1p/pp1p4/3P3B/P1NQPP2/1P4PP/2N1RRK1 w - - 2 16"  # Nakamura v Erigaisi, move 16 (fixtures/lichess)
 
 
-def paused(e: engine.Engine) -> bool:
-    return subprocess.run(["ps", "-o", "stat=", "-p", str(e.proc.pid)], capture_output=True, text=True).stdout.strip().startswith("T")
+def paused(e: engine.Engine, wait: float = 0.0) -> bool:
+    """Whether the engine is stopped (SIGSTOP). With `wait`, it has that long to show it: on Linux a stopped
+    process shows T only once it has run again to take the signal, and the engine runs niced, last on a busy
+    machine."""
+    deadline = time.monotonic() + wait
+    while True:
+        stopped = subprocess.run(["ps", "-o", "stat=", "-p", str(e.proc.pid)], capture_output=True, text=True).stdout.strip().startswith("T")
+        if stopped or time.monotonic() >= deadline:
+            return stopped
+        time.sleep(0.02)
 
 
-@pytest.mark.skipif(not engine.enabled(), reason="Stockfish isn't installed")
-def test_a_deep_search_is_paused_between_slices_and_goes_deeper_than_a_look():
-    e = engine.Engine()
+def searching_engine(tmp_path) -> str:
+    """A stand-in engine that searches as Stockfish does: a line every few milliseconds, one ply deeper and
+    25,000 nodes on each time, to the nodes it was given or till it's told to stop."""
+    return script(tmp_path, "searching-engine", head="""import threading, time
+
+def search(limit, stop):
+    nodes = depth = 0
+    while True:
+        time.sleep(0.005)
+        nodes, depth = nodes + 25_000, depth + 1
+        print(f"info depth {depth} score cp 20 nodes {nodes}", flush=True)
+        if nodes >= limit or stop.is_set():
+            break
+    print("bestmove e2e4", flush=True)
+
+stop = threading.Event()
+""", body="""    elif word == "go":
+        stop = threading.Event()
+        threading.Thread(target=search, args=(int(line.split()[-1]), stop), daemon=True).start()
+    elif word == "stop":
+        stop.set()
+""")
+
+
+def test_a_deep_search_is_paused_between_slices_and_goes_deeper_than_a_look(tmp_path):
+    e = engine.Engine(searching_engine(tmp_path))
     try:
         look = e.evaluate(MIDDLEGAME, nodes=200_000)
         e.search(MIDDLEGAME, depth=99, nodes=1_000_000)
         readings, over = [], False
         while not over:
-            reading, over = e.run(0.25)
+            reading, over = e.run(0.05)
             readings.append(reading)
-            assert paused(e) != over  # it uses no CPU between slices
+            assert paused(e, wait=0.0 if over else 1.0) != over  # it uses no CPU between slices
         # Stopped part way, with what it had; the engine is then free for the next look.
         e.search(MIDDLEGAME, depth=99, nodes=50_000_000)
-        e.run(0.25)
+        e.run(0.05)
         stopped = e.halt()
         again = e.evaluate(MIDDLEGAME, nodes=10_000)
     finally:
@@ -666,11 +703,26 @@ def test_a_deep_search_is_paused_between_slices_and_goes_deeper_than_a_look():
 OTHER = "r1bqr1k1/1p3pb1/2pp2p1/p1n1pPP1/1nP1P3/2NPB3/PP2N1B1/R2Q1RK1 w - - 3 16"  # another of fixtures/lichess, move 16
 
 
-@pytest.mark.skipif(not engine.enabled(), reason="Stockfish isn't installed")
-def test_a_first_look_is_the_same_whatever_was_searched_before():
-    # Stockfish versions score differently (CI has 16, the image 17.1): runs are compared here, never scores.
-    e = engine.Engine(hash_mb=engine.LOOK_HASH_MB)
-    fresh = engine.Engine(hash_mb=engine.LOOK_HASH_MB)
+def test_a_first_look_is_the_same_whatever_was_searched_before(tmp_path):
+    # A stand-in whose hash table helps as Stockfish's does: each position it holds makes it a ply deeper and
+    # changes its score, till ucinewgame clears it. And on more than one thread its score is the run's, as
+    # Stockfish's is: here, how many searches it has made. A look from an engine not cleared first, or not
+    # held to one thread, would differ.
+    remembers = script(tmp_path, "remembering-engine", head="seen, fen, threads, searches = set(), '', 0, 0", body="""    elif word == "ucinewgame":
+        seen.clear()
+    elif word == "setoption" and " name Threads value " in line:
+        threads = int(line.split()[-1])
+    elif word == "position":
+        fen = line.split(" fen ", 1)[1].strip()
+    elif word == "go":
+        seen.add(fen)
+        searches += 1
+        cp = len(seen) if threads == 1 else searches
+        print(f"info depth {9 + len(seen)} score cp {cp} nodes {line.split()[-1]}", flush=True)
+        print("bestmove e2e4", flush=True)
+""")
+    e = engine.Engine(remembers, hash_mb=engine.LOOK_HASH_MB)
+    fresh = engine.Engine(remembers, hash_mb=engine.LOOK_HASH_MB)
     try:
         first = e.evaluate(MIDDLEGAME, nodes=200_000)
         e.evaluate(OTHER, nodes=300_000)

@@ -124,7 +124,9 @@ do_status() {
 # curator (where the commit has one: the same image, with no health check of its own).
 wait_healthy() {
   local deadline=$((SECONDS + HEALTH_TIMEOUT)) api=missing worker=missing curator=""
-  if c config --services 2>/dev/null | grep -qx curator; then curator=missing; fi
+  # grep reads the list to its end: -q would stop at the match, and under pipefail the writer it left, killed
+  # by SIGPIPE, would fail the check, so a crashing curator would go unseen.
+  if c config --services 2>/dev/null | grep -x curator >/dev/null; then curator=missing; fi
   while [ $SECONDS -lt $deadline ]; do
     sleep 5
     api=$(container api)
