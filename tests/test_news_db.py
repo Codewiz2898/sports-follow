@@ -17,7 +17,7 @@ from sqlalchemy.orm import sessionmaker
 
 from sports_follow import bus, candidates, curate, db as db_module, feed, news, rank, week
 from sports_follow.adapters import publisher_rss
-from sports_follow.models import Athlete, FeedCandidate, Follow, Moment, NewsItem, Player, PlayerCard
+from sports_follow.models import Athlete, FeedCandidate, Follow, Moment, NewsItem, Player, PlayerCard, SourceBinding
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -228,6 +228,28 @@ def test_a_headline_the_publisher_corrects_at_the_same_address_reaches_the_card_
     feeds[GAZETTE] = rss(("Verma blow eases", link, "A syndicated copy.", 2))
     news.poll(NOW + timedelta(minutes=60))
     assert stories() == [(asha, link, "Daily Wicket")] and run()[0] == ["Verma to miss only the first Test, board says"]
+
+
+def test_a_bound_players_card_loses_the_agents_old_news_at_the_curators_next_run(world, monkeypatch):
+    # BUG-247: a player bound to a live source after the research agent wrote their page kept its news for good (the
+    # agent never runs for them again), so their Today tile read an October story as their status. The curator's
+    # card pass takes it off; a player no live source has keeps theirs.
+    old = {"headline": "Verma set for the launch of a new league", "url": "https://agent.example.com/launch", "source": "Somewhere",
+           "published": (NOW - timedelta(days=30)).isoformat(), "summary": ""}  # fmt: skip
+    bound = player("Asha Verma", ["Riverside XI"], card={"player": {"name": "Asha Verma"}, "news": [old], "freshness": {"news": "2026-09-20T00:00:00+00:00"}})
+    unbound = player("Kiran Rao", ["Eastern Stars"], card={"player": {"name": "Kiran Rao"}, "news": [old]})
+    with db_module.session() as s:
+        s.add(SourceBinding(player_id=bound, purpose="fixtures", adapter="espn_cricket", locator={"system": "espn_cricket", "athlete_id": "1"}))
+    sent: list[tuple[int, dict]] = []
+    monkeypatch.setattr(bus, "store_card", lambda pid, card: sent.append((pid, card)))
+    assert rank.cards(NOW) == {"cards": 1}
+    (pid, card), = sent
+    assert pid == bound and card["news"] == [] and "news" not in card["freshness"] and card["version"] == 1
+    with db_module.session() as s:
+        kept = s.get(PlayerCard, bound)
+        theirs = s.get(PlayerCard, unbound)
+        assert kept is not None and kept.card["news"] == [] and theirs is not None and theirs.card["news"] == [old]
+    assert rank.cards(NOW) == {"cards": 0}  # nothing left to take off
 
 
 # Stories from three publishers' real feeds of 16-21 Oct 2026 (BUG-249), their words retold here, their facts (who,
