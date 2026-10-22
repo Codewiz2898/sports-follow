@@ -782,7 +782,7 @@ class Pick(Base):
     """A fan's answer to a question (predictions.py), changed as often as they like until it closes; scored when it
     settles: 100 less the share of fans who picked the same, for a right one, at least predictions.FLOOR; 0 for a
     wrong one; none when the question was voided. Kept under the fan id, an anonymous fan's moving to the account
-    they sign in to (accounts.adopt)."""
+    they sign in to (accounts.adopt); one that moved after its question closed is moved_late, in no league's table."""
 
     __tablename__ = "prediction_pick"
 
@@ -790,6 +790,7 @@ class Pick(Base):
     fan_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
     option: Mapped[str] = mapped_column(String(64))
     points: Mapped[int | None] = mapped_column(Integer)
+    moved_late: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))  # brought into an account once closed (predictions.merge)
     created_at: Mapped[datetime] = _now()
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

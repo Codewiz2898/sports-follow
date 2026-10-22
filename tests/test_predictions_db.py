@@ -812,30 +812,53 @@ def test_friends_play_in_a_league_by_its_invite_and_its_table_counts_from_its_ma
     assert db.scalars(select(League)).all() == []
 
 
-def test_signing_in_brings_a_devices_open_picks_and_deleting_the_account_takes_its_own(db, redis):
+def test_signing_in_brings_every_pick_and_those_on_games_under_way_count_in_no_league(db, redis):
+    """BUG-091 (BHA-413): signing in (to join a friend's league mid-game, say) brought only the picks on games still to
+    start: the rest stayed with the device's anonymous id, which no device holds after, so the fan lost those calls,
+    their points and how they went. Every one comes over now; those on games already under way or over are marked
+    (moved_late) and count in no league's table: calling a game three ways on three browsers and signing in on the
+    right one still wins nothing there."""
     now = datetime.now(timezone.utc)
-    q1 = settled_question(db, "g:1", now, {}, "w")
+    q1 = settled_question(db, "g:1", now, {"device": "w", "other": "b"}, "w")  # over: the device's call was right
     open_q = dict(ask="result", keys=[], sport="chess", title="Who wins?", options=[{"key": "w", "label": "w"}, {"key": "b", "label": "b"}], status="open", locks_at=now + timedelta(hours=2))
+    under_way = {**open_q, "status": "closed", "locks_at": now - timedelta(minutes=5)}
     q2, q3 = Question(game="g:2", match="m/2", **open_q), Question(game="g:3", match="m/3", **open_q)
-    db.add_all([q2, q3])
-    account = Account(id=1, email="sana@example.com", fan_id="acct-sana")
-    db.add(account)
+    q4, q5 = Question(game="g:4", match="m/4", **under_way), Question(game="g:5", match="m/5", **under_way)
+    db.add_all([q2, q3, q4, q5])
+    db.add(Account(id=1, email="sana@example.com", fan_id="acct-sana"))
     db.flush()
-    db.add_all([Pick(question_id=q1.id, fan_id="device", option="w", points=50), Pick(question_id=q2.id, fan_id="device", option="w"),
-                Pick(question_id=q3.id, fan_id="device", option="b"), Pick(question_id=q3.id, fan_id="acct-sana", option="w")])
+    db.add_all([Pick(question_id=q2.id, fan_id="device", option="w"),
+                Pick(question_id=q3.id, fan_id="device", option="b"), Pick(question_id=q3.id, fan_id="acct-sana", option="w"),
+                Pick(question_id=q4.id, fan_id="device", option="b"), Pick(question_id=q4.id, fan_id="acct-kiran", option="w"),
+                Pick(question_id=q5.id, fan_id="device", option="w"), Pick(question_id=q5.id, fan_id="acct-sana", option="b")])
+    gang = predictions.create(db, "acct-sana", "Sana's lot", "Sana")  # Sana's league from another device, made before q4 settles
+    predictions.join(db, "acct-kiran", gang.code, "Kiran")
     db.commit()
     accounts.sign_in(db, 1, "device")
     db.commit()
-    # Picks still open come over (the account's own standing where both picked); one already scored stays the
-    # device's: calling a game three ways on three browsers and signing in on the right one wins nothing.
-    assert {(p.question_id, p.fan_id, p.option) for p in db.scalars(select(Pick))} == {(q1.id, "device", "w"), (q2.id, "acct-sana", "w"), (q3.id, "acct-sana", "w")}
-    made = predictions.create(db, "acct-sana", "Sana's lot", "Sana")
+    db.expire_all()
+    # Every pick comes over, those on games under way or over marked; where the account picked too, its own stands
+    # (the device's on a game under way stays where it was, in the split only).
+    assert {(p.question_id, p.fan_id, p.option) for p in db.scalars(select(Pick)) if p.fan_id != "other"} == {
+        (q1.id, "acct-sana", "w"), (q2.id, "acct-sana", "w"), (q3.id, "acct-sana", "w"), (q4.id, "acct-sana", "b"), (q4.id, "acct-kiran", "w"),
+        (q5.id, "acct-sana", "b"), (q5.id, "device", "w")}
+    assert {p.question_id for p in db.scalars(select(Pick).where(Pick.fan_id == "acct-sana", Pick.moved_late))} == {q1.id, q4.id}
+    # The fan sees them, with their points.
+    mine = predictions.today(db, "acct-sana")
+    assert {(c["id"], c["mine"], c["points"]) for c in mine["settled"]} == {(q1.id, "w", 50)}
+    # q4 settles: Sana's call (made on the device before kick-off) was right, Kiran's wrong. Sana sees her points, but
+    # her league's table counts only what she called as herself.
+    predictions.score(db, db.get_one(Question, q4.id), "b", datetime.now(timezone.utc))
+    db.commit()
+    assert {(c["id"], c["points"]) for c in predictions.today(db, "acct-sana")["settled"]} == {(q1.id, 50), (q4.id, 50)}
+    table = predictions.table(db, db.get_one(League, gang.id))
+    assert [(r["name"], r["points"], r["played"]) for r in table] == [("Kiran", 0, 1), ("Sana", 0, 0)]
+    # Deleting the account takes its own; the device's pick left in the split stays.
     predictions.create(db, "acct-sana", "Just me", "Sana")
-    predictions.join(db, "acct-kiran", made.code, "Kiran")
     db.commit()
     accounts.delete_account(db, 1)
     db.commit()
-    assert [p.fan_id for p in db.scalars(select(Pick))] == ["device"]
+    assert sorted(p.fan_id for p in db.scalars(select(Pick))) == ["acct-kiran", "device", "other"]
     [kept] = db.scalars(select(League)).all()  # the one Kiran's in stays, with nobody as its maker; the other went
     assert (kept.name, kept.owner) == ("Sana's lot", None) and db.scalars(select(LeagueMember.fan_id)).all() == ["acct-kiran"]
 
