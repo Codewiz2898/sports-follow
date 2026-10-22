@@ -21,7 +21,7 @@ def counts(line: dict[str, Any] | None) -> dict[str, int]:
 
 
 TENS = ("PTS", "REB", "AST", "STL", "BLK")  # a double-double is two of these in double figures, a triple three
-MARKS = (20, 30, 40, 50, 60)  # the points told
+MARKS = (20, 30, 40, 50, 60, 70)  # the points told
 
 
 def _points(mark: int) -> int:

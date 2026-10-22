@@ -4,6 +4,7 @@ named by the side that won, and form over a run of matches."""
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from ..naming import team_key
@@ -90,9 +91,9 @@ def batting_bowling(lines: list[dict[str, Any]]) -> list[dict[str, str]]:
 # ---------------------------------------------------------------- the sport
 
 # A poster's word for a batting milestone (any other mark is its number: "150") and a wicket haul's count.
-_RUNS = {50: "Fifty", 100: "Hundred", 200: "Double hundred"}
+_RUNS = {50: "Fifty", 100: "Hundred", 200: "Double hundred", 300: "Triple hundred"}
 _HAUL = {3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten"}
-MARKS = (50, 100, 150, 200)  # the batting milestones told
+MARKS = (50, 100, 150, 200, 250, 300)  # the batting milestones told
 # Their moments' priorities: a fifty's and a hundred's are their kinds' (moments.PRIORITY), 150 on above both.
 _RUNS_PRIORITY = {50: 70, 100: 90}
 
@@ -229,6 +230,15 @@ class Cricket(Sport):
         """The source's summary, which says who won ("India won by 57 runs"), can come a poll or two after it says the
         match is over ("Result")."""
         return not self.verdict(state, score, clock)
+
+    def over_by(self, start: datetime | None, state: dict[str, Any]) -> datetime | None:
+        """A limited-overs match, its reserve day too, within two days of its start; a Test or a first-class match (or
+        one no word says the length of) within six, as the tick closes any source's game (pipeline.due_work)."""
+        return start + timedelta(days=2 if overs_a_side(state.get("format")) else 6) if start is not None else None
+
+    def paused(self, state: dict[str, Any], score: str, clock: str) -> bool:
+        """Stumps: the day's play is over, and the match goes on tomorrow ("Stump Day 2", "Day 3 · Stumps")."""
+        return bool(re.search(r"\bstumps?\b", clock, re.I))
 
     def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
         """A scorecard: each side, in the order they batted, with who batted for it (runs, balls, fours, sixes,
@@ -497,11 +507,11 @@ a board or outlet is news; "likely to be dropped" from fan pages is rumour."""
         return "cricket"
 
     def search_words(self, fired: Fired) -> str | None:
-        """A hundred (150 and 200 by their own names) or a five-for, and the ground: fans' edits are titled by the
+        """A hundred (150, 200 and 300 by their own names) or a five-for, and the ground: fans' edits are titled by the
         knock and where it was ("Kohli century Lord's")."""
         mark = number(fired.detail.rpartition(":")[2].lstrip("w"))
         if fired.kind == "hundred":
-            what = "double century" if mark >= 200 else "150" if mark >= 150 else "century"
+            what = "triple century" if mark >= 300 else "double century" if mark >= 200 else "150" if mark >= 150 else "century"
         elif fired.kind == "wickets" and mark >= 5:
             what = f"{mark} wickets"
         else:

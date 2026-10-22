@@ -506,20 +506,22 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   pushes: their level for the player (key moments, the default; everything; results only; off) says
   what reaches the phone, and only key moments make a sound. Each game is one notification on the
   phone, replaced as moments come with the story so far underneath, whichever followed players are
-  in it; "Mute this game" stops it. A game under several fixtures (a chess board is one of each player's)
+  in it (two teammates' same play, "TenZ and zekken: Sentinels win 2–0", is one line); "Mute this game" stops it. A game under several fixtures (a chess board is one of each player's)
   is one game too, its fixtures found by the players on it (`Sport.board_players`): one notification all
   through a mini-match, one Android live card and one mute, and a fan who follows both players hears each
   moment once, from the side it went toward (`Found.voice`), where that side's fixture is being polled to
   say it (else from both: twice beats never), and late from the other side should it never say it. A goal VAR rules out is corrected on that notification, for the
   fans who were sent it, and told again if the source shows it again (a goal the source credits to
-  another player instead is left as it was).
+  another player instead is left as it was). A game called off and set again for later under the same fixture (a
+  match abandoned and replayed) is told afresh, its line-up and start too, and nothing of the game called off is
+  taken back in it (`notify.editions`).
   Sound is rationed (once every 3 minutes a game, 6 times an hour a phone) except for the biggest
   moments. `sports_follow/notify.py` claims each batch once, logs every
   push (`notification`), sends it to each device at once (by Web Push with VAPID to browsers, by FCM to
   the Android app, `fcm.py`), and the tick sweeps up any batch a restart dropped. Devices that took their last
   push go by threads of their own, apart from new and failing ones, and each push service gets 2 s to connect, so
   a device that never answers holds up no other fan's alerts; push addresses must be a known service's own, and
-  one network turns notifications on for only so many new devices a day. Quiet hours are per device and make notifications arrive without a sound or vibration (on Android still on the lock screen, so a phone set to wake its screen for notifications may light it).
+  one network turns notifications on for only so many new devices a day. Quiet hours are per device and make notifications arrive without a sound or vibration (on Android still on the lock screen, so a phone set to wake its screen for notifications may light it); one that arrived silent on every device doesn't count toward the hour's sound.
   With the app open and in front, a moment shows as an in-app toast instead. The Alerts tab's Latest
   list shows every moment of a fan's players, pushed or not, with what's new counted on the tab.
   `python -m sports_follow.notify stats` shows what was sent and how much was opened, by kind.
@@ -919,7 +921,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   every process reads again every 10 seconds; `sports.ENABLED`, `adapters.ADAPTERS` and the source
   budgets follow them. A sport turned off while its games are on is safe: the next tick puts them off
   (`structured.put_off`: no longer polled, nor LIVE on cards or phones), and once it's on again its
-  players' and teams' games are read at the next tick, which brings each back as its source has it.
+  players' and teams' games are read at the next tick, which brings each back as its source has it. One that
+  polling comes back to (a worker down for days too) only after it's over, past the longest its sport's games run
+  and half a day more (`Sport.over_by`: 12 hours, a Test's six days), tells nothing: its result is old news.
   The server's settings stay the ceiling: a sport `SPORTS_FOLLOW_SPORTS` leaves out, or a source
   `SPORTS_FOLLOW_SOURCES` leaves out or without its token, can't be turned on there. It opens
   with a password of its own, not a fan's account, and a 6-digit code from an authenticator app (TOTP,
@@ -1262,7 +1266,8 @@ the app draws itself (designs: https://claude.ai/artifact/6YxZ16GcGD4zSMNaJLpwX9
 - **A live card** for each game the fan follows while it's on (`sports_follow/livecards.py`): its board, how far
   along it is and the fan's own players in it, sent after a poll that changed it (at once for the score, else at
   most every 20 s, and again every 10 minutes when nothing has, as the phone takes down a card nothing has come
-  for in 20), ongoing and silent, and taken down at the end. Cards aren't collapsible FCM messages: FCM lets a
+  for in 20), ongoing and silent, and taken down at the end, and overnight (a Test at stumps: `Sport.paused`) till play
+  resumes. Cards aren't collapsible FCM messages: FCM lets a
   phone have a burst of 20 of those, then one every 3 minutes, and a moment would wait behind them. On an Android 16 phone that allows it, a live
   card is a Live Update instead: first on the lock screen, with the score in the status bar. Alerts' Settings has
   a switch for them (Live scores), and each card a Stop button; the phone tells the server either, which then

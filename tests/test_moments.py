@@ -23,7 +23,7 @@ import pywebpush
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from sports_follow import moments, notify, server
+from sports_follow import moments, notify, server, sports
 from sports_follow.sports import chess
 from sports_follow.moments import Seen, detect
 
@@ -120,6 +120,17 @@ def test_basketball_points_and_doubles():
     found = detect("Basketball", "Caitlin Clark", "4433403", before, now)
     assert kinds(found) == [("points", "30"), ("double", ""), ("triple", "")]
     assert [f.level for f in found] == ["key", "minor", "key"]
+
+
+def test_a_triple_hundred_and_a_70_point_game_are_told():
+    # BUG-244: the marks stopped at 200 runs and 60 points, so a Test 250 or 300, or an NBA 70-point game, went untold.
+    before = Seen("live", line=line("246* (380)", Runs="246*", Balls="380"), score="IND 520/4")
+    now = Seen("live", line=line("302* (455)", Runs="302*", Balls="455"), score="IND 640/5")
+    found = detect("Cricket", "Karun Nair", "398439", before, now)
+    assert [(f.kind, f.title, f.priority) for f in found] == [("hundred", "Karun Nair reaches 250", 95), ("hundred", "Karun Nair reaches 300", 95)]
+    assert sports.of("cricket").high(found[1], "v England").word == "Triple hundred"  # type: ignore[union-attr]
+    points = detect("Basketball", "Devin Booker", "6580", Seen("live", line=line("66 PTS · 4 REB · 6 AST")), Seen("live", line=line("70 PTS · 8 REB · 6 AST")))
+    assert [(f.kind, f.title, f.level) for f in points] == [("points", "Devin Booker: 70 points", "key")]
 
 
 def test_tennis_sets_and_an_upset():
@@ -496,7 +507,12 @@ def test_a_long_push_is_cut_to_fit_and_written_as_utf8(monkeypatch):
 
 def test_a_push_too_big_for_the_service_isnt_the_devices_fault():
     device = SimpleNamespace(failures=0)
-    db = SimpleNamespace(get=lambda model, key: device, delete=lambda row: None, execute=lambda statement: None)
+
+    def failed(statement) -> int:  # the failure added to the count, in the database
+        device.failures += 1
+        return device.failures
+
+    db = SimpleNamespace(scalar=failed, execute=lambda statement: None)
     notify._health(db, 7, 413)
     assert device.failures == 0  # five of these deleted a healthy device
     notify._health(db, 7, 500)
