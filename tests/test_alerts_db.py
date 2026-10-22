@@ -1,6 +1,8 @@
-"""The noise rules (alerts.py) down a moment's real path (notify.record, notify.send): what a fan hears when quiet hours
-end and from two followed teammates at once, and how a device's health is counted. ON CONFLICT and the push log need Postgres itself, so these run against a throwaway database at alembic head and are
-skipped without one (see tests/test_corrections_db.py for setting it up). Every test empties the tables first."""
+"""The noise rules (alerts.py) down a moment's real path (structured.apply_poll, notify.record, notify.send): what a fan
+hears when quiet hours end, from two followed teammates at once, from a game long over when polling comes back to it, and
+from a game called off and played again under its fixture; and how a device's health is counted. ON CONFLICT and the
+push log need Postgres itself, so these run against a throwaway database at alembic head and are skipped without one
+(see tests/test_corrections_db.py for setting it up). Every test empties the tables first."""
 
 from __future__ import annotations
 
@@ -255,3 +257,68 @@ def test_how_long_after_its_start_a_game_found_over_is_old_news(sport, board, da
     assert structured.long_over(sports.of(sport), game, over, now) is old  # type: ignore[arg-type]
     assert structured.long_over(sports.of(sport), game, Snapshot("live", "", "", board), now) is False  # one still on is news
     assert structured.long_over(sports.of(sport), SimpleNamespace(start_utc=None), over, now) is False  # type: ignore[arg-type]  # no start: can't say
+
+
+# ---------------------------------------------------------------- a game called off and played again (BUG-185)
+
+
+def test_a_game_called_off_and_played_again_under_its_fixture_is_told_afresh(db, pushed, monkeypatch):
+    # A match abandoned at 30' with Salah's goal told, set again for a fortnight on under the same fixture: its replay's
+    # line-up and start went untold (their keys were the first game's), its first yellow card too, and a goal of the game
+    # called off was "ruled out" as the replay began, as Salah's line had none.
+    now = datetime.now(timezone.utc)
+    db.add(Player(id=7, slug="mohamed-salah", name="Mohamed Salah", sport="Football"))
+    db.add(Event(id=1, key="espn_soccer:1", sport="Football", title="Egypt v Ghana", status="armed", start_utc=now))
+    db.flush()
+    db.add_all([EventPlayer(event_id=1, player_id=7), Follow(fan_id="fan", player_id=7, alert_rules={"level": "everything"})])
+    db.commit()
+    device(db, "fan")
+    polled = SimpleNamespace(recent=True)
+    monkeypatch.setattr(structured, "_polled", lambda event_id, cadence: polled.recent)
+
+    def poll(status: str, home: int, clock: str, goals: int = 0, yellow: int = 0, plays: list[dict] | None = None) -> list[str]:
+        state = {"kind": "football", "home": {"id": "1", "name": "Egypt", "score": str(home)}, "away": {"id": "2", "name": "Ghana", "score": "0"}}
+        line = Line(headline=f"{goals} goal" if goals else "Started", stats=[{"label": "Goals", "value": str(goals)}, {"label": "Yellow", "value": str(yellow)}])
+        snap = Snapshot(status, f"Egypt {home} – 0 Ghana", clock, state, lines={} if status == "scheduled" else {SALAH: line}, moments=plays or [],
+                        squad={SALAH: "starting"})
+        structured.apply_poll(1, {"adapter": "espn_soccer", "cadence": 10}, SimpleNamespace(system="espn_soccer", credit=lambda snap: {"name": "ESPN"}), [(7, SALAH)], snap)
+        titles = [p["title"] for _, p in pushed]
+        pushed.clear()
+        return titles
+
+    goal = {"id": "101", "clock": "23'", "kind": "GOAL", "athlete_ids": [SALAH], "team_id": "1", "own_goal": False}
+    assert poll("scheduled", 0, "") == ["Mohamed Salah starts"]
+    assert poll("live", 0, "1'") == ["Mohamed Salah's game has started"]
+    assert poll("live", 1, "23'", goals=1, plays=[goal]) == ["Goal: Mohamed Salah puts Egypt ahead"]
+    assert poll("live", 1, "28'", goals=1, yellow=1, plays=[goal]) == ["Yellow card: Mohamed Salah"]
+    assert poll("postponed", 1, "Abandoned", goals=1, yellow=1, plays=[goal]) == []
+    # Set again for a fortnight on; its polls start afresh once it's armed.
+    db.execute(text("UPDATE event SET start_utc = :at, status = 'armed'"), {"at": now + timedelta(days=14)})
+    db.commit()
+    polled.recent = False
+    replay = [poll("scheduled", 0, "")]
+    polled.recent = True
+    replay += [poll("live", 0, "1'"), poll("live", 0, "2'"), poll("live", 0, "9'", yellow=1), poll("live", 0, "10'", yellow=1)]
+    # Its line-up, its start and its first yellow card, and nothing of the game called off taken back.
+    assert replay == [["Mohamed Salah starts"], ["Mohamed Salah's game has started"], [], ["Yellow card: Mohamed Salah"], []]
+    # Its notification's story is the replay's alone.
+    assert db.scalars(select(Notification.lines).order_by(Notification.id.desc()).limit(1)).one() == ["Yellow card: Mohamed Salah"]
+
+
+def test_a_game_stopped_a_while_and_on_again_under_its_start_is_the_same_game(db, pushed, monkeypatch):
+    # Suspended mid-game (floodlights) and on again: nothing told again, as it's the same game, not one played again.
+    now = datetime.now(timezone.utc)
+    db.add(Player(id=7, slug="mohamed-salah", name="Mohamed Salah", sport="Football"))
+    db.add(Event(id=1, key="espn_soccer:1", sport="Football", title="Egypt v Ghana", status="live", start_utc=now - timedelta(minutes=40)))
+    db.flush()
+    db.add_all([EventPlayer(event_id=1, player_id=7), Follow(fan_id="fan", player_id=7, alert_rules={"level": "key"})])
+    db.commit()
+    device(db, "fan")
+    monkeypatch.setattr(structured, "_polled", lambda event_id, cadence: True)
+    football(1, "live", 0, 0, "1'")
+    football(1, "live", 1, 0, "23'", goals=1)
+    football(1, "postponed", 1, 0, "Suspended", goals=1)
+    pushed.clear()
+    football(1, "live", 1, 0, "31'", goals=1)
+    football(1, "live", 1, 0, "32'", goals=1)
+    assert pushed == [] and notify.editions(db, [1]) == {}

@@ -509,7 +509,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   moment once, from the side it went toward (`Found.voice`), where that side's fixture is being polled to
   say it (else from both: twice beats never), and late from the other side should it never say it. A goal VAR rules out is corrected on that notification, for the
   fans who were sent it, and told again if the source shows it again (a goal the source credits to
-  another player instead is left as it was).
+  another player instead is left as it was). A game called off and set again for later under the same fixture (a
+  match abandoned and replayed) is told afresh, its line-up and start too, and nothing of the game called off is
+  taken back in it (`notify.editions`).
   Sound is rationed (once every 3 minutes a game, 6 times an hour a phone) except for the biggest
   moments. `sports_follow/notify.py` claims each batch once, logs every
   push (`notification`), sends it to each device at once (by Web Push with VAPID to browsers, by FCM to

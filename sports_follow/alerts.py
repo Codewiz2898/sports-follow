@@ -42,7 +42,8 @@ phone, notifications should feel like one sports app, not a feed of every poll:
   notification, by the same rules, for the fans who were sent that moment; a fan who never heard it
   hears nothing, and a moment taken back before it went isn't sent at all. The same rules include the
   fan's level now: one who has since set the player to results only or off isn't sent the correction.
-  The moment leaves the story underneath.
+  The moment leaves the story underneath. A game called off and played again under its fixture is another game
+  (notify.editions): nothing of the one called off is in its story, nor taken back in it.
 
 Quiet hours are per device, so notify.py applies them after this; a push that arrived silent on every device in them is
 logged as silent, so it leaves the hour's sound and the game's to the pushes after it.
