@@ -1074,6 +1074,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_LINEAR_FREE_ISSUES` | `250` | the issues Linear's Free plan holds (not counting archived ones), which the panel counts against; Linear's API doesn't say it |
 | `SPORTS_FOLLOW_CONTACT_EMAIL` | none | where fans write about their data, shown on the privacy page (no Questions part without it) and in the user agent data sources see |
 | `SPORTS_FOLLOW_SITE_URL` | none | the app's public address; compose sets `https://$DOMAIN`. Push services and data sources are told it, and link previews' addresses are on it (without it, on the address each request came to) |
+| `SPORTS_FOLLOW_API_DOCS` | off | `1` serves FastAPI's own docs (`/docs`, `/redoc`, `/openapi.json`) on a development server; they list every route, the admin panel's too, so never on the site |
 | `SPORTS_FOLLOW_COMMIT` | none | the commit the image was built from, which `/api/health` says; `deploy.sh` passes it to the build, so set it by hand only to test |
 | `SPORTS_FOLLOW_VAPID_SUBJECT` | the site address, else `https://localhost` | the contact push services see; never a person's address |
 | `SPORTS_FOLLOW_STOCKFISH` | `stockfish` on the PATH | chess engine; without it, no chess swings |

@@ -298,3 +298,12 @@ def test_a_campaign_link_typed_with_capitals_previews_as_its_page(built, monkeyp
     assert asked == ["gukesh", "gukesh"]
 
 
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"])
+def test_the_apis_own_docs_arent_on_the_site(built, path):
+    """BUG-197: FastAPI's docs and schema list every route, the admin panel's too. The site doesn't serve them (a
+    development server does when asked: SPORTS_FOLLOW_API_DOCS=1): their addresses are the app's page."""
+    got = built.call("GET", path)
+    assert got.status_code == 200 and got.headers["content-type"].startswith("text/html") and meta(got.text)["og:title"] == APP_NAME
+    assert "swagger" not in got.text.lower() and "redoc" not in got.text.lower() and "/api/admin" not in got.text
+
+

@@ -43,7 +43,7 @@ from starlette.routing import Match
 from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
-from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_LOOKUPS_PER_ADDRESS, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, API_DOCS, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_LOOKUPS_PER_ADDRESS, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, released, session
 from .models import ClipKey, Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription, Question, Team
 
@@ -72,8 +72,10 @@ async def lifespan(app: FastAPI):
 
 # FastAPI traces requests itself once tracing is on, and records the query string (a search's words):
 # RequestLog's span and metric stand for each request instead (tracing.request_span, metrics.request).
-# Nor does it log validation failures, which carry what a client sent.
-app = FastAPI(title=APP_NAME, lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False, "logs": False, "metrics": False})
+# Nor does it log validation failures, which carry what a client sent. Its own docs (/docs, /redoc and the schema
+# they read) list every route, the admin panel's too: only on a development server that asks for them (API_DOCS).
+app = FastAPI(title=APP_NAME, lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False, "logs": False, "metrics": False},
+              docs_url="/docs" if API_DOCS else None, redoc_url="/redoc" if API_DOCS else None, openapi_url="/openapi.json" if API_DOCS else None)
 
 
 class Route(APIRoute):

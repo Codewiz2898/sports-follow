@@ -60,6 +60,7 @@ TAKEN = frozenset({
     "me", "leagues", "league", "j",  # predictions with friends: a fan's leagues (/me/leagues), one league's page, an invite (/j/<code>)
     "feed",  # the Android app's Feed tab (the web's is /me/feed)
     "clip", "competition",  # clips (BHA-367): one clip (/clip/<id>), a competition's clips (/competition/<name>/clips)
+    "docs", "redoc",  # FastAPI's own docs, on a development server that asks for them (SPORTS_FOLLOW_API_DOCS)
 })
 NEAR = timedelta(hours=3)  # a player's game this close to one on their campaign's schedule is that game (player_ids)
 ZONE = ZoneInfo("Asia/Kolkata")  # the home audience's time, which the page shows each game in

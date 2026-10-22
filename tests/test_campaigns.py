@@ -66,6 +66,13 @@ def test_a_campaign_link_typed_with_capitals_opens_the_android_app():
         assert not re.fullmatch(pattern, path), path
 
 
+def test_no_campaign_can_take_the_apis_own_docs_addresses():
+    """BUG-197: FastAPI's docs are at /docs and /redoc on a development server that asks for them: never a campaign's."""
+    for slug in ("docs", "redoc", "Docs"):
+        with pytest.raises(campaigns.Refused, match="already a page"):
+            campaigns.setup(None, slug, sport="chess", title="x")  # pyright: ignore[reportArgumentType]: refused before the database is asked
+
+
 def test_a_games_time_is_typed_and_shown_in_india_time_unless_said():
     start = campaigns.when("2026-11-24 15:00")
     assert start == datetime(2026, 11, 24, 9, 30, tzinfo=timezone.utc)
