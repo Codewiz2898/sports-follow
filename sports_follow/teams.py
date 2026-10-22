@@ -220,10 +220,6 @@ def restore(db: Session, system: str, team_id: str) -> bool:
     return bool(db.execute(delete(TeamOverride).where(TeamOverride.system == system, TeamOverride.external_id == team_id).returning(TeamOverride.id)).first())
 
 
-def removed(db: Session) -> set[tuple[str, str]]:
-    return {(s, x) for s, x in db.execute(select(TeamOverride.system, TeamOverride.external_id).where(TeamOverride.action == "remove")).all()}
-
-
 # ---------------------------------------------------------------- search
 
 
@@ -734,12 +730,6 @@ def merge(db: Session, anon: str, fan: str) -> None:
             db.execute(insert(TeamFollow).values(fan_id=fan, team_id=row.team_id, alert_rules=row.alert_rules, created_at=row.created_at).on_conflict_do_nothing())
             room -= 1
     db.execute(delete(TeamFollow).where(TeamFollow.fan_id == anon))
-
-
-def muted_games(db: Session, fan: str, team_id: int) -> set[int]:
-    """The games of a team this fan muted: each stays muted while they follow it."""
-    return set(db.scalars(select(NotificationMute.event_id).join(EventTeam, EventTeam.event_id == NotificationMute.event_id)
-                          .where(NotificationMute.fan_id == fan, EventTeam.team_id == team_id)))
 
 
 # ---------------------------------------------------------------- the command
