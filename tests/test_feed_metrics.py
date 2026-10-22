@@ -114,7 +114,7 @@ def test_the_judges_verdicts_errors_and_time_are_counted(measured, monkeypatch):
             return FakeGateway(answer).complete(**request)
 
     verdicts = curate.judge_many(items, Gateway(), workers=1)  # type: ignore[arg-type]  # a stand-in for the gateway's client
-    assert [v.stage if v else None for v in verdicts] == ["rules", "model", None]
+    assert [v.stage if isinstance(v, curate.Verdict) else v.kind for v in verdicts] == ["rules", "model", "out_of_credit"]
     assert counts(measured, "sports_follow.feed.verdicts") == {("no", "true", "false", "rules"): 1, ("subject", "false", "false", "model"): 1}
     assert counts(measured, "sports_follow.feed.judge_errors") == {("out_of_credit",): 1}
     assert {p.attributes["stage"]: p.count for p in points(measured)["sports_follow.feed.judge.duration"]} == {"rules": 1, "model": 1, "failed": 1}
@@ -124,7 +124,7 @@ def test_a_model_turned_off_is_its_own_kind(measured, monkeypatch):  # noqa: F81
     from sports_follow import config
 
     monkeypatch.setattr(config, "CURATE_AI", False)
-    assert curate.judge_many([candidate()]) == [None]
+    assert [v.kind for v in curate.judge_many([candidate()]) if isinstance(v, curate.CurateError)] == ["off"]
     assert counts(measured, "sports_follow.feed.judge_errors") == {("off",): 1}
 
 

@@ -929,7 +929,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   through the gateway (`SPORTS_FOLLOW_CURATE_MODEL`), with the sport's `content_hints`, and what the rules settled
   stands over what it says. The judge is a pure function, with no database and no fetching, and `judge_many`
   runs the model's calls side by side; a candidate the model can't judge now (or with `SPORTS_FOLLOW_CURATE_AI=0`)
-  is left unjudged, to try again. To tune it, label candidates by hand and run
+  is left unjudged, to try again: at the next run when the gateway was down or out of credit, but days later when
+  the model declined it or answered off the schema (2 days, then 4), and after 3 such tries it's held back for good
+  (`rank.JUDGE_TRIES`: a verdict whose stage is `held`, never served unless an admin approves it), so no row is
+  paid for at every run. `feed_candidates` keeps each row's tries, last failure and when it may be asked again
+  (`judge_tries`, `judge_error`, `judge_after`); `curator rescore --rejudge` asks every row again. To tune it, label candidates by hand and run
   `python -m sports_follow.curate candidates.jsonl --labels labels.jsonl`: it prints the verdicts as JSONL and how
   often each field agrees with the labels, then each disagreement (`--rules-only` makes no model calls).
   `tests/fixtures/curate_*.jsonl` are 41 made-up ones across cricket, football, chess and esports, among them a

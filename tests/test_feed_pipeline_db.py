@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy import create_engine, literal_column, select, text, update
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import admin, candidates, controls, curate, curator, db as db_module, feed, rank
+from sports_follow import admin, candidates, config, controls, curate, curator, db as db_module, feed, rank
 from sports_follow.adapters import youtube
 from sports_follow.models import FeedCandidate, FeedFeedback, Follow, Moment, Player, PlayerAlias, PlayerCard
 from tests.test_feed_fetch import Fake, listing, video as yt_video
@@ -126,7 +126,8 @@ def test_the_curator_judges_whats_new_scores_what_passes_and_ties_it_to_its_mome
         cands = list(cands)
         asked.extend(cands)
         verdicts = {"edit": said(), "promo": said(kind="promo", sponsored=True, reason="Selling a bat."), "namesake": said(about_player="no", reason="Another Asha Verma.")}
-        return [curate.Verdict.model_validate(verdicts[c.url.split("=")[1].rstrip("0123456789")]) if c.url.split("=")[1].rstrip("0123456789") in verdicts else None for c in cands]
+        return [curate.Verdict.model_validate(verdicts[c.url.split("=")[1].rstrip("0123456789")]) if c.url.split("=")[1].rstrip("0123456789") in verdicts
+                else curate.CurateError("Model call failed (timeout).", "timeout") for c in cands]
 
     monkeypatch.setattr(curate, "judge_many", judge_many)
     assert rank.judge(NOW) == {"judged": 3, "unjudged": 1}
@@ -485,3 +486,49 @@ def test_a_teams_video_kept_for_several_of_its_players_is_judged_once_and_its_ve
 def rows_of(vid: str) -> list[FeedCandidate]:
     with db_module.session() as s:
         return list(s.scalars(select(FeedCandidate).where(FeedCandidate.external_id == vid)))
+
+
+# ---------------------------------------------------------------- a row the model won't judge (BHA-440)
+
+
+def test_a_row_the_model_declines_or_answers_off_the_schema_for_waits_days_then_is_held_back_for_good(made, monkeypatch):
+    """Asking again at the next run would get the same answer, and paid for each time: the curator runs the judge
+    after every poll, over a hundred times a day. Such a row waits days before it's asked again, longer each time,
+    and after JUDGE_TRIES it's held back for good, with a verdict the Feed never serves (an admin can still approve
+    it). A failure that isn't the row's (the gateway down) is asked again at the next run, as before, and never
+    counts against it."""
+    monkeypatch.setattr(rank, "JUDGE_TRIES", 3, raising=False)
+    pid = asha()
+    stored(pid, "declined001", "Asha Verma, every boundary", EDITS, 5)
+    stored(pid, "offschema01", "Asha Verma on the hundred", TALKS, 6)
+    stored(pid, "unavailable", "Asha Verma in the nets", STATS, 7)
+    kinds = {"declined001": "declined", "offschema01": "invalid_output", "unavailable": "unavailable"}
+    asked: list[str] = []
+
+    def ask(llm, c, facts):
+        asked.append(c.url[-11:])
+        raise curate.CurateError("The model couldn't judge this.", kinds[c.url[-11:]])
+
+    monkeypatch.setattr(config, "CURATE_AI", True)
+    monkeypatch.setattr(curate, "gateway", lambda: object())
+    monkeypatch.setattr(curate, "_ask", ask)
+    for run in range(4 * 30):  # four runs a day for a month
+        rank.judge(NOW + timedelta(hours=6 * run))
+    assert {vid: asked.count(vid) for vid in kinds} == {"declined001": 3, "offschema01": 3, "unavailable": 120}
+    got = rows()
+    for vid in ("declined001", "offschema01"):
+        verdict = got[vid].verdict
+        assert verdict and verdict["stage"] == "held" and not rank.passes(verdict)
+        assert (got[vid].judge_tries, got[vid].judge_error) == (3, kinds[vid])
+    assert got["unavailable"].verdict is None and (got["unavailable"].judge_tries, got["unavailable"].judge_error) == (0, "unavailable")
+    rank.rescore(NOW + timedelta(days=30))
+    assert all(r.score is None for r in rows().values())
+    s = made()
+    try:
+        held = admin.feed_page(s, "held")["candidates"]
+        assert {c["title"] for c in held} == {"Asha Verma, every boundary", "Asha Verma on the hundred"} and not any(c["passes"] for c in held)
+    finally:
+        s.close()
+    # A run that asks again whatever was said (curator rescore --rejudge) asks the held ones too.
+    monkeypatch.setattr(curate, "judge_many", lambda cands: [curate.Verdict.model_validate(said()) for _ in list(cands)])
+    assert rank.judge(NOW + timedelta(days=31), again=True)["judged"] == 3
