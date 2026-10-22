@@ -226,7 +226,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   start has passed (a chess round's boards aren't on its broadcast till its games begin: the game is then
   read as any is), or, while the game is on, for half an hour, as a source can list a game late. A read can say more than a poll: a Dota 2 map's gold by minute, moments, players
   and draft, and the live map's gold line, buildings and heroes, come only with the page's own read (each poll's state is stored and sent to every card, so it
-  stays small), as the state's `page_detail`, and show under whichever board is newest. The page shows Live now's copy
+  stays small), as the state's `page_detail`, and show under whichever board is newest. The live map's gold line is
+  drawn from readings of OpenDota's live list: every poll and read takes one, and the worker one a minute for each
+  Dota 2 series Live now has listed (`keep_up_live`), whether or not anyone has it open, so a page opened mid-map has
+  the line from early in the map. That's one OpenDota request a minute for them all while any is on, and none while
+  OpenDota's minute or day is down to the third kept for pages and polls. While nobody looks at Live now, the worker
+  makes its PandaScore read itself every 5 minutes (`keep_up_read`), so a series that starts then is found early in
+  its first map: about 12 PandaScore requests an hour (13 at most, twice that with over 100 series on at once),
+  about 290 a day if nobody looked all day, and none while fans look or while Dota 2 is off. The page shows Live now's copy
   until the first read comes, and looks again while it's in view. A sport turned off has no match pages.
 - **Watch live** (`sports_follow/watch.py`, the match page's Watch block). A source that lists a game's
   broadcasts puts them on its fixtures (`Fixture.streams`: each one's page, its language, whether the
@@ -649,6 +656,12 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `LiveGame.fixtures` says those, as chess's boards do, so Today shows a fan's game once, as theirs; where
   the source rates its events, it leaves out the small ones and sets `LiveGame.tier`, the biggest first, as
   esports does by PandaScore's tournament tiers, letting a game's tier C series stand in while none bigger is on),
+  `keep_up` beside it for a source that keeps something of its games on between reads, whoever is looking (handed
+  Live now's last read of it and that read's age once a minute by the worker, `keep_up_live` and `live.keep_up`;
+  it stays inside its allowance with pages and polls first; PandaScore's keeps each live Dota 2 map's gold line
+  from OpenDota's live list, so its page opened mid-map has the line from early on; with `keep_up_read` saying how
+  old that read may get, the worker makes it anew once it's older, whoever is looking: PandaScore's every 5 minutes
+  while Dota 2 runs, so a series that starts while nobody looks is found),
   `locator` for following a game by itself (the locator its live polls take, from a fixture's id alone, so
   a game nobody follows a player in can be polled; `sports_follow/matches.py`; without it, only a game a
   followed player's fixtures bring can be followed that way, and its others say alerts aren't available),

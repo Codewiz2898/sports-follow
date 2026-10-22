@@ -345,9 +345,12 @@ def take(budget: Budget, bucket: str = "", lane_name: str | None = None, cost: i
     _note(budget, lane_name, "sent", now)
 
 
-def spare(budget: Budget, bucket: str = "", lane_name: str = "history") -> bool:
+def spare(budget: Budget, bucket: str = "", lane_name: str = "history", leave: float = 0) -> bool:
     """Whether a background read (a refresh, older results, the import) has room now, before starting a
-    batch of them: the source isn't pausing us, and every window has more left than its reserve."""
+    batch of them: the source isn't pausing us, and every window has more left than its reserve. With leave
+    (a share: 1 / 3), more than that share of each window's allowance as well, for work nobody waits on that a
+    source keeping no reserve still puts after the rest; what the source says is left is held to that share of
+    its longest window's, its plan's allowance."""
     budget = effective(budget)
     now = time.time()
     paused = _store_call("get", _paused_key(budget))
@@ -355,9 +358,9 @@ def spare(budget: Budget, bucket: str = "", lane_name: str = "history") -> bool:
         return False
     keep = _headroom(budget, lane_name)
     left = _store_call("get", _left_key(budget, bucket))
-    if budget.windows and left is not None and left <= min(w.margin for w in budget.windows) + keep:
+    if budget.windows and left is not None and left <= min(w.margin for w in budget.windows) + keep + int(max(w.requests for w in budget.windows) * leave):
         return False
-    return all(_used(budget, bucket, w, now) < w.requests - w.margin - keep for w in budget.windows)
+    return all(_used(budget, bucket, w, now) < w.requests - w.margin - keep - int(w.requests * leave) for w in budget.windows)
 
 
 def room(budget: Budget, bucket: str = "", lane_name: str = "feed") -> tuple[int, int] | None:

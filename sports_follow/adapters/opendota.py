@@ -3,7 +3,8 @@
 Not a source of its own: it adds to PandaScore's Dota 2 series (pandascore_esports), which have the
 schedule and the series and map scores but nothing inside a map. No key needed: the free tier allows 60
 requests a minute and 3,000 a day, counted by the source budget (budget.py, BUDGET) and never spent past
-FREE_* less a margin, nor past what OpenDota says is left of the day (it counts by address). What's kept
+FREE_* less a margin, nor past what OpenDota says is left of the day (it counts by address); the live list read
+each minute for maps nobody has open (spare) leaves a third of each to pages and polls. What's kept
 long (a finished match, the heroes, the items, the pros) is in the source cache (cache.py), shared by the
 API and the worker; the live list and the last pro matches only a moment, per process.
 
@@ -33,6 +34,9 @@ ENABLED = os.environ.get("SPORTS_FOLLOW_OPENDOTA", "1") != "0"
 FREE_MINUTE, FREE_DAY = 60, 3000
 MARGIN_MINUTE, MARGIN_DAY = 5, 200
 BUDGET = budget.Budget("opendota", windows=(budget.Window(60, FREE_MINUTE, margin=MARGIN_MINUTE), budget.Window(86400, FREE_DAY, margin=MARGIN_DAY)), urls=(BASE + "/",))
+# Readings nobody's page or poll asked for (pandascore_esports.PandascoreEsports.keep_up) stop while the minute or the
+# day has less than this share of its allowance left, or OpenDota is pausing us: pages and polls come first.
+SPARE = 1 / 3
 MATCH_KEEP = 15 * 86400  # a parsed match never changes
 PARSE_WAIT = 300  # a match not parsed yet is asked again this often: a pro game's replay is parsed minutes after it ends
 MISS_WAIT = 60  # and one OpenDota doesn't have at all, this often (per process)
@@ -85,6 +89,12 @@ def _memoized(key: str, ttl: float, fetch: Any) -> Any:
     value = fetch()
     _memo[key] = (time.time(), value)
     return value
+
+
+def spare() -> bool:
+    """Whether a read nobody is waiting on may go now: OpenDota isn't pausing us (a 429), and the minute and the
+    day each have more than SPARE of their allowance left, by our count and by what OpenDota says is left."""
+    return budget.spare(BUDGET, lane_name=budget.lane(), leave=SPARE)
 
 
 def live() -> list[dict[str, Any]]:
