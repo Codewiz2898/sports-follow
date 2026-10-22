@@ -277,11 +277,16 @@ def test_a_fan_of_both_players_has_one_live_card_for_their_board(db, polls, fake
     sent = cards()
     assert sent["both"] == [("1", ["Denis Lazavik · Black vs Magnus Carlsen", "Magnus Carlsen · White vs Denis Lazavik"]), ("end", ["live-e2"])]
     assert sent["lazavik"] == [("2", ["Denis Lazavik · Black vs Magnus Carlsen"])]
-    # Muted from the other side's push, the game sends them no card at all.
+    # Muted from the other side's push, the game sends them no card: the one they had is taken down (BUG-154).
     server.mute(2, "both", db)
     again(polls.redis)
     poll(2, side(2, status="*", ongoing=True), band=2, move=43)
     poll(1, side(1, status="*", ongoing=True), band=2, move=43)
+    sent = cards()
+    assert set(sent) == {"lazavik", "carlsen", "both"} and sent["both"] == [("end", ["live-e1"])]
+    again(polls.redis)
+    poll(2, side(2, status="*", ongoing=True), band=2, move=44)
+    poll(1, side(1, status="*", ongoing=True), band=2, move=44)
     assert set(cards()) == {"lazavik", "carlsen"}
 
 

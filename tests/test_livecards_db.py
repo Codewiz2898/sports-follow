@@ -217,3 +217,75 @@ def test_the_poller_sends_a_live_card_and_its_end(db, fake_fcm, monkeypatch):  #
     poll("final", "FT")
     assert sorted((m["token"].split("-")[0], m["data"]["type"], m["data"]["status"]) for m in fake_fcm.sent) == \
         [(fan, "end", "Full time") for fan in sorted(("keen", "results", "off", "muted", "lapsed", "gooner"))]
+
+
+def test_a_fan_who_stops_hearing_a_game_has_its_card_taken_down(db, fake_fcm, monkeypatch):  # noqa: F811
+    """A fan whose card went out and who no longer hears the game while it's on (they muted it, stopped following its
+    team, turned the game down to results only) has their card taken down with its next one: else it sat on their lock
+    screen, the old score frozen, for 20 minutes (BUG-154). Once only; a fan who still hears it has theirs as before."""
+    monkeypatch.setattr(bus, "_sync", Redis())
+    fans(db)
+    db.add_all([MatchFollow(fan_id="stays", event_id=1, alert_rules={"level": "key"}), PushSubscription(fan_id="stays", transport="fcm", endpoint=phone("stays"))])
+    db.commit()
+    card = {"type": "live", "tag": "live-e1", "event_id": 1}
+
+    def sent() -> dict[str, tuple[str, str]]:
+        out = {m["token"].split("-")[0]: (m["data"]["type"], m["data"]["tag"]) for m in fake_fcm.sent}
+        fake_fcm.sent.clear()
+        return out
+
+    assert livecards.send(1, "live", card) == 4
+    assert sent() == {fan: ("live", "live-e1") for fan in ("keen", "off", "gooner", "stays")}
+    db.add(NotificationMute(fan_id="keen", event_id=1))  # Mute this game, from the web or another phone
+    db.execute(text("DELETE FROM team_follow WHERE fan_id = 'gooner'"))  # stops following Arsenal
+    db.execute(text("UPDATE match_follow SET alert_rules = '{\"level\": \"results\"}' WHERE fan_id = 'off'"))  # results only
+    db.commit()
+    livecards.send(1, "live", card)
+    assert sent() == {"stays": ("live", "live-e1"), "keen": ("end", "live-e1"), "off": ("end", "live-e1"), "gooner": ("end", "live-e1")}
+    livecards.send(1, "live", card)
+    assert sent() == {"stays": ("live", "live-e1")}
+
+
+def test_a_games_end_reaches_a_fan_who_had_its_card_and_stopped_following(db, fake_fcm, monkeypatch):  # noqa: F811
+    """The end at full time goes to every fan who follows the game, and to every fan its last card went to: one who
+    stopped following after it isn't one who follows it any more, and kept theirs (BUG-154)."""
+    monkeypatch.setattr(bus, "_sync", Redis())
+    fans(db)
+    livecards.send(1, "live", {"type": "live", "tag": "live-e1", "event_id": 1})
+    fake_fcm.sent.clear()
+    db.execute(text("DELETE FROM team_follow WHERE fan_id = 'gooner'"))
+    db.commit()
+    assert livecards.send(1, "end") == 6
+    assert sorted((m["token"].split("-")[0], m["data"]["type"]) for m in fake_fcm.sent) == \
+        [(fan, "end") for fan in sorted(("keen", "results", "off", "muted", "lapsed", "gooner"))]
+
+
+def test_the_poller_takes_down_the_card_of_a_fan_who_stopped_following(db, fake_fcm, monkeypatch):  # noqa: F811
+    """BUG-154 as the poller sends it (structured.apply_poll): a fan of the team has its card; they stop following it;
+    the next goal's card goes to the others and takes theirs down; the end at full time goes to those who follow it."""
+    fans(db)
+    monkeypatch.setattr(bus, "_sync", Redis())
+    monkeypatch.setattr(structured, "_polled", lambda event_id, cadence: True)
+    monkeypatch.setattr(notify, "dispatch", lambda ids: None)
+
+    def at_once(fn, *args):
+        done: Future = Future()
+        done.set_result(fn(*args))
+        return done
+
+    monkeypatch.setattr(livecards, "_pool", SimpleNamespace(submit=at_once))
+    source = SimpleNamespace(system="espn_soccer", credit=lambda snap: "ESPN", live_note=None, lag_note=None)
+
+    def poll(status: str, clock: str, home: int) -> list[tuple[str, str]]:
+        board = {**json.loads(json.dumps(BOARD)), "home": {**BOARD["home"], "score": str(home)}}
+        snap = Snapshot(status, f"Arsenal {home} – 0 Chelsea", clock, board, lines={"SAKA": Line(f"{home} goals", [])})
+        structured.apply_poll(1, {"adapter": "espn_soccer", "cadence": 10}, source, [(7, "SAKA")], snap)
+        out = sorted((m["token"].split("-")[0], m["data"]["type"]) for m in fake_fcm.sent)
+        fake_fcm.sent.clear()
+        return out
+
+    assert poll("live", "33'", 1) == [("gooner", "live"), ("keen", "live"), ("off", "live")]
+    db.execute(text("DELETE FROM team_follow WHERE fan_id = 'gooner'"))
+    db.commit()
+    assert poll("live", "51'", 2) == [("gooner", "end"), ("keen", "live"), ("off", "live")]
+    assert poll("final", "FT", 2) == [(fan, "end") for fan in sorted(("keen", "results", "off", "muted", "lapsed"))]

@@ -20,7 +20,11 @@ fan's own players in the game, with their line so far. A game under several fixt
 player's, each polled as its own event) is one card a fan: one who follows players on more than one has it from
 their first player's fixture (by id) that's being polled, naming them all, and one that moves takes the old one down
 (BHA-378). A game's end goes to every fan who follows it any
-of those ways, whatever their level, on the same phones: it only takes a card down.
+of those ways, whatever their level, and to every fan its last card went to, on the same phones: it only takes a card
+down. A fan whose card went out and who no longer hears the game while it's on (they muted it, stopped following,
+turned it down to results only or off, or have it from another of its fixtures) has theirs taken down with its next
+card, as its end, so it isn't left frozen on their lock screen; Redis keeps whose phones each game's last card went to.
+A phone signed out, or with its alerts turned off, is off the server by then: the app takes its own cards down.
 
 None of this is an alert: no notification rows, no sound, nothing in the push metrics. A device FCM says is gone
 is removed, as after a moment's push (notify.settle), but another failure isn't counted against it: cards come
@@ -262,13 +266,14 @@ def send(event_id: int, kind: str, made: dict[str, Any] | None = None, board: di
             made = {**made, "live": "0"}  # it's over, or no longer polled live, whatever its last poll said
         found = structured.boards(db, [event_id]).get(event_id) if live and board else None
         on = _players_on(event_id, board or {}, found) if found else {}
-        moved: set[str] = set()
-        fans = audience(db, event_id, live, on, set(found.events.values()) if found else set(), moved)
-        # A fan of a game under several fixtures whose card this one sent before, and now another does: this one's
-        # is taken down, so their phone shows one.
-        gone = _had(event_id, set(fans)) & moved if found else set()
+        fans = audience(db, event_id, live, on, set(found.events.values()) if found else set())
         theirs = lines(db, event_id, fans, on) if live else {}
-        devices = android(db, [*fans, *gone], event_id)
+        devices = android(db, list(fans), event_id)
+        # The fans whose phones this game's last card went to and who don't hear it now (they muted it, stopped
+        # following, turned it down, or have it from another of its fixtures: audience) have it taken down; at its
+        # end, those who don't follow it any more too.
+        gone = _had(event_id, set(devices) if live else None) - set(fans)
+        devices.update(android(db, list(gone), event_id))
     futures = []
     for fan, mine in devices.items():
         over = not live or fan in gone
@@ -284,14 +289,17 @@ def send(event_id: int, kind: str, made: dict[str, Any] | None = None, board: di
     return sent
 
 
-def _had(event_id: int, now: set[str]) -> set[str]:
-    """The fans a game's live card went to last time (Redis keeps them as long as its card), noting these as this
-    time's; none where Redis can't say."""
+def _had(event_id: int, now: set[str] | None) -> set[str]:
+    """The fans whose phones a game's live card went to last time (Redis keeps them as long as its card), noting
+    `now` as this time's, or forgetting them at its end (None); none where Redis can't say."""
     key = f"livecard-fans:{event_id}"
     try:
         redis = bus.sync_redis()
         before = set(json.loads(cast(str, redis.get(key)) or "[]"))
-        redis.set(key, json.dumps(sorted(now)), ex=KEEP)
+        if now is None:
+            redis.delete(key)
+        else:
+            redis.set(key, json.dumps(sorted(now)), ex=KEEP)
     except Exception:
         log.warning("event %s: who had its live card: Redis didn't say", event_id, exc_info=True)
         return set()
@@ -305,12 +313,11 @@ def _players_on(event_id: int, board: dict[str, str], found: structured.Fixtures
     return {player_id: board.get(external, "") for external, player_id in found.players.items() if found.events.get(player_id) == event_id or found.events.get(player_id) in lately}
 
 
-def audience(db: Session, event_id: int, live: bool = True, on: dict[int, str] | None = None, fixtures: set[int] | None = None,
-             moved: set[str] | None = None) -> dict[str, list[int]]:
+def audience(db: Session, event_id: int, live: bool = True, on: dict[int, str] | None = None, fixtures: set[int] | None = None) -> dict[str, list[int]]:
     """The fans who should have a game's live card (live), or its end (the module docstring), each with the players
     they follow in it, those set to off left out: whom their card names. Where the game is under several fixtures,
     `on` is the players on its board (_players_on), some of them under its other `fixtures`, and muting any of them
-    mutes its card; `moved` gathers the fans who have it from another of them."""
+    mutes its card; a fan who has it from another of them isn't here."""
     from . import teams  # a team's games are followed games (teams reads the poller that calls here)
 
     levels: dict[str, set[str]] = {}
@@ -343,8 +350,6 @@ def audience(db: Session, event_id: int, live: bool = True, on: dict[int, str] |
             first = min(hearing.get(fan, []), default=None)
             if level not in QUIET and (first is None or player_id < first):
                 levels.pop(fan, None)  # their card comes from that player's fixture
-                if moved is not None:
-                    moved.add(fan)
             elif level != "off" and fan in levels:
                 players.setdefault(fan, []).append(player_id)
     return {fan: players.get(fan, []) for fan in levels}
