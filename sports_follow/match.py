@@ -22,7 +22,9 @@ included), so a made-up address spends nothing; at most READS a minute of one so
 games; for a game still hours off, or called off, once every AHEAD seconds. A read that finds the game over
 is read once more CONFIRM later, when the source has filled in what it hadn't at the final whistle, and that
 one, over and whole, is the last for FINAL_KEEP, a week: so a crowd opening yesterday's final costs its source
-two reads. One that finds it not there is the last for hours.
+two reads. One that finds it not there is the last for hours, unless it was made before the game's start or
+in the LATE after it, and that start has passed (a chess round's boards aren't on its broadcast till its games
+begin), or, while the game is on, for AHEAD: a source can list a game late.
 
 What the page shows under the board is its sport's (Sport.match_page): a football timeline, a cricket
 scorecard, an esports series by map or a lobby's standings, a finished chess game's moves. Over a finished
@@ -64,6 +66,7 @@ CONFIRM = 30 * 60
 PARTIAL = 6 * 3600  # what a source's read of a finished game still lacks this long after it was first found over isn't coming
 FINAL_KEEP = 7 * 86400  # a week
 LAG = 2 * 60  # how much newer than a final board a live one must be to show over it: Live now's list can lag a game's end
+LATE = 15 * 60  # how long after its start a game may still begin (a chess round's boards are listed as its games begin)
 READS = 6  # reads a minute of one source for match pages, whichever games: what fans' looks may spend
 MOMENTS = 40  # the most of a game's moments a page lists
 # Moments every followed player in a game gets alike (their game started, they're in the XI): the board and
@@ -190,6 +193,12 @@ def _age(as_of: str | None, now: datetime) -> float:
     return (now - datetime.fromisoformat(as_of)).total_seconds() if as_of else float("inf")
 
 
+def _utc(at: str) -> datetime:
+    """A time as a source or the database gave it, in UTC where it doesn't say."""
+    parsed = datetime.fromisoformat(at)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def _merged(newer: list[dict[str, Any]], older: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """A game's key events, newest first, from the newest board's and an older read's: a followed player's
     card keeps only the newest few, and a read has those before them. The read's go after the newest board's
@@ -249,15 +258,25 @@ def _shown(boards: list[Board]) -> Board:
 
 
 def _fresh(status: str, start: str | None, read_: dict[str, Any] | None, now: datetime) -> float:
-    """How long a read of the game is served before a look asks for another: FRESH while the board shown is live
-    (a newer one than a read that found it over, too: a mini-match's next game); CONFIRM after a read that found
-    it over but isn't settled; AHEAD for a game called off (cancelled, abandoned, suspended: a new date comes
-    slowly, if at all), or to come more than SOON from its start, or with its day still to be fixed."""
+    """How long a read of the game is served before a look asks for another: till Redis drops it after a settled
+    read (over and whole), or one that found nothing (a source that hasn't got the game), but for one made
+    before the game's start or in the LATE after it, once that start has passed (a chess round's boards aren't
+    on its broadcast till its games begin): that one is stale, and the game is read as any is. While the board
+    shown is live, one that found nothing LATE or more after its start is read again every AHEAD, for a source
+    that lists a game late, but not every minute. Else FRESH while the board shown is live (a newer one than a read
+    that found it over, too: a mini-match's next game); CONFIRM after a read that found it over but isn't
+    settled; AHEAD for a game called off (cancelled, abandoned, suspended: a new date comes slowly, if at all),
+    or to come more than SOON from its start, or with its day still to be fixed."""
+    if read_ is not None and read_.get("settled"):
+        return float("inf")
+    begins = _utc(start) if start else None
+    if read_ is not None and read_.get("game") is None and not (begins and begins <= now and datetime.fromisoformat(read_["as_of"]) < begins + timedelta(seconds=LATE)):
+        return AHEAD if status == "live" else float("inf")
     if status == "live":
         return FRESH
     if ((read_ or {}).get("game") or {}).get("status") == "final":
         return CONFIRM
-    if status == "postponed" or (status == "scheduled" and (not start or datetime.fromisoformat(start) - now > timedelta(seconds=SOON))):
+    if status == "postponed" or (status == "scheduled" and (not begins or begins - now > timedelta(seconds=SOON))):
         return AHEAD
     return FRESH
 
@@ -346,10 +365,7 @@ def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime 
     if status == "final":
         verdict = (rules.verdict(state, board.get("score") or "", board.get("clock") or "") if board else "") or (big or {}).get("line") or (big or {}).get("word") or ""
     adapter = reader(system)
-    # A read that found the game over and settled (read), or found nothing (a source that hasn't got it), is the
-    # last: the next comes when Redis has dropped it.
-    settled = read_ is not None and (game is None or bool(read_.get("settled")))
-    ask = bool(adapter and adapter.fixture_pattern.fullmatch(fixture) and not settled and _age((read_ or {}).get("as_of"), now) > _fresh(status, start, read_, now))
+    ask = bool(adapter and adapter.fixture_pattern.fullmatch(fixture) and _age((read_ or {}).get("as_of"), now) > _fresh(status, start, read_, now))
     return {
         "key": f"{system}:{fixture}",
         "match": path(f"{system}:{fixture}"),
