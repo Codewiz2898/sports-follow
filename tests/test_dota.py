@@ -754,6 +754,27 @@ def test_the_live_map_is_remembered_from_a_recent_read_only_and_never_once_its_o
     assert opendota_up.count("proMatches") == asked  # known now: OpenDota's finished matches aren't asked again
 
 
+def test_a_read_from_before_the_horn_numbers_no_map_and_a_failed_lookup_stops_no_reading(opendota_up, monkeypatch):
+    tundra = {**_series("running", [("running", None)]), "id": 778,
+              "opponents": [{"type": "Team", "opponent": {"id": 1, "name": "Tundra Esports"}}, {"type": "Team", "opponent": {"id": 2, "name": "Gaimin Gladiators"}}]}
+    clock = {"t": 60}
+    other = dict(LIVE_GAME, match_id=9044, team_name_radiant="Tundra", team_name_dire="Gaimin Gladiators")
+    monkeypatch.setattr(opendota, "live", lambda: [dict(LIVE_GAME, game_time=clock["t"]), dict(other, game_time=clock["t"])])
+    adapter = ps.PandascoreEsports()
+    m = _series("running", [("running", None)])
+    assert adapter.keep_up([_listed(m), _listed(tundra)], 90) == 2  # read 90 s ago, the horn went 60 s ago: in the draft
+    assert adapter._known_maps("777", 1, None) == {} and "proMatches" not in opendota_up
+
+    def down():
+        raise AdapterError("OpenDota returned HTTP 502 for /proMatches")
+
+    monkeypatch.setattr(opendota, "pro_matches", down)
+    clock["t"] = 600
+    assert adapter.keep_up([_listed(m), _listed(tundra)], 30) == 2  # the first series' lookup failed: the second still read
+    assert json.loads(ps.bus.sync_redis().get("dota:lead:9044"))[-1] == [600, LIVE_GAME["radiant_lead"]]
+    assert adapter._known_maps("777", 1, None) == {}  # asked again next minute
+
+
 def test_keeping_up_leaves_opendotas_last_third_to_pages_and_polls_and_waits_out_a_429(opendota_up, monkeypatch, source_budgets):
     m = _series("running", [("running", None)])
     adapter = ps.PandascoreEsports()

@@ -704,8 +704,8 @@ class PandascoreEsports(Adapter):
         """Between reads, whoever is looking (live.keep_up, each minute): every Dota 2 series Live now listed (games,
         its last read's, age seconds old; none without one) gets a reading of its live map's gold line (_lead_line),
         as a poll or its page's read would add, so its page opened mid-map draws the line from early on. From a read
-        under DOTA_TRUST old, the map's OpenDota match is remembered too (_known_maps), as a poll would, so its
-        numbers are found once it's over. A series is kept up after Live now's read is gone (nobody has looked for a
+        under DOTA_TRUST old and made since the game's horn, the map's OpenDota match is remembered too (_known_maps),
+        as a poll would, so its numbers are found once it's over. A series is kept up after Live now's read is gone (nobody has looked for a
         while) while its maps are in OpenDota's live list, and DOTA_GONE after (Redis, dota:on).
 
         One request of OpenDota's live list for them all, shared with the polls and page reads of the same 30 s, and
@@ -738,8 +738,13 @@ class PandascoreEsports(Adapter):
                 on[series] = {**s, "on": now}
                 self._lead_line(game)
                 kept += 1
-                if series in listed and age <= DOTA_TRUST:
-                    self._remember_live(series, listed[series]["live"]["state"], game)
+                # Only from a read made after this game's horn: one from before it (its draft, the last map) may say the
+                # map before it is still on.
+                if series in listed and age <= DOTA_TRUST and age < int(game.get("game_time") or 0):
+                    try:
+                        self._remember_live(series, listed[series]["live"]["state"], game)
+                    except AdapterError as exc:  # OpenDota's finished matches: asked again next minute; the readings go on
+                        log.info("dota %s: map not remembered this minute: %s", series, exc)
         except AdapterError as exc:  # OpenDota down, or its allowance spent (budget.RateLimited): the next minute's
             log.info("dota: no readings this minute: %s", exc)
         if on != before:

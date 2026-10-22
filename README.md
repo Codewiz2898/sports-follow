@@ -645,6 +645,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `LiveGame.fixtures` says those, as chess's boards do, so Today shows a fan's game once, as theirs; where
   the source rates its events, it leaves out the small ones and sets `LiveGame.tier`, the biggest first, as
   esports does by PandaScore's tournament tiers, letting a game's tier C series stand in while none bigger is on),
+  `keep_up` beside it for a source that keeps something of its games on between reads, whoever is looking (handed
+  Live now's last read of it and that read's age once a minute by the worker, `keep_up_live` and `live.keep_up`;
+  it stays inside its allowance with pages and polls first; PandaScore's keeps each live Dota 2 map's gold line
+  from OpenDota's live list, so its page opened mid-map has the line from early on),
   `locator` for following a game by itself (the locator its live polls take, from a fixture's id alone, so
   a game nobody follows a player in can be polled; `sports_follow/matches.py`; without it, only a game a
   followed player's fixtures bring can be followed that way, and its others say alerts aren't available),
