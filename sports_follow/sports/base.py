@@ -351,6 +351,9 @@ class Sport:
     # ---- the registry (registry.build): who's current, their league and title
 
     wikidata_title: str | None = None  # the property for a title worth showing (chess: GM, IM…)
+    # The sport itself on Wikidata, as a team's "sport" (P641) names it: a team listed for one of its athletes that
+    # plays another of the app's sports, and not this one, isn't theirs here (Ellyse Perry's football club).
+    wikidata_sport: tuple[str, ...] = ()
     nation_first = False  # a player's country before their club (cricket)
     retire_age = 75  # an individual sport's athletes count as current to this age
 

@@ -16,6 +16,7 @@ class Tennis(Sport):
     label = "Tennis"
     kinds = ("tennis",)
     wikidata = {"espn_tennis": "P11585", "atp": "P536", "wta": "P597"}
+    wikidata_sport = ("Q847",)
     athletes = 10_781
     retire_age = 40
     leagues = ("atp", "wta")

@@ -284,6 +284,33 @@ def test_national_cricket_sides_without_national_in_the_name():
     assert russell["teams"] == ["West Indies", "Kolkata Knight Riders"]  # cricket: the country first, then the latest club
 
 
+def test_a_team_of_another_of_the_apps_sports_isnt_on_an_athletes_row():
+    # BUG-150: a two-sport athlete's row listed the other sport's teams: Ellyse Perry's cricket row said "Sydney FC"
+    # (her football club), Ashleigh Barty's her Billie Jean King Cup side. The team's own sport (P641) is read with it.
+    football, cricket, tennis, twenty20 = WD + "Q2736", WD + "Q5375", WD + "Q847", WD + "Q1062855"
+    core = [{"p": WD + "Q1", "birth": "1990-11-03T00:00:00Z", "id_espn_cricket": "275487"}]
+    teams = [
+        {"p": WD + "Q1", "team": WD + "Q10", "teamLabel": "Australia women's national cricket team", "teamSport": cricket, "start": "2007-07-22T00:00:00Z"},
+        {"p": WD + "Q1", "team": WD + "Q11", "teamLabel": "Sydney Sixers", "teamSport": twenty20, "start": "2015-12-01T00:00:00Z"},  # a sport not the app's
+        {"p": WD + "Q1", "team": WD + "Q11", "teamLabel": "Sydney Sixers", "teamSport": cricket, "start": "2015-12-01T00:00:00Z"},
+        {"p": WD + "Q1", "team": WD + "Q12", "teamLabel": "Sydney FC", "teamSport": football, "start": "2019-01-01T00:00:00Z"},
+        {"p": WD + "Q1", "team": WD + "Q13", "teamLabel": "Australia Billie Jean King Cup team", "teamSport": tennis, "start": "2020-01-01T00:00:00Z"},
+    ]
+    [perry] = registry.build("cricket", core, [{"p": WD + "Q1", "n": "Ellyse Perry", "kind": "label", "lang": "en"}], teams, TODAY)
+    assert perry["teams"] == ["Australia", "Sydney Sixers"]
+    # A team Wikidata gives no sport for, or only one the app doesn't have, stays.
+    unsaid = [{**t, "teamSport": None} for t in teams if t["team"] == WD + "Q12"]
+    [perry] = registry.build("cricket", core, [{"p": WD + "Q1", "n": "Ellyse Perry", "kind": "label", "lang": "en"}], [*teams[:3], *unsaid], TODAY)
+    assert perry["teams"] == ["Australia", "Sydney FC"]
+
+
+def test_the_import_asks_each_teams_sport(monkeypatch):
+    asked = []
+    monkeypatch.setattr(registry, "sparql", lambda query: asked.append(query) or [])
+    registry.fetch("cricket", ["Q1"])
+    assert any("p:P54" in q and "wdt:P641 ?teamSport" in q for q in asked)
+
+
 # ---------------------------------------------------------------- one run at a time, one sport at a time (BUG-023)
 
 
