@@ -5,8 +5,10 @@ No network: if ESPN changes shape, re-record the fixture and these tests say wha
 
 from __future__ import annotations
 
+import copy
 import gzip
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -129,6 +131,27 @@ def test_cricket_postponed_and_abandoned_matches_are_not_results():
     rained_off = load("cricket-summary-final")
     rained_off["header"]["competitions"][0]["status"].update(summary="No result", type={"id": "6", "description": "Abandoned", "state": "post"})
     assert espn_cricket.parse_summary(rained_off).status == "final"
+
+
+def test_a_match_listed_on_several_days_is_read_from_the_newest_days_listing(monkeypatch):
+    # BUG-133: a Test is listed on each day it's played. The first day's listing was the one kept, and a day before
+    # yesterday's is kept a day (_day): a Test that had ended read as live for up to a day after it.
+    first = load("cricket-day-20261013")  # the Only Test (1555116), on
+    last = copy.deepcopy(first)
+    test = next(e for league in last["sports"][0]["leagues"] for e in league["events"] if e["id"] == "1555116")
+    test.update(status="post", fullStatus={"type": {"id": "1", "state": "post", "description": "Result"}, "summary": "Afghanistan won by 6 wickets"})
+    days = {"20261013": first, "20261014": last}
+
+    def get_json(url: str, ttl: float) -> dict:
+        if "scoreboard/header" in url:
+            return days.get(url.rsplit("dates=", 1)[1], {"sports": [{"leagues": []}]})
+        raise AdapterError("no summary here")  # no squad to check: kept as listed
+
+    monkeypatch.setattr(espn, "get_json", get_json)
+    afghanistan = PlayerRef("espn_cricket", "1", "A Player", ["40"], ["Afghanistan"])
+    when = [datetime(2026, 10, d, 12, tzinfo=timezone.utc) for d in (13, 14)]
+    [match] = [f for f in espn_cricket.EspnCricket()._matches(afghanistan, when) if f.source_id == "1555116"]
+    assert (match.status, match.result and match.result["summary"]) == ("final", "Afghanistan won by 6 wickets")
 
 
 def test_cricket_final_scorecard_gives_the_players_line():

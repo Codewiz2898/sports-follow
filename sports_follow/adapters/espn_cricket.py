@@ -345,7 +345,9 @@ class EspnCricket(espn.EspnAdapter, Adapter):
         return [f for f in self._matches(ref, days) if f.status == "final"]
 
     def _matches(self, ref: PlayerRef, days: list[datetime]) -> list[Fixture]:
-        """The player's matches on these days: their teams' matches, minus squads that leave them out."""
+        """The player's matches on these days: their teams' matches, minus squads that leave them out. A match
+        listed on several of the days (a Test, on each day it's played) is as the latest day lists it: an earlier
+        day's copy is kept a day (_day), and still has it on after it's over."""
 
         def day(when: datetime) -> list[Fixture]:
             try:
@@ -355,10 +357,11 @@ class EspnCricket(espn.EspnAdapter, Adapter):
 
         with ThreadPoolExecutor(max_workers=8) as pool:
             candidates: dict[str, Fixture] = {}
-            for fixtures in pool.map(budget.carry(day), days):
+            listed = sorted(zip(days, pool.map(budget.carry(day), days)), key=lambda d: d[0])  # oldest first: later days win
+            for _, fixtures in listed:
                 for f in fixtures:
                     if involves_team(f, ref):
-                        candidates.setdefault(f.source_id, f)
+                        candidates[f.source_id] = f
 
             def keep(f: Fixture) -> Fixture | None:
                 if f.status == "postponed":
