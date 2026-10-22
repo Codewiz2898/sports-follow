@@ -9,10 +9,11 @@ Credits page names Wikipedia.
 
 Three requests a player, through the source cache (adapters/cache.py, namespace "wikimedia"): their
 Wikidata person (only the statements read here, without their references: a footballer's whole entity is
-300 KB), the English labels of the items it names, and the article's summary. A page's first build reads
-them (a copy younger than MAX_AGE will do), and the scheduler reads them again once a profile is MAX_AGE
-old (pipeline.due_work), so a transfer or a new award shows within a month. Wikidata and Wikipedia ask for
-no key and publish no limit; requests go one at a time, with the app's user agent, as Wikimedia asks.
+300 KB), the names of the items it names (English, else "mul": _name), and the article's summary. A page's
+first build reads them (a copy younger than MAX_AGE will do), and the scheduler reads them again once a
+profile is MAX_AGE old (pipeline.due_work), so a transfer or a new award shows within a month. Wikidata and
+Wikipedia ask for no key and publish no limit; requests go one at a time, with the app's user agent, as
+Wikimedia asks.
 
 What a live source says of a player wins over Wikidata (pipeline.apply_profile): a bound player's name,
 sport and teams are their source's. What the research agent wrote (agent.py) is used only for what neither
@@ -47,6 +48,7 @@ SUMMARY = "https://en.wikipedia.org/api/rest_v1/page/summary/"
 MAX_AGE = 30 * 86400  # a profile is read again after a month
 REREAD = 86400  # the scheduler's monthly read takes a copy at most this old: the month is up
 LABELS = 50  # items a labels request asks about (the API's limit)
+LANGUAGES = "|".join(registry.NAME_LANGS)  # the labels asked for: English, and "mul" (_name)
 BORN = "P569"
 TEAMS = "P54"
 ENDED = "P582"  # a stint's end: a team with one is a former team
@@ -72,7 +74,7 @@ class Profile:
     """What Wikidata and Wikipedia say of one player, as the page shows it."""
 
     qid: str
-    name: str | None = None  # Wikidata's English label
+    name: str | None = None  # Wikidata's label: the English one, else "mul" (_name)
     born: str | None = None  # "1988-11-05"; "1988" when Wikidata knows only the year
     nationality: str | None = None
     role: str | None = None  # "Forward", "Batter", "Grandmaster"
@@ -178,6 +180,12 @@ def _teams(claims: dict[str, list[dict[str, Any]]], kind: sports.Sport, labels: 
     return registry.team_list(kind, stints)
 
 
+def _name(labels: dict[str, Any]) -> str | None:
+    """An item's name from its labels: the English one, else the one every language shares ("mul"), where
+    Wikidata keeps many people's and clubs' names now (MS Dhoni's, Chennai Super Kings')."""
+    return next((v for lang in registry.NAME_LANGS if isinstance(v := (labels.get(lang) or {}).get("value"), str) and v), None)
+
+
 def _role(names: list[str]) -> str | None:
     """ "forward", "midfielder" -> "Forward, midfielder"."""
     text = ", ".join(names[:2])
@@ -198,14 +206,14 @@ def about(summary: dict[str, Any] | None) -> tuple[str | None, str | None]:
 
 
 def parse(qid: str, entity: dict[str, Any], labels: dict[str, str], summary: dict[str, Any] | None, kind: sports.Sport) -> Profile:
-    """One player's profile from their Wikidata entity (claims, labels, sitelinks), the English names of
-    the items it names, and their article's summary."""
+    """One player's profile from their Wikidata entity (claims, labels, sitelinks), the names of the items
+    it names, and their article's summary."""
     claims = entity.get("claims") or {}
     nations = _first(claims, kind.profile_nation, labels)
     text, url = about(summary)
     return Profile(
         qid=qid,
-        name=((entity.get("labels") or {}).get("en") or {}).get("value"),
+        name=_name(entity.get("labels") or {}),
         born=born(claims.get(BORN, [])),
         nationality=registry.COUNTRIES.get(nations[0], nations[0]) if nations else None,
         role=_role(_first(claims, kind.profile_role, labels)),
@@ -251,12 +259,12 @@ def _properties() -> list[str]:
 
 
 def entity(qid: str, ttl: float) -> dict[str, Any]:
-    """A Wikidata person's English label, enwiki article and the statements a profile reads, without their
-    references. The key names the properties kept, so a sport reading another is fetched again."""
+    """A Wikidata person's labels (English and "mul"), enwiki article and the statements a profile reads,
+    without their references. The key names the properties kept, so a sport reading another is fetched again."""
     props = _properties()
 
     def fetch() -> dict[str, Any]:
-        data = _get(API, {"action": "wbgetentities", "ids": qid, "props": "labels|claims|sitelinks", "languages": "en", "sitefilter": "enwiki", "format": "json"})
+        data = _get(API, {"action": "wbgetentities", "ids": qid, "props": "labels|claims|sitelinks", "languages": LANGUAGES, "sitefilter": "enwiki", "format": "json"})
         found = (data.get("entities") or {}).get(qid) or {}
         if "missing" in found:
             return {}
@@ -267,14 +275,14 @@ def entity(qid: str, ttl: float) -> dict[str, Any]:
 
 
 def labels(ids: list[str], ttl: float) -> dict[str, str]:
-    """The English names of these Wikidata items."""
+    """The names of these Wikidata items, in English where they have one (_name)."""
     out: dict[str, str] = {}
     for start in range(0, len(ids), LABELS):
         batch = sorted(ids[start : start + LABELS])
 
         def fetch(batch: list[str] = batch) -> dict[str, str]:
-            data = _get(API, {"action": "wbgetentities", "ids": "|".join(batch), "props": "labels", "languages": "en", "format": "json"})
-            return {q: label for q, e in (data.get("entities") or {}).items() if (label := ((e.get("labels") or {}).get("en") or {}).get("value"))}
+            data = _get(API, {"action": "wbgetentities", "ids": "|".join(batch), "props": "labels", "languages": LANGUAGES, "format": "json"})
+            return {q: label for q, e in (data.get("entities") or {}).items() if (label := _name(e.get("labels") or {}))}
 
         out |= _cache.read(f"labels:{'|'.join(batch)}", ttl, fetch)
     return out

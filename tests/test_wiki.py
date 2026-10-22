@@ -164,6 +164,28 @@ def test_a_profile_is_three_requests_kept_for_a_month(wikimedia, source_cache):
     assert wiki.read("Q1", "Cricket", wiki.REREAD) == found and len(served.asked) == 3
 
 
+def test_names_wikidata_keeps_for_every_language_are_read(monkeypatch):
+    # Wikidata keeps a name every language shares under "mul": MS Dhoni's own, and his club's. Read in English
+    # alone, his profile had no name and no team (BUG-145). An item named in English too goes by that name.
+    person = {"labels": {"mul": {"value": "MS Dhoni"}}, "claims": {"P27": [item("Q668")], "P54": [item("Q300", P580="+2008-01-01T00:00:00Z")]}}
+    names = {"Q300": {"mul": {"value": "Chennai Super Kings"}}, "Q668": {"en": {"value": "India"}, "mul": {"value": "Bharat"}}}
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        params = request.url.params
+        asked = params["languages"].split("|")
+
+        def within(labels: dict[str, Any]) -> dict[str, Any]:
+            return {lang: label for lang, label in labels.items() if lang in asked}
+
+        if params.get("props") == "labels":
+            return httpx.Response(200, json={"entities": {q: {"labels": within(names[q])} for q in params["ids"].split("|") if q in names}})
+        return httpx.Response(200, json={"entities": {params["ids"]: {**person, "labels": within(person["labels"])}}})
+
+    monkeypatch.setattr(wiki, "_client", httpx.Client(transport=httpx.MockTransport(answer)))
+    found = wiki.read("Q470774", "Cricket")
+    assert found and (found.name, found.nationality, found.teams) == ("MS Dhoni", "India", ["Chennai Super Kings"])
+
+
 def test_a_player_without_an_article_or_a_person_has_no_about(wikimedia):
     served = wikimedia(entity={**CRICKETER, "sitelinks": {}})
     found = wiki.read("Q1", "Cricket")

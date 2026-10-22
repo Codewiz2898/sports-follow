@@ -4,6 +4,7 @@ live-source athlete (registry.py). Rows are shaped like the query service's JSON
 from __future__ import annotations
 
 import importlib.util
+import re
 from datetime import date
 from pathlib import Path
 
@@ -56,6 +57,93 @@ def test_chess_titles_tours_and_leagues():
     assert draftee[0]["teams"] == []  # a college side isn't a pro's team
 
 
+# ---------------------------------------------------------------- names in every language's "mul" (BUG-145)
+
+
+# Messi and MS Dhoni as the query service answers for them: their aliases, and Dhoni's label, are kept under
+# "mul" (a name every language shares), none under "en" (Dhoni's 18 as Wikidata lists them).
+MESSI, DHONI = WD + "Q615", WD + "Q470774"
+STARS_CORE = [
+    {"p": MESSI, "sitelinks": "200", "birth": "1987-06-24T00:00:00Z", "birth_precision": "11", "id_espn_soccer": "45843"},
+    {"p": DHONI, "sitelinks": "90", "birth": "1981-07-07T00:00:00Z", "birth_precision": "11", "id_espn_cricket": "28081"},
+]
+DHONI_ALIASES = [
+    "Mahi", "Mahendra Singh Dhoni", "Mahendra Singh Dhauni", "MS Dhauni", "Dhauni", "D. Dhenier", "Captain Cool", "Mr Cool", "Finisher",
+    "MSD", "M. S. Dhoni", "M.S. Dhoni", "M. S. Dhauni", "M.S. Dhauni", "Dhoni", "Mr. Cool", "Thala", "D Dhenier",
+]
+STARS_NAMES = [
+    {"p": MESSI, "n": "Lionel Messi", "kind": "label", "lang": "en"},
+    {"p": MESSI, "n": "Lionel Messi", "kind": "label", "lang": "mul"},
+    {"p": MESSI, "n": "Leo Messi", "kind": "alias", "lang": "mul"},
+    {"p": MESSI, "n": "La Pulga", "kind": "alias", "lang": "mul"},
+    {"p": DHONI, "n": "MS Dhoni", "kind": "label", "lang": "mul"},
+    *({"p": DHONI, "n": n, "kind": "alias", "lang": "mul"} for n in DHONI_ALIASES),
+]
+# A club whose name Wikidata keeps under "mul" alone, and one named in English too.
+STARS_TEAMS = [
+    {"p": DHONI, "team": WD + "Q1", "teamLabel": "Chennai Super Kings", "lang": "mul", "start": "2018-01-01T00:00:00Z"},
+    {"p": MESSI, "team": WD + "Q2", "teamLabel": "Inter Miami CF", "lang": "en", "start": "2023-07-15T00:00:00Z"},
+    {"p": MESSI, "team": WD + "Q2", "teamLabel": "Inter Miami", "lang": "mul", "start": "2023-07-15T00:00:00Z"},
+]
+
+
+def _langs(query: str, clause: str) -> set[str]:
+    """The languages a query reads a clause's names in: `<clause> FILTER(LANG(?x) = "en")` or `... IN ("en", "mul")`."""
+    found = re.search(re.escape(clause) + r' FILTER\(LANG\(\?\w+\) (?:= "([\w-]+)"|IN \(([^)]*)\))', query)
+    assert found, f"no language asked for {clause}"
+    return {found.group(1)} if found.group(1) else set(re.findall(r'"([\w-]+)"', found.group(2)))
+
+
+def query_service(core: list[dict], names: list[dict], teams: list[dict]):
+    """registry.sparql answering fetch's three queries from these rows, each name in the languages the query asks."""
+
+    def sparql(query: str) -> list[dict[str, str]]:
+        if "skos:altLabel" in query:
+            asked = {"label": _langs(query, "rdfs:label ?n"), "alias": _langs(query, "skos:altLabel ?n")}
+            return [r for r in names if r["lang"] in asked[r["kind"]]]
+        if "p:P54" in query:
+            return [r for r in teams if r["lang"] in _langs(query, "rdfs:label ?teamLabel")]
+        return core
+
+    return sparql
+
+
+def stars(monkeypatch, sport: str, qid: str, names: list[dict] = STARS_NAMES) -> dict:
+    monkeypatch.setattr(registry, "sparql", query_service([r for r in STARS_CORE if r["p"] == qid], [r for r in names if r["p"] == qid], [r for r in STARS_TEAMS if r["p"] == qid]))
+    [row] = registry.build(sport, *registry.fetch(sport, [qid.rsplit("/", 1)[-1]]), TODAY)
+    return row
+
+
+def test_names_wikidata_keeps_for_every_language_are_read(monkeypatch):
+    # Messi had no aliases and "leo messi" found nothing: Wikidata moved them from "en" to "mul" (BUG-145).
+    messi = stars(monkeypatch, "football", MESSI)
+    assert messi["aliases"] == ["Leo Messi", "La Pulga"]
+    assert messi["search_text"] == " lionel messi | leo messi | la pulga |"
+    assert messi["teams"] == ["Inter Miami CF"]  # named in English and in mul: one club, by its English name
+    dhoni = stars(monkeypatch, "cricket", DHONI)
+    assert dhoni["name"] == "MS Dhoni" and dhoni["teams"] == ["Chennai Super Kings"]
+    # All of his 18, MSD (Wikidata's tenth) among them: eight at most dropped every name after "Mr Cool". The four
+    # that fold to one already kept ("M.S. Dhoni" is "M. S. Dhoni" to search) take no place.
+    assert dhoni["aliases"] == [
+        "Mahi", "Mahendra Singh Dhoni", "Mahendra Singh Dhauni", "MS Dhauni", "Dhauni", "D. Dhenier", "Captain Cool", "Mr Cool",
+        "Finisher", "MSD", "M. S. Dhoni", "M. S. Dhauni", "Dhoni", "Thala",
+    ]
+    kept = {" ".join(registry.words(a)) for a in ["MS Dhoni", *dhoni["aliases"]]}
+    assert all(" ".join(registry.words(a)) in kept for a in DHONI_ALIASES)
+
+
+def test_english_aliases_come_first_and_a_spelling_search_cant_tell_apart_takes_no_place():
+    names = [
+        {"p": WD + "Q9", "n": "Asha Rao", "kind": "label", "lang": "en"},
+        *({"p": WD + "Q9", "n": f"Nickname {i}", "kind": "alias", "lang": "mul"} for i in range(registry.MAX_ALIASES)),
+        {"p": WD + "Q9", "n": "A. Rao", "kind": "alias", "lang": "mul"},
+        {"p": WD + "Q9", "n": "A.Rao", "kind": "alias", "lang": "en"},
+    ]
+    [rao] = registry.build("football", [{"p": WD + "Q9", "id_transfermarkt": "9"}], names, [], TODAY)
+    # "A. Rao" is "A.Rao" to search (words "a rao"): one place, the English spelling's.
+    assert rao["aliases"] == ["A.Rao", *(f"Nickname {i}" for i in range(registry.MAX_ALIASES - 1))]
+
+
 def test_words_and_search_text_fold_names():
     assert registry.words("A'ja Wilson") == ["aja", "wilson"]
     assert registry.words("Magnus Øen Carlsen") == ["magnus", "oen", "carlsen"]
@@ -63,10 +151,12 @@ def test_words_and_search_text_fold_names():
     assert registry.team_name("India national cricket team") == "India"
 
 
-def test_birth_dates_agree_either_way_round():
+def test_birth_dates_agree_only_as_the_source_gives_them():
+    # Every source's date is ISO, its own order read by its adapter (espn.birth_date), so a day and month the
+    # other way round is another day: 11 May isn't 5 November (BUG-146).
     born = date(1988, 11, 5)
     assert registry.same_day(born, "1988-11-05") is True
-    assert registry.same_day(born, "1988-05-11") is True  # day and month read the other way
+    assert registry.same_day(born, "1988-05-11") is False
     assert registry.same_day(born, "1988-11-06") is False
     assert registry.same_day(None, "1988-11-05") is None
 
@@ -79,6 +169,17 @@ def test_same_person_trusts_the_birth_date_over_the_name():
     # No birth date in the source: the whole name and a team must match.
     assert registry.same_person(foord, PlayerRef("espn_soccer", "158678", "Caitlin Foord", ["359"], ["Arsenal Women"]))
     assert not registry.same_person(foord, PlayerRef("espn_soccer", "158678", "Caitlin Foord", ["2"], ["Chelsea"]))
+
+
+def test_a_stranger_born_the_same_day_isnt_the_person():
+    # Giacomo De Pieri and ESPN's Ethan Mbappé were both born on 29 December 2006: the date alone made them one
+    # person, and De Pieri's Wikidata profile Ethan's page (BUG-146). The names must match too.
+    de_pieri = registry.Person("Q118643915", "football", "Giacomo De Pieri", [], date(2006, 12, 29), [], None, {}, registry.DAY)
+    assert not registry.same_person(de_pieri, PlayerRef("espn_soccer", "355971", "Ethan Mbappé", ["1"], ["Lille"], born="2006-12-29"))
+    assert registry.same_person(de_pieri, PlayerRef("espn_soccer", "1", "Giacomo De Pieri", ["2"], ["Inter"], born="2006-12-29"))
+    # Their name, but with the day and month the other way round: someone else.
+    rao = registry.Person("Q2", "football", "Asha Rao", [], date(2001, 3, 4), [], None, {}, registry.DAY)
+    assert not registry.same_person(rao, PlayerRef("espn_soccer", "2", "Asha Rao", ["1"], [], born="2001-04-03"))
 
 
 def test_registry_rows_as_search_results():
