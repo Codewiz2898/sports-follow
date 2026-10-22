@@ -688,6 +688,12 @@ class Sport:
         over several boards (a chess mini-match's games), whose questions stay with the board they were asked of."""
         return self.board(state)
 
+    def resettles(self, ask: str, state: dict[str, Any]) -> bool:
+        """Whether a board's answer to a question settled already, changed since, settles it again (predictions.settle):
+        a result its source corrected, told its fans again. False where a board answers differently for another reason
+        (a chess mini-match's games after its board was over), so fans told how their pick went aren't told otherwise."""
+        return True
+
     def board_players(self, state: dict[str, Any]) -> tuple[str, ...]:
         """Who's on a game under several fixtures (board), by their ids in the source, each with a fixture of their
         own: its fixtures here are theirs, so alerts, live cards and mutes take them for one game (structured.boards).

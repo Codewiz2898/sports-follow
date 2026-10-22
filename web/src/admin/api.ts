@@ -121,8 +121,9 @@ export interface FeedCandidateRow {
   score: number | null
   review: Review | null
   moment_id: number | null
-  unplayable_at: string | null // when a fan's app said it won't play inside it (approving or pinning it says it does)
+  unplayable_at: string | null // when fans' apps on enough networks said it won't play inside them (Put back, approving or pinning it says it does)
   served: boolean
+  players?: { id: number; name: string; sport: string }[] // the Won't play list's: every player the video is kept for
 }
 /** A channel's last 30 days: uploads read, those naming a followed player, kept and served, and when it last posted (null: never seen). */
 export interface ChannelYield {
@@ -145,7 +146,7 @@ export interface FeedChannel {
   feedback: number
   yield: ChannelYield
 }
-export type FeedShow = 'all' | 'unjudged' | 'served' | 'held' | 'reviewed'
+export type FeedShow = 'all' | 'unjudged' | 'served' | 'held' | 'reviewed' | 'unplayable'
 export interface FeedPage {
   candidates: FeedCandidateRow[]
   next: number | null
@@ -212,6 +213,8 @@ export const admin = {
   linear: () => request<LinearStatus>(at('linear')),
   feed: (show: FeedShow, offset = 0) => request<FeedPage>(at(`feed?show=${show}&offset=${offset}`)),
   review: (id: number, review: Review | null) => request<FeedCandidateRow>(at(`feed/${id}`), json('PUT', { review })),
+  /** A video fans' apps took out plays after all: every player's row of it served again as the judge said, nothing approved. */
+  putBack: (id: number) => request<{ put_back: string }>(at(`feed/${id}/put-back`), json('POST', {})),
   /** A video channel's id or a news feed's address, in the body: an address doesn't fit in a path. */
   channelTrust: (channel: string, trust: number | null) =>
     request<{ channels: FeedChannel[] }>(at('feed/channels'), json('PUT', { channel, trust })),

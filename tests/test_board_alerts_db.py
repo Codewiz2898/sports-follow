@@ -453,6 +453,40 @@ def test_a_tiebreak_round_tells_who_won_its_match_once_its_over_not_its_first_ga
                                    "both": ["Denis Lazavik: Won the match 2–1 vs Magnus Carlsen"], "watcher": ["Magnus Carlsen vs Denis Lazavik: Denis Lazavik won the match (3 games)"]}
 
 
+def test_a_tiebreak_round_lichess_calls_finished_between_its_games_tells_only_its_match(db, polls, monkeypatch):
+    # BUG-210 reopened (R4): Lichess calls a round finished as soon as every game in it has a result, and on again as the
+    # next game's first moves come. The World Championship's tiebreak in that shape (the recording's players: Carlsen
+    # wins game 1 with White, Lazavik games 2 and 3), through the source's own reads and the poller: nothing told between
+    # games, neither "Won with White" after game 1 nor "Match drawn" at 1–1, and both events still polled; GRACE after
+    # game 3 with no game 4, each fan hears the match, 2–1, once, and so does a fan following the game itself.
+    round_now: dict = {}
+    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: round_now)
+    chess = lichess_chess.LichessChess()
+    db.add_all([MatchFollow(fan_id="watcher", event_id=1, alert_rules={}, keys=[]),
+                PushSubscription(fan_id="watcher", endpoint="https://fcm.googleapis.com/fcm/send/watcher", p256dh="k", auth="a")])
+    phones(db)
+
+    def look(*results: str, **when) -> set[str]:
+        round_now.clear()
+        round_now.update(tiebreak(*results, **when))
+        for event_id in (1, 2):
+            poll(event_id, chess.snapshot({"round": ROUND, "fide": SIDES[event_id][1]}))
+        db.expire_all()
+        return {db.get(Event, e).status for e in (1, 2)}  # type: ignore[union-attr]
+
+    look("*", to_come=True)
+    look("*")
+    polls.pushed.clear()  # the start
+    assert look("1-0", finished=True, ago=0) == {"live"} and heard(polls.pushed) == {}  # game 1 over, the round "finished"
+    assert look("1-0", "*") == {"live"}
+    assert look("1-0", "1-0", finished=True, ago=0) == {"live"} and heard(polls.pushed) == {}  # 1–1
+    assert look("1-0", "1-0", "*") == {"live"}
+    assert look("1-0", "1-0", "0-1", finished=True, ago=0) == {"live"} and heard(polls.pushed) == {}
+    assert look("1-0", "1-0", "0-1", finished=True, ago=lichess_chess.GRACE) == {"final"}
+    assert heard(polls.pushed) == {"carlsen": ["Magnus Carlsen: Lost the match 1–2 vs Denis Lazavik"], "lazavik": ["Denis Lazavik: Won the match 2–1 vs Magnus Carlsen"],
+                                   "both": ["Denis Lazavik: Won the match 2–1 vs Magnus Carlsen"], "watcher": ["Magnus Carlsen vs Denis Lazavik: Denis Lazavik won the match (3 games)"]}
+
+
 def test_the_same_two_meeting_again_later_are_another_game(db, polls):
     # Carlsen and Lazavik meet again three hours on, in another round: Carlsen's new fixture has its board, Lazavik's
     # hasn't been read yet. Game 1, which a fan muted, isn't game 2: its start reaches them, on a notification of its own.

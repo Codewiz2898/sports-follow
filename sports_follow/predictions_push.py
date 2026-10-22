@@ -81,9 +81,11 @@ def _levels(db: Session, event_ids: list[int]) -> dict[str, set[str]]:
 
 
 def _muted(db: Session, fans: set[str], event_ids: list[int]) -> set[str]:
+    """Which of these fans muted the game. Fans are named a part at a time (notify.chunks), here as in every query of a
+    game's or a question's fans: a star's are more than one query can name (BUG-325)."""
     if not fans or not event_ids:
         return set()
-    return set(db.scalars(select(NotificationMute.fan_id).where(NotificationMute.fan_id.in_(fans), NotificationMute.event_id.in_(event_ids))))
+    return {fan for some in notify.chunks(fans) for fan in db.scalars(select(NotificationMute.fan_id).where(NotificationMute.fan_id.in_(some), NotificationMute.event_id.in_(event_ids)))}
 
 
 def _places(db: Session, fans: set[str]) -> dict[str, tuple[int, str]]:
@@ -91,8 +93,9 @@ def _places(db: Session, fans: set[str]) -> dict[str, tuple[int, str]]:
     they have no points there, or everyone in it is level (all "1st" in a new league, a wrong call or not)."""
     out: dict[str, tuple[int, str]] = {}
     member_of: dict[int, set[str]] = {}
-    for league_id, fan in db.execute(select(LeagueMember.league_id, LeagueMember.fan_id).where(LeagueMember.fan_id.in_(fans))) if fans else []:
-        member_of.setdefault(league_id, set()).add(fan)
+    for some in notify.chunks(fans):
+        for league_id, fan in db.execute(select(LeagueMember.league_id, LeagueMember.fan_id).where(LeagueMember.fan_id.in_(some))):
+            member_of.setdefault(league_id, set()).add(fan)
     for league in db.scalars(select(League).where(League.id.in_(list(member_of)))) if member_of else []:
         rows = predictions.table(db, league)
         if len({row["points"] for row in rows}) < 2:
@@ -140,7 +143,7 @@ def remind(now: datetime) -> list[tuple]:
             muted = _muted(db, set(levels), ids)
             fans = [f for f, said in levels.items() if f not in picked and f not in muted and said & set(HEARS)]
             locks_at = q.locks_at or now
-            jobs += _jobs(db, fans, q, "pick", f"Make your pick: {q.game_title}", f"{q.title} Picks close when it starts, in {_until(locks_at, now)}.",
+            jobs += _jobs(db, _devices(db, fans), q, "pick", f"Make your pick: {q.game_title}", f"{q.title} Picks close when it starts, in {_until(locks_at, now)}.",
                           loud={f: True for f in fans}, ttl=max(60, int((locks_at - now).total_seconds())), now=now)
     return jobs
 
@@ -170,11 +173,15 @@ def tell(now: datetime) -> list[tuple]:
             ids = _events(db, q)
             levels = _levels(db, ids)
             muted = _muted(db, set(picks), ids)
-            # Hears it unless they muted the game, or set every follow of theirs in it to "off".
+            # Hears it unless they muted the game, or set every follow of theirs in it to "off"; on a device.
             fans = [f for f in picks if f not in muted and not (f in levels and levels[f] <= {"off"})]
+            devices = _devices(db, fans)
+            fans = [f for f in fans if f in devices]
             places = _places(db, set(fans))
-            recent = set(db.scalars(select(Notification.fan_id).where(Notification.fan_id.in_(fans), Notification.kind.in_(notify.CALLS),
-                                                                      Notification.event_id.in_(ids), Notification.created_at >= now - LOUD_GAP))) if fans and ids else set()
+            recent: set[str] = set()
+            for some in notify.chunks(fans) if ids else []:
+                recent.update(db.scalars(select(Notification.fan_id).where(Notification.fan_id.in_(some), Notification.kind.in_(notify.CALLS),
+                                                                           Notification.event_id.in_(ids), Notification.created_at >= now - LOUD_GAP)))
             answer = _label(q, q.answer)
             for fan in fans:
                 option, points = picks[fan]
@@ -184,24 +191,31 @@ def tell(now: datetime) -> list[tuple]:
                     title, body = f"You got it right: {answer}", f"{q.title} {q.game_title} · +{points or 0} points{where}"
                 else:
                     title, body = f"{answer}: not this time", f"You said {_label(q, option)}. {q.title} {q.game_title}{where}"
-                jobs += _jobs(db, [fan], q, "called", title, body, loud={fan: fan not in recent}, ttl=RESULT_TTL, now=now)
+                jobs += _jobs(db, {fan: devices[fan]}, q, "called", title, body, loud={fan: fan not in recent}, ttl=RESULT_TTL, now=now)
     return jobs
 
 
 # ---------------------------------------------------------------- sending
 
 
-def _jobs(db: Session, fans: list[str], q: Question, kind: str, title: str, body: str, loud: dict[str, bool], ttl: int, now: datetime) -> list[tuple]:
-    """A notification row for each fan with a device, and a job for each of their newest devices: (notification id,
-    device, payload, ttl, topic). The tag a phone replaces the game's last call with is the game's; the Web Push topic
-    (RFC 8030: at most 32 characters, URL-safe base64) is a digest of it."""
-    if not fans:
-        return []
+def _devices(db: Session, fans: list[str]) -> dict[str, list[PushSubscription]]:
+    """These fans' devices a call goes to, by fan, as a moment's push goes (notify.MAX_DEVICES, the newest; of the
+    transports this server sends by). A fan without one isn't here."""
     devices: dict[str, list[PushSubscription]] = {}
-    for d in db.scalars(select(PushSubscription).where(PushSubscription.fan_id.in_(fans), PushSubscription.transport.in_(notify.transports())).order_by(PushSubscription.id.desc())):
-        mine = devices.setdefault(d.fan_id, [])
-        if len(mine) < notify.MAX_DEVICES:
-            mine.append(d)
+    for some in notify.chunks(fans):
+        for d in db.scalars(select(PushSubscription).where(PushSubscription.fan_id.in_(some), PushSubscription.transport.in_(notify.transports())).order_by(PushSubscription.id.desc())):
+            mine = devices.setdefault(d.fan_id, [])
+            if len(mine) < notify.MAX_DEVICES:
+                mine.append(d)
+    return devices
+
+
+def _jobs(db: Session, devices: dict[str, list[PushSubscription]], q: Question, kind: str, title: str, body: str, loud: dict[str, bool], ttl: int, now: datetime) -> list[tuple]:
+    """A notification row for each fan with devices (_devices), and a job for each of them: (notification id, device,
+    payload, ttl, topic). The tag a phone replaces the game's last call with is the game's; the Web Push topic
+    (RFC 8030: at most 32 characters, URL-safe base64) is a digest of it."""
+    if not devices:
+        return []
     tag = f"call-{q.game}"
     topic = "c" + base64.urlsafe_b64encode(hashlib.blake2b(q.game.encode(), digest_size=15).digest()).decode()  # 1 + 20 characters
     jobs = []

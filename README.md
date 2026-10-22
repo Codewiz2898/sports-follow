@@ -142,7 +142,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`server.PLAYERS_MAX`). Previews and follows that ask a source for an athlete not on the app yet (a whole
   team's follow on a campaign page asks once for each such player) are limited to 30 a minute a fan and 120 a
   client address (`SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_MINUTE`, `SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_ADDRESS`), past
-  which they're a 429; a player already here costs nothing.
+  which they're a 429; a player already here costs nothing. Follows of every kind (a player, a team, a game; a
+  campaign page's whole team in one tap is one) are limited to 150 an hour a fan, and 300 an IPv6 /64, 1,200 its
+  /48 and 1,200 an IPv4 address (a phone network's may be shared by thousands of fans) (`server.FOLLOWS_PER_FAN`,
+  `FOLLOWS_PER_ADDRESS`, `FOLLOWS_PER_IPV6_48`, `FOLLOWS_PER_IPV4`), past which they're a 429; one refused isn't counted.
 - **AI research is capped** (only with `SPORTS_FOLLOW_RESEARCH=1`). A name no source knows goes to the research agent, 3 per fan per UTC day
   (`search.RESEARCH_PER_DAY`, counted in Redis), 10 per client address per day and 10 an hour across all
   fans (`SPORTS_FOLLOW_RESEARCH_PER_ADDRESS`, `SPORTS_FOLLOW_RESEARCH_PER_HOUR`). Following a player
@@ -526,7 +529,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Sound is rationed (once every 3 minutes a game, 6 times an hour a phone) except for the biggest
   moments. `sports_follow/notify.py` claims each batch once, logs every
   push (`notification`), sends it to each device at once (by Web Push with VAPID to browsers, by FCM to
-  the Android app, `fcm.py`), and the tick sweeps up any batch a restart dropped. Devices that took their last
+  the Android app, `fcm.py`), and the tick sweeps up any batch a restart dropped (a game's at a time, should the
+  batch fail, so a moment that can't be planned holds back no other). A player or a team with more fans than one
+  query can name (Postgres takes 65,535 values) is planned a part of them at a time (`notify.chunks`). Devices that took their last
   push go by threads of their own, apart from new and failing ones, and each push service gets 2 s to connect, so
   a device that never answers holds up no other fan's alerts; push addresses must be a known service's own, and
   one network turns notifications on for only so many new devices a day. Quiet hours are per device and make notifications arrive without a sound or vibration (on Android still on the lock screen, so a phone set to wake its screen for notifications may light it); one that arrived silent on every device doesn't count toward the hour's sound.
@@ -705,15 +710,20 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Some still won't play inside the app: a Content ID owner (LaLiga's, say) keeps them off other sites, which
   the Data API doesn't say (embeddable, no region rule). Only the player knows: YouTube's IFrame Player API
   says so (error 101 or 150, or 100 for one gone), and the apps then show "This one plays only on YouTube"
-  with the way there, and tell the server once (`POST /api/players/<id>/feed/<item>/unplayable`, so many an
-  hour from a fan, an address and everyone, each count taken before the report is acted on). It leaves that fan's
-  Feed at once, and it's their network's vote (an IPv6 one's /48, kept a month in Redis) on whether it leaves
+  with the way there, and tell the server once (`POST /api/players/<id>/feed/<item>/unplayable`). It leaves that
+  fan's Feed at once, and it's their network's vote (an IPv6 one's /48, kept a month in Redis) on whether it leaves
   everyone's: once three networks have said so (`feed.UNPLAYABLE_VOTES`), the server marks every row of the video
   (`unplayable_at`), no Feed serves it again, and a fetch that finds it for another player keeps the mark. One fan,
-  or a script with new cookies, takes it from their own Feed alone. The admin panel's Feed tab shows the mark, and
-  approving or pinning the video there says it plays after all, which no app's word overrides. (Whether 101/150 can
-  also mean a block in the viewer's country alone isn't known; if it can, fans abroad on three networks hide it
-  from India too.)
+  or a script with new cookies, takes it from their own Feed alone. A fan's votes are counted so many an hour, and
+  an address's (10 and 30, each count taken before the report is acted on); past either, the video still leaves
+  that fan's Feed and only the vote is dropped. Reports never ask YouTube anything. The admin panel's Feed tab lists
+  every video taken out this way under Won't play, once each, newest first, with the players it's kept for. Put back
+  (`POST /api/admin/feed/<row>/put-back`, `feed.put_back`) takes the mark off every row of it, each served or not as
+  the judge and any admin's word say (nothing is approved), and starts its votes again; approving or pinning it puts
+  it back too, and then no app's word overrides that. Any admin word on it starts its votes again. The weekly check
+  drops one YouTube says is gone, private or no longer embeddable, marked or not, so those leave the list by
+  themselves. (Whether 101/150 can also mean a block in the viewer's country alone isn't known; only apps whose
+  time zone is India's vote, `SPORTS_FOLLOW_FEED_ZONES`.)
   After each poll the judge (below) reads the new rows and `sports_follow/rank.py` scores every judged one:
   the judge's interest, how widely it's watched for its age (log views a day since it was published, as its
   latest read counted them, so the score is age-fair and stays put as days pass) and its like ratio, times its

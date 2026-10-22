@@ -386,6 +386,12 @@ class Chess(Sport):
             side = "black"
         return DRAW if side == DRAW else str((state.get(side) or {}).get("id") or "") or None
 
+    def resettles(self, ask: str, state: dict[str, Any]) -> bool:
+        """Not from a mini-match's board: its question was settled once its board was over, no next game having come
+        within its source's wait for one, so a game after that (a longer break) makes a match that settled answer wasn't
+        of, and what its fans were told stands. One game's result corrected settles it again."""
+        return not state.get("match")
+
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         scored = [p for p in (_points(r.get("result", "")) for r in items) if p]
         if not scored:

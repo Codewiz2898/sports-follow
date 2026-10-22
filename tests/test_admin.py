@@ -479,6 +479,20 @@ def test_a_blocked_accounts_code_signs_nobody_in(api, monkeypatch):
 # ---------------------------------------------------------------- the Feed tab
 
 
+def test_putting_back_a_video_fans_reports_took_out_is_the_panels_alone(api, password, monkeypatch):
+    """BUG-100: Put back (feed.put_back) serves a video fans' apps took from every Feed again: only a signed-in admin
+    may."""
+    put: list[int] = []
+    monkeypatch.setattr(server.feed, "put_back", lambda db, row_id: put.append(row_id) or ("youtube:abcdefghijk" if row_id == 5 else None))
+    assert api.call("POST", "/api/admin/feed/5/put-back").status_code == 401 and put == []
+    cookie = admin_cookie(sign_in(api))
+    api.redis.data["feed:unplayable:votes:youtube:abcdefghijk"] = {"81.2.70.1", "81.2.70.2", "81.2.70.3"}
+    answer = api.call("POST", "/api/admin/feed/5/put-back", headers=cookie)
+    assert answer.status_code == 200 and answer.json() == {"put_back": "youtube:abcdefghijk"} and put == [5]
+    assert "feed:unplayable:votes:youtube:abcdefghijk" not in api.redis.data  # its votes start again
+    assert api.call("POST", "/api/admin/feed/6/put-back", headers=cookie).status_code == 404  # no such candidate
+
+
 def test_a_news_feeds_trust_is_set_from_the_panel_as_a_video_channels_is(api, password, monkeypatch):
     """BUG-123: the Feed tab lists the publishers' news feeds beside the video channels, each with a Trust control,
     but a feed is named by its address, which no route took in its path and the check of a channel id refused. The

@@ -461,6 +461,55 @@ async def _tell_devices(fan: str = Depends(fan_id)) -> AsyncIterator[None]:
 
 TellsDevices = [Depends(_tell_devices, scope="function")]  # its word goes once the route's work is done, before the answer
 
+# Follows (of a player, a team or a game) one fan, and one client address, make an hour. A cookie is free, and a follow
+# without one is a new fan's, so a fan's own caps (PLAYERS_MAX, teams.MAX, matches.MAX) don't bound a script's
+# (BUG-325). An IPv6 /64 is a household, and its /48 (_network) a home's or an office's every /64 at once; an IPv4
+# address can be a phone network's, shared by thousands of its fans (carrier-grade NAT), so it holds more, as with
+# STREAMS_PER_IPV4, and so does a /48, which a phone network may share among its subscribers too.
+FOLLOWS_PER_FAN = 150  # room to fill all three caps in the hour
+FOLLOWS_PER_ADDRESS = 300  # an IPv6 /64's
+FOLLOWS_PER_IPV6_48 = 1200  # an IPv6 /48's, all its /64s together
+FOLLOWS_PER_IPV4 = 1200  # an IPv4 address's
+FOLLOWS_HOUR = 3600
+FOLLOWS_FROM_NETWORK = "A lot of follows have come from your network this hour. Try again later."
+
+
+async def _take_follows(fan: str, address: str | None) -> list[str]:
+    """Count a follow against the fan's hour and their address's: FOLLOWS_PER_FAN; an IPv4 address's FOLLOWS_PER_IPV4,
+    or an IPv6 client's /64's FOLLOWS_PER_ADDRESS and its /48's FOLLOWS_PER_IPV6_48. Past any, nothing is counted and
+    the fan gets a 429. Returns the counts taken, for give_back_research to give back should the follow not be made."""
+    hour = int(time.time() // FOLLOWS_HOUR)
+    limits = [(f"follows:fan:{fan}:{hour}", FOLLOWS_PER_FAN, "You've followed a lot this hour. Try again later.")]
+    if address and ":" in address:
+        limits += [(f"follows:address:{address}:{hour}", FOLLOWS_PER_ADDRESS, FOLLOWS_FROM_NETWORK),
+                   (f"follows:network:{_network(address)}:{hour}", FOLLOWS_PER_IPV6_48, FOLLOWS_FROM_NETWORK)]
+    elif address:
+        limits.append((f"follows:address:{address}:{hour}", FOLLOWS_PER_IPV4, FOLLOWS_FROM_NETWORK))
+    taken: list[str] = []
+    for key, limit, refusal in limits:
+        used = await state["redis"].incr(key)
+        taken.append(key)
+        await state["redis"].expire(key, 2 * FOLLOWS_HOUR)
+        if used > limit:
+            await give_back_research(taken)
+            raise HTTPException(429, refusal)
+    return taken
+
+
+async def _follow_counted(request: Request, fan: str = Depends(fan_id)) -> AsyncIterator[None]:
+    """For a route that follows a player, a team or a game (CountsFollow): one follow, counted against the fan's hour and
+    their address's (_take_follows) before the route runs. A follow refused (an error), by these or for anything else,
+    is given back: it isn't counted."""
+    taken = await _take_follows(fan, client_address(request))
+    try:
+        yield
+    except BaseException:
+        await give_back_research(taken)
+        raise
+
+
+CountsFollow = [Depends(_follow_counted, scope="function")]
+
 
 def _fan(request: Request, response: Response, signed_in: accounts.Signed | None, make: bool | None = None) -> str:
     """The fan, as fan_id says. A device without a fan of its own keeps a new one (its cookie) only from a request
@@ -719,11 +768,12 @@ async def match_page(system: str, game: str, fan: str = Depends(fan_id)) -> dict
     return {**page, "refreshing": ask}  # a read is on its way, or was asked for within the minute
 
 
-@app.put("/api/match/{system}/{game}/follow", dependencies=TellsDevices)
+@app.put("/api/match/{system}/{game}/follow", dependencies=[*TellsDevices, *CountsFollow])
 def follow_match(system: str, game: str, fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Follow a game by itself (matches.py): its key moments, from both sides, reach this fan until it ends.
     A game no source has named here is a 404, so a made-up address makes no follow and no poll; one that's
-    over, or that no running source can poll, a 409; a fan following matches.MAX games already, a 429."""
+    over, or that no running source can poll, a 409; a fan following matches.MAX games already, or past the hour's
+    follows (CountsFollow), a 429."""
     try:
         event_id = matches.follow(db, fan, system, game)
     except matches.Refused as refused:
@@ -991,11 +1041,11 @@ async def _read_team(system: str, team_id: int) -> bool:
         return False
 
 
-@app.put("/api/teams/{team_id}/follow", dependencies=TellsDevices)
+@app.put("/api/teams/{team_id}/follow", dependencies=[*TellsDevices, *CountsFollow])
 async def follow_team(team_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any]:
     """Follow a team (teams.py): each of its games' moments, from both sides, reach this fan by their level, and
     its results from its side. No such team, or one of a sport turned off, is a 404; one whose source isn't
-    running, a 409; a fan following teams.MAX teams already, a 429."""
+    running, a 409; a fan following teams.MAX teams already, or past the hour's follows (CountsFollow), a 429."""
 
     def save(db: Session) -> str | None:
         team = teams.follow(db, fan, team_id)
@@ -1128,7 +1178,8 @@ async def _follow_row(row: dict[str, Any], fan: str, address: str | None, turns:
 async def campaign_follow(request: Request, slug: str, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
     """Follow a whole team in one tap ({"team": its id}: every player on its roster), or all of the campaign's
     own players ({"players": true}). Each is an ordinary follow with key alerts, of a player a running source
-    has, so none is an AI research. Returns the players now followed and how many couldn't be."""
+    has, so none is an AI research; all of them are one follow in the hour's (_take_follows: past them, a 429).
+    Returns the players now followed and how many couldn't be."""
     shown = await in_db(campaigns.page, _campaign_slug(slug), fan)
     if shown is None:
         raise HTTPException(404, "No such page.")
@@ -1142,8 +1193,14 @@ async def campaign_follow(request: Request, slug: str, body: dict = Body(...), f
         raise HTTPException(400, "Say which: a team, or the players.")
     address = client_address(request)
     already = [r["player_id"] for r in rows if r.get("following") and r.get("player_id")]
+    to_follow = [r for r in rows if not (r.get("following") and r.get("player_id"))]
+    # One follow in the hour's, however many players: a campaign's are an admin's few, and a launch link's first tap
+    # from a phone network's address mustn't use up its hour. Given back if none could be followed.
+    taken = await _take_follows(fan, address) if to_follow else []
     turns = asyncio.Semaphore(CAMPAIGN_FOLLOWS_AT_ONCE)
-    done = await asyncio.gather(*(_follow_row(r, fan, address, turns) for r in rows if not (r.get("following") and r.get("player_id"))))
+    done = await asyncio.gather(*(_follow_row(r, fan, address, turns) for r in to_follow))
+    if all(pid is None for pid in done):
+        await give_back_research(taken)
     followed = already + [pid for pid in done if pid is not None]
     return {"player_ids": list(dict.fromkeys(followed)), "failed": sum(pid is None for pid in done)}
 
@@ -1421,7 +1478,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
     return player_id
 
 
-@app.post("/api/follows", dependencies=TellsDevices)
+@app.post("/api/follows", dependencies=[*TellsDevices, *CountsFollow])
 async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
     from .config import RESEARCH
 
@@ -2139,18 +2196,36 @@ def admin_channel_trust(body: dict = Body(...), db: Session = Depends(get_db)) -
 
 
 @app.put("/api/admin/feed/{row_id}", dependencies=AdminOnly)
-def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[str, Any]:
-    """An admin's word on a candidate ({"review": "approved" | "hidden" | "pinned" | null}), over the judge's."""
+async def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[str, Any]:
+    """An admin's word on a candidate ({"review": "approved" | "hidden" | "pinned" | null}), over the judge's. Fans'
+    apps' votes that its video won't play start again from none (feed.unplayable_votes_key): approving or pinning one
+    their reports took from every Feed puts it back (the Feed tab's list of them), and after that's taken back it takes
+    as many networks as ever to take it out again, not one more."""
     said = body.get("review")
     try:
-        found = admin.review_candidate(row_id, said if isinstance(said, str) or said is None else "?")
+        found = await run_in_threadpool(admin.review_candidate, row_id, said if isinstance(said, str) or said is None else "?")
     except ValueError:
         raise HTTPException(400, "Review is approved, hidden, pinned, or null.") from None
     if found is None:
         raise HTTPException(404, "There's no such candidate.")
+    if video := await in_db(feed.video_of_row, row_id):
+        await state["redis"].delete(feed.unplayable_votes_key(video))
     admin_log.info("admin panel: feed candidate %s %s", row_id, said or "review taken back")
     return found
 
+
+
+@app.post("/api/admin/feed/{row_id}/put-back", dependencies=AdminOnly)
+async def admin_put_back(row_id: RowId) -> dict[str, Any]:
+    """The video a candidate is plays after all, says an admin, from the Feed tab's list of those fans' apps took out:
+    every player's row of it is served again as the judge and any admin's word on it say, with nothing approved
+    (feed.put_back), and fans' apps' votes on it start again from none."""
+    video = await in_db(feed.put_back, row_id)
+    if video is None:
+        raise HTTPException(404, "There's no such candidate.")
+    await state["redis"].delete(feed.unplayable_votes_key(video))
+    admin_log.info("admin panel: feed video %s put back", video)
+    return {"put_back": video}
 
 
 @app.get("/api/admin/users", dependencies=AdminOnly)
@@ -2600,32 +2675,34 @@ async def feed_unplayable(player_id: RowId, item_id: str, request: Request, body
     """The fan's app says this video of the player's feed won't play inside it: the video's own player refused it.
     It leaves their Feed at once (feed.said_unplayable), and when the app is in the feed's country ({"timezone": the
     device's}, feed.counts_everywhere) it's their network's vote on whether it leaves every fan's: once
-    feed.UNPLAYABLE_VOTES networks have said so, it does (feed.unplayable; "marked"), and an admin approving or
-    pinning it brings it back. The app opens it on its site instead. Saying it again changes nothing.
-    A fan says so only so many times an hour, and an address and everyone together vote only so many times: past
-    any, a 429. Each count is taken before the report is acted on, so reports arriving together can't all pass, and
-    given back when it's refused; the address's and everyone's too when it isn't a new vote, so junk ids and a video
-    said of again don't use up what a real one needs."""
-    refused = "That's a lot of videos that won't play for one hour. Try again later."
+    feed.UNPLAYABLE_VOTES networks have said so, it does (feed.unplayable; "marked"). The admin panel's Feed tab lists
+    it, and an admin approving or pinning it brings it back. The app opens it on its site instead. Saying it again
+    changes nothing.
+    A fan votes only so many times an hour, and so does an address: past either, the video still leaves the fan's
+    Feed, and only their vote is dropped. Each count is taken before the report is acted on, so reports arriving
+    together can't all pass, and given back when it isn't a vote; the address's too when it isn't a new one, so junk
+    ids and a video said of again don't use up what a real one needs."""
     redis = state["redis"]
     address = client_address(request)
-    limits = [(f"feed:unplayable:fan:{fan}", feed.UNPLAYABLE_PER_FAN), ("feed:unplayable:all", feed.UNPLAYABLE_PER_HOUR)]
+    limits = [(f"feed:unplayable:fan:{fan}", feed.UNPLAYABLE_PER_FAN)]
     if address:
-        limits.insert(1, (f"feed:unplayable:address:{address}", feed.UNPLAYABLE_PER_ADDRESS))
+        limits.append((f"feed:unplayable:address:{address}", feed.UNPLAYABLE_PER_ADDRESS))
 
     async def give_back(keys: list[str]) -> None:
         for key in keys:
             await redis.eval(GIVE_BACK, 1, key)
 
     taken: list[str] = []
+    votes_now = True
     for key, limit in limits:
         used = await redis.incr(key)
         taken.append(key)
         await redis.expire(key, 3600, nx=True)  # the hour's end, set once
-        if used > limit:
+        if used > limit:  # their Feed still loses it; only the vote goes
             await give_back(taken)
-            raise HTTPException(429, refused)
-    shared = taken[1:]  # the address's and everyone's
+            taken, votes_now = [], False
+            break
+    shared = taken[1:]  # the address's
     try:
         video = await in_db(feed.said_unplayable, fan, player_id, item_id)
     except ValueError as exc:
@@ -2634,14 +2711,17 @@ async def feed_unplayable(player_id: RowId, item_id: str, request: Request, body
     except LookupError as exc:
         await give_back(shared)
         raise HTTPException(404, str(exc)) from exc
-    votes = f"feed:unplayable:votes:{video}"
-    # An admin vouched for it, the app is abroad (where it may not play when it does here), or this network said so before.
-    if video is None or not feed.counts_everywhere((body or {}).get("timezone")) or not await redis.sadd(votes, _voter(address, fan)):
+    answer: dict[str, Any] = {"item_id": item_id, "unplayable": True, "marked": False}
+    # Past an hour's votes, an admin vouched for it, the app is abroad (where it may not play when it does here), or
+    # this network said so before.
+    if (not votes_now or video is None or not feed.counts_everywhere((body or {}).get("timezone"))
+            or not await redis.sadd(votes := feed.unplayable_votes_key(video), _voter(address, fan))):  # fmt: skip
         await give_back(shared)
-        return {"item_id": item_id, "unplayable": True, "marked": False}
+        return answer
     await redis.expire(votes, feed.UNPLAYABLE_VOTES_FOR)
-    marked = await redis.scard(votes) >= feed.UNPLAYABLE_VOTES and await in_db(feed.unplayable, player_id, item_id)
-    return {"item_id": item_id, "unplayable": True, "marked": marked}
+    if await redis.scard(votes) >= feed.UNPLAYABLE_VOTES:
+        answer["marked"] = await in_db(feed.unplayable, video)
+    return answer
 
 
 @app.get("/api/me/feed")

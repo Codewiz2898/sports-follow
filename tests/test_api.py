@@ -523,6 +523,84 @@ def test_a_fan_follows_at_most_so_many_players(api, a_source, monkeypatch):
     assert not [s for s in api.statements if isinstance(s, Insert) and s.table.name == "follow" and _param(s, "fan_id") == "fan" and _param(s, "player_id") != 1]
 
 
+def test_follows_are_limited_per_fan_and_per_address_and_a_refused_one_isnt_counted(api, monkeypatch):
+    # BUG-325: following a player already here asks no source, so nothing but each fan's own caps limited it, and a
+    # follow without a cookie is a new fan's.
+    monkeypatch.setattr(server, "FOLLOWS_PER_FAN", 3, raising=False)
+    monkeypatch.setattr(server, "FOLLOWS_PER_ADDRESS", 4, raising=False)
+    monkeypatch.setattr(server, "FOLLOWS_PER_IPV4", 6, raising=False)
+    monkeypatch.setattr(server, "FOLLOWS_PER_IPV6_48", 6, raising=False)
+
+    def follow(fan: str | None, address: str = PUBLIC, player_id: int = 1) -> httpx.Response:
+        return api.call("POST", "/api/follows", fan=fan, address=address, body={"player_id": player_id})
+
+    answers = [follow("fan") for _ in range(4)]
+    assert [a.status_code for a in answers] == [200, 200, 200, 429]
+    assert answers[-1].json()["detail"] == "You've followed a lot this hour. Try again later."
+    # No cookie: a new fan each time, from one IPv4 address, which may be a whole phone network's: six from it an hour.
+    answers = [follow(None) for _ in range(4)]
+    assert [a.status_code for a in answers] == [200, 200, 200, 429]
+    assert answers[-1].json()["detail"] == "A lot of follows have come from your network this hour. Try again later."
+    # An IPv6 /64 is one household: fewer, whichever of its addresses.
+    assert [follow(None, "2a00:1450:4009:81f::200e").status_code for _ in range(4)] + [follow(None, "2a00:1450:4009:81f::1").status_code] == [200] * 4 + [429]
+    # And its /48 is a home's or an office's every /64 at once: another /64 of it has the /48's room left, no more.
+    answers = [follow(None, "2a00:1450:4009:82f::1") for _ in range(3)]
+    assert [a.status_code for a in answers] == [200, 200, 429]
+    assert answers[-1].json()["detail"] == "A lot of follows have come from your network this hour. Try again later."
+    assert follow(None, "2a00:1450:4010:81f::1").status_code == 200  # another /48
+    # A follow refused, by a limit or for anything else (no such player), isn't counted: these leave all three.
+    for _ in range(5):
+        assert follow("someone", "81.2.69.143", player_id=999).status_code == 404
+    assert [follow("someone", "81.2.69.143").status_code for _ in range(4)] == [200, 200, 200, 429]
+    counted = {}
+    for key, n in api.redis.data.items():
+        kind, _, rest = key.removeprefix("follows:").partition(":")
+        counted[kind, rest.rsplit(":", 1)[0]] = n  # follows:<fan or address>:<who>:<hour>
+    assert {who: counted[who] for who in (("fan", "fan"), ("address", PUBLIC), ("fan", "someone"), ("address", "81.2.69.143"), ("network", "2a00:1450:4009::/48"))} == {
+        ("fan", "fan"): 3, ("address", PUBLIC): 6, ("fan", "someone"): 3, ("address", "81.2.69.143"): 3, ("network", "2a00:1450:4009::/48"): 6}
+    # Another address, and another fan, aren't held up.
+    assert follow("another", "81.2.69.144").status_code == 200
+
+
+def test_following_a_team_a_game_or_a_campaigns_players_counts_in_the_same_hour(api, monkeypatch):
+    # BUG-325: a team's fans and a game's are planned with a player's, so their follows count in the same hour.
+    from sports_follow import campaigns, matches, teams
+
+    monkeypatch.setattr(server, "FOLLOWS_PER_FAN", 6, raising=False)
+    monkeypatch.setattr(teams, "follow", lambda db, fan, team_id: SimpleNamespace(system="pitch"))
+    monkeypatch.setattr(teams, "stale", lambda team: False)
+    monkeypatch.setattr(matches, "follow", lambda db, fan, system, game: 5)
+    gone = {**WORLDS, "teams": [{**WORLDS["teams"][0], "players": WORLDS["teams"][0]["players"][3:]}]}  # Gone and Broken alone
+    monkeypatch.setattr(campaigns, "page", lambda db, slug, fan: gone if fan == "unlucky" else WORLDS)
+
+    async def follow_athlete(body, fan, address):
+        if fan == "unlucky":
+            raise server.HTTPException(404, "That athlete isn't in the source any more.")
+        return int(body["athlete_id"])
+
+    monkeypatch.setattr(server, "_follow_athlete", follow_athlete)
+
+    def follows(fan: str) -> list[int]:
+        return [api.call("PUT", "/api/teams/1/follow", fan=fan, address=PUBLIC).status_code, api.call("PUT", "/api/match/pitch/100/follow", fan=fan, address=PUBLIC).status_code]
+
+    def roster(fan: str) -> httpx.Response:
+        return api.call("POST", "/api/campaigns/worlds/follow", fan=fan, address=PUBLIC, body={"team": "126061"})
+
+    assert follows("fan") == [200, 200]
+    # A whole team's roster in one tap is one follow, however many players (Zeus, Oner, Gone and Broken; Faker's followed).
+    got = roster("fan")
+    assert got.status_code == 200 and got.json() == {"player_ids": [3, 4, 10, 11, 12], "failed": 0}
+    assert follows("fan") == [200, 200]
+    assert roster("fan").status_code == 200  # the sixth
+    refused = roster("fan")
+    assert (refused.status_code, refused.json()["detail"]) == (429, "You've followed a lot this hour. Try again later.")
+    assert follows("fan") == [429, 429]
+    # One that couldn't follow any of them isn't counted.
+    assert roster("unlucky").json() == {"player_ids": [], "failed": 2}
+    assert follows("unlucky") + follows("unlucky") + follows("unlucky") == [200] * 6
+    assert follows("unlucky") == [429, 429]
+
+
 def test_a_turned_off_games_pro_isnt_previewed_or_followed_by_their_source_id(api, monkeypatch):
     # BUG-097: a source of several games runs while any of them does, so a pro of a game turned off could still be
     # previewed and followed by their id there, and their page made and polled.
@@ -1955,12 +2033,14 @@ def test_league_invites_are_looked_up_so_many_times_an_address_and_opened_only_b
     assert opened[-2:] == [("38KWAS", False), ("38KWAS", True)]  # opened: by the fan who came with their cookie only
 
 
-def test_a_video_that_wont_play_inside_the_app_is_said_so_of_so_many_an_hour_and_odd_ones_are_refused_plainly(api, monkeypatch):
+def test_a_video_that_wont_play_inside_the_app_is_voted_on_so_many_times_an_hour_and_odd_ones_are_refused_plainly(api, monkeypatch):
     """A fan's app says a Feed video's player refused it (BHA-380): it leaves their Feed (feed.said_unplayable), and
     it's their network's vote on whether it leaves everyone's (BHA-422): feed.UNPLAYABLE_VOTES networks saying so take
-    it out of every fan's (feed.unplayable). A fan says so only so many times an hour, and an address and everyone
-    together vote only so many times. Junk ids, a video an admin vouched for and a network's word again count
+    it out of every fan's at once (feed.unplayable), and nothing is queued: a report never asks the video's source
+    (BUG-100). A fan votes only so many times an hour, and an address too: past either, the video still leaves their
+    Feed, and only the vote is dropped. Junk ids, a video an admin vouched for and a network's word again count
     against the fan alone."""
+    said_of: list[str] = []
     marked: list[str] = []
 
     def said(db, fan, player_id, item):
@@ -1968,41 +2048,45 @@ def test_a_video_that_wont_play_inside_the_app_is_said_so_of_so_many_an_hour_and
             raise ValueError("No such item.")
         if item == "0" * 16:
             raise LookupError("That video isn't in this player's feed.")
+        said_of.append(item)
         return None if item == "f" * 16 else f"youtube:{item}"  # f…f: an admin vouched for it
-
-    def unplayable(db, player_id, item):
-        marked.append(item)
-        return True
 
     def say(item: str, fan: str = "fan", address: str = PUBLIC) -> httpx.Response:
         return api.call("POST", f"/api/players/7/feed/{item}/unplayable", fan=fan, address=address, body={"timezone": "Asia/Kolkata"})  # an app in India
 
     monkeypatch.setattr(feed, "said_unplayable", said, raising=False)
-    monkeypatch.setattr(feed, "unplayable", unplayable)
+    monkeypatch.setattr(feed, "unplayable", lambda db, video: marked.append(video) or True)
     first = say("0123456789abcdef")
     assert first.status_code == 200 and first.json() == {"item_id": "0123456789abcdef", "unplayable": True, "marked": False}  # their Feed's alone
     assert say("0123456789abcdef", fan="new-cookie").json()["marked"] is False  # the same network again
     assert say("not-an-item").status_code == 422 and say("0" * 16).status_code == 404 and say("f" * 16).json()["marked"] is False
     for _ in range(feed.UNPLAYABLE_PER_FAN - 4):
         assert say("0123456789abcdef").status_code == 200
-    assert say("0123456789abcdef").status_code == 429  # the fan's hour
-    assert api.redis.data[f"feed:unplayable:address:{PUBLIC}"] == api.redis.data["feed:unplayable:all"] == 1  # one vote
-    # Other networks: with enough of them, it leaves every fan's Feed.
+    past = say("1" * 16)  # past the fan's hour: it still leaves their Feed, and isn't a vote
+    assert past.status_code == 200 and past.json()["marked"] is False and said_of[-1] == "1" * 16
+    assert "feed:unplayable:votes:youtube:1111111111111111" not in api.redis.data
+    assert api.redis.data["feed:unplayable:fan:fan"] == feed.UNPLAYABLE_PER_FAN  # the dropped vote given back
+    assert api.redis.data[f"feed:unplayable:address:{PUBLIC}"] == 1  # one vote
+    # Other networks: with enough of them, it leaves every fan's Feed at once.
     for n in range(feed.UNPLAYABLE_VOTES - 1):
         assert say("0123456789abcdef", fan=f"elsewhere-{n}", address=f"81.2.70.{n + 1}").json()["marked"] is (n == feed.UNPLAYABLE_VOTES - 2)
-    assert marked == ["0123456789abcdef"]
+    assert marked == ["youtube:0123456789abcdef"] and api.queue.jobs == []
     # Other fans on the same network, until the address has voted as many times as an address may.
     for n in range(feed.UNPLAYABLE_PER_ADDRESS - 1):
         assert say(f"{n + 1:016x}", fan=f"fan-{n}").status_code == 200
-    assert say(f"{999:016x}", fan="new-fan").status_code == 429
-    assert api.redis.data[f"feed:unplayable:address:{PUBLIC}"] == feed.UNPLAYABLE_PER_ADDRESS  # the refused one given back
+    past = say(f"{999:016x}", fan="new-fan")  # past the address's hour: likewise
+    assert past.status_code == 200 and past.json()["marked"] is False and said_of[-1] == f"{999:016x}"
+    assert f"feed:unplayable:votes:youtube:{999:016x}" not in api.redis.data
+    assert api.redis.data[f"feed:unplayable:address:{PUBLIC}"] == feed.UNPLAYABLE_PER_ADDRESS  # the dropped one given back
 
 
 def test_a_burst_of_wont_play_reports_at_once_cant_pass_an_addresss_limit(api, monkeypatch):
-    """BHA-422: each count is taken before a report is acted on, and given back when it's refused, so reports that
-    arrive together can't all find the count under the limit and all pass."""
-    monkeypatch.setattr(feed, "said_unplayable", lambda db, fan, player_id, item: f"youtube:{item}", raising=False)
-    monkeypatch.setattr(feed, "unplayable", lambda db, player_id, item: True)
+    """BHA-422: each count is taken before a report is acted on, and given back when it isn't a vote, so reports that
+    arrive together can't all find the count under the limit and all vote. Each still takes its video out of its own
+    fan's Feed (BUG-100)."""
+    said_of: list[str] = []
+    monkeypatch.setattr(feed, "said_unplayable", lambda db, fan, player_id, item: said_of.append(item) or f"youtube:{item}", raising=False)
+    monkeypatch.setattr(feed, "unplayable", lambda db, video: True)
     key = f"feed:unplayable:address:{PUBLIC}"
     api.redis.data[key] = feed.UNPLAYABLE_PER_ADDRESS - 1  # one short of the hour's limit
 
@@ -2014,5 +2098,19 @@ def test_a_burst_of_wont_play_reports_at_once_cant_pass_an_addresss_limit(api, m
                                           for n in range(20)))  # fmt: skip
 
     answers = asyncio.run(burst())
-    assert sorted(r.status_code for r in answers) == [200] + [429] * 19
+    assert [r.status_code for r in answers] == [200] * 20 and len(said_of) == 20
     assert api.redis.data[key] == feed.UNPLAYABLE_PER_ADDRESS
+    assert len([k for k in api.redis.data if k.startswith("feed:unplayable:votes:")]) == 1  # one vote
+
+
+def test_wont_play_votes_have_no_hourly_cap_for_all_fans_together(api, monkeypatch):
+    """BUG-100: a cap on every fan's votes together, once used up, refused real fans' reports for the rest of the hour.
+    Only a fan's hour and an address's are counted."""
+    monkeypatch.setattr(feed, "said_unplayable", lambda db, fan, player_id, item: f"youtube:{item}", raising=False)
+    monkeypatch.setattr(feed, "unplayable", lambda db, video: True)
+    for n in range(250):
+        answer = api.call("POST", f"/api/players/7/feed/{n:016x}/unplayable", fan=f"fan-{n}", address=f"81.2.{70 + n // 200}.{n % 200 + 1}",
+                          body={"timezone": "Asia/Kolkata"})  # fmt: skip
+        assert answer.status_code == 200, n
+    assert len([k for k in api.redis.data if k.startswith("feed:unplayable:votes:")]) == 250  # every one a vote
+    assert "feed:unplayable:all" not in api.redis.data

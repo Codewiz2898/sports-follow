@@ -30,14 +30,14 @@ import logging
 import os
 import sys
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import replace
 from datetime import datetime, time as clock, timedelta, timezone
 from functools import lru_cache, partial
-from itertools import zip_longest
+from itertools import islice, zip_longest
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -55,6 +55,7 @@ if TYPE_CHECKING:
     from . import livecards
 
 log = logging.getLogger("sports_follow.notify")
+T = TypeVar("T")
 
 VAPID_KEY = Path(os.environ.get("SPORTS_FOLLOW_VAPID_KEY", Path.home() / ".config" / "sports-follow" / "vapid-private.pem"))
 
@@ -71,6 +72,9 @@ MAX_FAILURES = 5
 # the noise rules for moments (alerts.plan) don't count them as the game's pushes, nor their lines as its story.
 CALLS = ("pick", "called")
 MAX_DEVICES = 10  # per fan: subscribing another drops their oldest, and a push goes to the newest this many
+# Fans (or their devices) a query names at once: Postgres takes at most 65,535 values a statement, and a player or a
+# team can have more fans than that, so a query of theirs goes a part at a time (chunks), each fan in one (BUG-325).
+FANS_AT_ONCE = 10_000
 SWEEP_AFTER = 60  # seconds a batch has to be claimed by the sender it was handed to before the tick takes it
 # Redis: each moment left to its board's other side to tell (alerts.voiced), by id: the fans it was left for, when it
 # was found and its kind, till that side says it or it's sent them late (send_held).
@@ -265,7 +269,7 @@ def _send_safely(moment_ids: list[int]) -> None:
 
 
 def pending(now: datetime | None = None) -> list[int]:
-    """Moments no sender claimed, for the tick to send: older than SWEEP_AFTER, young enough to matter."""
+    """Moments no sender claimed, for the tick to send (sweep): older than SWEEP_AFTER, young enough to matter."""
     now = now or datetime.now(timezone.utc)
     with session() as db:
         return list(db.scalars(
@@ -274,6 +278,38 @@ def pending(now: datetime | None = None) -> list[int]:
             .order_by(Moment.id)
             .limit(500)
         ))
+
+
+def sweep(moment_ids: list[int], now: datetime | None = None) -> int:
+    """Send the moments the tick found unclaimed (pending), as one batch. Where that fails, each game's moments go as a
+    batch of their own, as its poll's would have (a player's moments of no game, each player's): one that can't be
+    planned is logged and left for the next sweep, and no longer holds back every other game's, every sweep, till
+    they're too old to send (BUG-325). Returns how many devices took a push."""
+    try:
+        return send(moment_ids, now)
+    except Exception:
+        log.exception("moments %s: not sent as one batch, so a game's at a time", moment_ids)
+    with session() as db:
+        games: dict[tuple[int | None, int | None], list[int]] = {}
+        for moment_id, event_id, player_id in db.execute(select(Moment.id, Moment.event_id, Moment.player_id).where(Moment.id.in_(moment_ids)).order_by(Moment.id)):
+            games.setdefault((event_id, None if event_id else player_id), []).append(moment_id)
+    if len(games) < 2:
+        return 0  # all one game's, which just failed: left for the next sweep
+    sent = 0
+    for ids in games.values():
+        try:
+            sent += send(ids, now)
+        except Exception:
+            log.exception("moments %s: not sent, left for the next sweep", ids)
+    return sent
+
+
+def chunks(values: Iterable[T]) -> Iterator[list[T]]:
+    """These values (fan ids, device ids), FANS_AT_ONCE at a time, for a query that names them (an IN list): Postgres
+    takes only so many a statement, and a player can have more fans. None for none."""
+    left = iter(values)
+    while part := list(islice(left, FANS_AT_ONCE)):
+        yield part
 
 
 def send(moment_ids: list[int], now: datetime | None = None) -> int:
@@ -357,7 +393,8 @@ def _deliver(jobs: list[tuple[int, tuple, dict[str, Any], int, str]], items: lis
 def _proven(device_ids: set[int]) -> set[int]:
     """Those of these devices whose last push went through (and so go by _wire)."""
     with session() as db:
-        return set(db.scalars(select(PushSubscription.id).where(PushSubscription.id.in_(device_ids), PushSubscription.failures == 0, PushSubscription.last_ok_at.is_not(None))))
+        return {d for some in chunks(device_ids)
+                for d in db.scalars(select(PushSubscription.id).where(PushSubscription.id.in_(some), PushSubscription.failures == 0, PushSubscription.last_ok_at.is_not(None)))}
 
 
 def _fair(jobs: list[tuple[int, tuple, dict[str, Any], int, str]]) -> list[tuple[int, tuple, dict[str, Any], int, str]]:
@@ -421,7 +458,7 @@ def send_held(moment_ids: list[int], now: datetime | None = None) -> int:
     except Exception:
         log.warning("moments %s held for a board's other side: Redis didn't say", moment_ids, exc_info=True)
         return 0
-    jobs, late = [], []
+    jobs, late, kept = [], [], set()
     with session() as db:
         for item in on_boards(db, db.scalars(select(Moment).where(Moment.id.in_(list(entries))).order_by(Moment.id)).all()):
             twins = [_key(e, item.voice, f"{item.kind}:{item.detail}", edition_of(db, e)) for e in item.fixtures] if item.voice is not None else []
@@ -429,15 +466,23 @@ def send_held(moment_ids: list[int], now: datetime | None = None) -> int:
                 continue  # its other side said it
             told = replace(item, voice=None)  # told by its own side now
             fans = set(entries[item.id]["fans"])
-            fans -= set(db.scalars(select(Notification.fan_id).where(Notification.fan_id.in_(fans), Notification.moment_ids.contains([item.id]), Notification.delivered > 0)))
-            jobs += _plan(db, [told], now, _taken_back(db, [told]), fans=fans) if fans else []
+            fans -= {fan for some in chunks(fans)
+                     for fan in db.scalars(select(Notification.fan_id).where(Notification.fan_id.in_(some), Notification.moment_ids.contains([item.id]), Notification.delivered > 0))}
+            try:
+                with db.begin_nested():  # one that can't be planned is kept for the next tick, and holds back no other (BUG-325)
+                    jobs += _plan(db, [told], now, _taken_back(db, [told]), fans=fans) if fans else []
+            except Exception:
+                log.exception("moment %s held for a board's other side: not sent, kept for the next tick", item.id)
+                kept.add(item.id)
+                continue
             late.append(told)
     sent = _deliver(jobs, late, now)
-    if entries:  # only now: one that went down before this is sent again, never not at all
+    done = [str(m) for m in entries if m not in kept]
+    if done:  # only now: one that went down before this is sent again, never not at all
         try:
-            redis.hdel(HELD, *[str(m) for m in entries])
+            redis.hdel(HELD, *done)
         except Exception:
-            log.warning("moments %s held for a board's other side: couldn't forget them", list(entries), exc_info=True)
+            log.warning("moments %s held for a board's other side: couldn't forget them", done, exc_info=True)
     return sent
 
 
@@ -563,26 +608,31 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
     fans = (set(levels) | set(games)) & fans if fans is not None else set(levels) | set(games)
     if games:
         items = for_games(db, items)  # whom each player moment is about, and where, to tell a game's own of the same
+    # Each fan's devices, mutes and earlier pushes are looked up a part of them at a time (chunks): a star's followers
+    # are more than one query can name (BUG-325).
     devices: dict[str, list[PushSubscription]] = {}
-    for d in db.scalars(select(PushSubscription).where(PushSubscription.fan_id.in_(fans), PushSubscription.transport.in_(transports())).order_by(PushSubscription.id.desc())) if fans else []:
-        mine = devices.setdefault(d.fan_id, [])
-        # However many are stored, one fan's fan-out can't fill the push threads every other fan waits on.
-        if len(mine) < MAX_DEVICES:
-            mine.append(d)
+    for some in chunks(fans):
+        for d in db.scalars(select(PushSubscription).where(PushSubscription.fan_id.in_(some), PushSubscription.transport.in_(transports())).order_by(PushSubscription.id.desc())):
+            mine = devices.setdefault(d.fan_id, [])
+            # However many are stored, one fan's fan-out can't fill the push threads every other fan waits on.
+            if len(mine) < MAX_DEVICES:
+                mine.append(d)
     if not devices:
         return []
     # A game under several fixtures is muted, and its story told, under any of them (alerts.plan).
     fixtures = events | {e for i in items for e in i.fixtures}
     muted: dict[str, set[int]] = {}
-    for fan, event_id in db.execute(select(NotificationMute.fan_id, NotificationMute.event_id).where(NotificationMute.fan_id.in_(devices), NotificationMute.event_id.in_(fixtures))) if events else []:
-        muted.setdefault(fan, set()).add(event_id)
+    for some in chunks(devices) if events else []:
+        for fan, event_id in db.execute(select(NotificationMute.fan_id, NotificationMute.event_id).where(NotificationMute.fan_id.in_(some), NotificationMute.event_id.in_(fixtures))):
+            muted.setdefault(fan, set()).add(event_id)
     sent: dict[str, list[alerts.Sent]] = {}
-    earlier = select(Notification).where(Notification.fan_id.in_(devices), Notification.kind.not_in(CALLS), or_(Notification.created_at >= now - timedelta(hours=1), Notification.event_id.in_(fixtures), and_(Notification.event_id.is_(None), Notification.player_id.in_(players))))
     began = editions(db, fixtures)
-    for n in db.scalars(earlier):
-        if n.event_id in began and n.created_at < began[n.event_id]:
-            continue  # the game called off before this one, played again under its fixture (editions): not this one's
-        sent.setdefault(n.fan_id, []).append(alerts.Sent(n.event_id, n.player_id, n.loud, n.lines or [], n.created_at, n.moment_ids or []))
+    for some in chunks(devices):
+        earlier = select(Notification).where(Notification.fan_id.in_(some), Notification.kind.not_in(CALLS), or_(Notification.created_at >= now - timedelta(hours=1), Notification.event_id.in_(fixtures), and_(Notification.event_id.is_(None), Notification.player_id.in_(players))))
+        for n in db.scalars(earlier):
+            if n.event_id in began and n.created_at < began[n.event_id]:
+                continue  # the game called off before this one, played again under its fixture (editions): not this one's
+            sent.setdefault(n.fan_id, []).append(alerts.Sent(n.event_id, n.player_id, n.loud, n.lines or [], n.created_at, n.moment_ids or []))
 
     # What earlier pushes of these games sent the fans who follow one by itself, or a player on a board under several
     # fixtures: a moment one side said there isn't said again by the other (alerts.plan).

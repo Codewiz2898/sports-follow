@@ -4,7 +4,7 @@
 
 import { router } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native'
+import { AppState, Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 import { safeHref, shortName } from '../../../web/src/format'
 import { refetcher, WEEK, type Refetcher } from '../../../web/src/refetch'
 import { sharePoster } from '../../../web/src/share'
@@ -21,8 +21,8 @@ interface Week { posters: WeekPoster[]; wire: WireRow[] }
 const NONE: Week = { posters: [], wire: [] }
 
 /** This week and the Wire: loaded when the follow list changes, and again a minute or two after there may be news
- * (following.tsx's heard), no more than every five minutes (web/src/refetch.ts). A fan who follows nobody still has
- * a Wire: the best-known players' facts. */
+ * (following.tsx's heard), no more than every five minutes (web/src/refetch.ts); not while the app is away, as
+ * coming back says there's news. A fan who follows nobody still has a Wire: the best-known players' facts. */
 export function useWeek(): Week {
   const { cards, loaded, heard } = useFollowing()
   const [week, setWeek] = useState<Week>(NONE)
@@ -32,11 +32,14 @@ export function useWeek(): Week {
   useEffect(() => {
     let gone = false
     const r = refetcher(WEEK, () => {
+      if (AppState.currentState !== 'active') return // nobody's looking; coming back asks
       const n = ++asks.current
       api.week().then((res) => { if (!gone && n === asks.current) setWeek(res) }).catch(() => {})
     })
     later.current = r
-    return () => { gone = true; r.stop() }
+    // Back in front: a wait begun while away (React Native held its timer) goes, as coming back's news starts one.
+    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') r.stop() })
+    return () => { gone = true; r.stop(); sub.remove() }
   }, [])
   useEffect(() => {
     if (!loaded) return

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import httpx
 import pytest
@@ -448,7 +449,7 @@ def test_the_admin_feed_page_lists_candidates_with_their_verdicts_and_every_chan
         first = everything["candidates"][2]
         assert first["served"] and first["passes"] and first["video"] == {"youtube_id": "edit0000001"} and first["player"]["name"] == "Asha Verma"
         assert first["verdict"]["reason"] == "A fan edit of her hundred." and first["views"] == 1_000
-        assert everything["totals"] == {"all": 3, "unjudged": 1, "served": 1} and everything["next"] is None
+        assert everything["totals"] == {"all": 3, "unjudged": 1, "served": 1, "unplayable": 0} and everything["next"] is None
         assert [c["title"] for c in admin.feed_page(s, "served")["candidates"]] == ["Every boundary"]
         assert [c["title"] for c in admin.feed_page(s, "held")["candidates"]] == ["Asha Verma the singer"]
         assert [c["title"] for c in admin.feed_page(s, "unjudged")["candidates"]] == ["Not judged yet"]
@@ -480,10 +481,10 @@ def test_a_stored_video_from_a_channel_the_sport_no_longer_lists_stops_being_ser
 # ---------------------------------------------------------------- a video that won't play inside the app (BHA-380)
 
 
-def test_a_video_a_fans_app_says_wont_play_inside_it_leaves_every_feed_and_saying_it_again_changes_nothing(made):
-    """Its owner keeps it off other sites, which videos.list didn't say (embeddable, no region rule): the app's
-    player said so, so no fan is served it again, and the admin panel says why. An admin approving or pinning it
-    says it plays, and stands over any app that says otherwise later."""
+def test_a_video_fans_apps_say_wont_play_inside_them_leaves_every_feed_and_saying_it_again_changes_nothing(made):
+    """Its owner keeps it off other sites, which videos.list didn't say (embeddable, no region rule): enough fans' apps
+    said so (feed.unplayable), so no fan is served it again, and the admin panel says why. An admin approving or
+    pinning it says it plays, and stands over any app that says otherwise later."""
     pid = asha()
     with db_module.session() as s:
         p = Player(slug="ravi-rao", name="Ravi Rao", sport="cricket", teams=["Riverside XI"])
@@ -498,16 +499,12 @@ def test_a_video_a_fans_app_says_wont_play_inside_it_leaves_every_feed_and_sayin
     admin.review_candidate(pinned, "pinned")
     videos = lambda: {i.title for g in page(made, player_id=pid).groups for i in g.items if i.kind == "video"}  # noqa: E731
     assert videos() == {"Verma's hundred, every boundary", "Verma talks through the hundred"}
-    item = feed.item_id("https://www.youtube.com/watch?v=blocked0001")
     s = made()
     try:
-        assert feed.unplayable(s, pid, item, NOW) is True
-        assert feed.unplayable(s, pid, item) is False  # already: nothing changes
-        assert feed.unplayable(s, pid, feed.item_id("https://www.youtube.com/watch?v=pinned00001")) is False  # an admin vouched for it
-        with pytest.raises(ValueError):
-            feed.unplayable(s, pid, "not an id")
-        with pytest.raises(LookupError):
-            feed.unplayable(s, pid, feed.item_id("https://www.youtube.com/watch?v=nobody00000"))
+        assert feed.unplayable(s, "youtube:blocked0001", NOW) is True
+        assert feed.unplayable(s, "youtube:blocked0001") is False  # already: nothing changes
+        assert feed.unplayable(s, "youtube:pinned00001") is False  # an admin vouched for it
+        assert feed.unplayable(s, "youtube:nobody00000") is False  # no such video
         s.commit()
     finally:
         s.close()
@@ -524,33 +521,42 @@ def test_a_video_a_fans_app_says_wont_play_inside_it_leaves_every_feed_and_sayin
         assert blocked in {c["id"] for c in admin.feed_page(s, "held")["candidates"]}
     finally:
         s.close()
-    # It does play after all: an admin approving it (or pinning it) says so, for every row of it, and an app saying
-    # otherwise later doesn't take it away again.
+    # It does play after all: an admin approving it (or pinning it) says so, for every row of it, and apps saying
+    # otherwise later don't take it away again.
     admin.review_candidate(blocked, "approved")
     rank.rescore()
     assert all(r.unplayable_at is None for r in all_rows())
     assert videos() == {"Verma's hundred, every boundary", "Verma talks through the hundred"}
     s = made()
     try:
-        assert feed.unplayable(s, other, item) is False
+        assert feed.unplayable(s, "youtube:blocked0001") is False
         s.commit()
     finally:
         s.close()
     assert all(r.unplayable_at is None for r in all_rows())
 
 
+def reports(monkeypatch) -> tuple[Any, Any]:
+    """The API's Redis and job queue, made up (tests/test_api.py), for fans' apps saying videos won't play."""
+    from tests.test_api import KEY, Queue, Redis
+
+    redis, queue = Redis(), Queue()
+    monkeypatch.setitem(server.state, "redis", redis)
+    monkeypatch.setitem(server.state, "arq", queue)
+    monkeypatch.setattr(server, "cookie_key", lambda: KEY)
+    return redis, queue
+
+
 def test_one_fans_app_saying_a_video_wont_play_takes_it_from_their_feed_alone_until_enough_networks_say_so(made, monkeypatch):
     """BHA-422: one fan's word, or one network's with any number of new cookies, takes the video out of that fan's Feed
-    only; feed.UNPLAYABLE_VOTES networks saying so take it out of every fan's. An IPv6 home's /48 is one network."""
-    from tests.test_api import KEY, Redis
-
+    only; feed.UNPLAYABLE_VOTES networks saying so take it out of every fan's at once. An IPv6 home's /48 is one
+    network. BUG-100: nothing is queued, so a report never asks the video's source anything."""
     monkeypatch.setattr(feed, "UNPLAYABLE_VOTES", 3, raising=False)
     pid = asha()
     stored(pid, "blocked0001", "Verma's hundred, every boundary", EDITS, 5, verdict=said())
     stored(pid, "plays000001", "Verma talks through the hundred", TALKS, 4, verdict=said())
     rank.rescore()
-    monkeypatch.setitem(server.state, "redis", Redis())
-    monkeypatch.setattr(server, "cookie_key", lambda: KEY)
+    _, queue = reports(monkeypatch)
     item = feed.item_id("https://www.youtube.com/watch?v=blocked0001")
 
     def say(fan: str, address: str) -> dict:
@@ -567,6 +573,31 @@ def test_one_fans_app_saying_a_video_wont_play_takes_it_from_their_feed_alone_un
     assert videos("fan") == both and all(r.unplayable_at is None for r in rows_of("blocked0001"))
     assert say("anon-3", "81.2.69.200")["marked"] is True  # a third network
     assert videos("fan") == {"Verma talks through the hundred"} and all(r.unplayable_at for r in rows_of("blocked0001"))
+    assert say("anon-4", "81.2.69.201")["marked"] is False  # already
+    assert queue.jobs == []
+
+
+def test_a_report_past_a_fans_or_a_networks_hour_still_takes_the_video_from_their_feed_and_only_its_vote_is_dropped(made, monkeypatch):
+    """BUG-100: past the votes a fan may cast in an hour (feed.UNPLAYABLE_PER_FAN), or an address may
+    (UNPLAYABLE_PER_ADDRESS), a report used to be refused, so the video stayed in that fan's Feed. It leaves it now;
+    only the vote isn't counted."""
+    pid = asha()
+    stored(pid, "blocked0001", "Verma's hundred, every boundary", EDITS, 5, verdict=said())
+    stored(pid, "blocked0002", "Verma's fifty", STATS, 6, verdict=said())
+    stored(pid, "plays000001", "Verma talks through the hundred", TALKS, 4, verdict=said())
+    rank.rescore()
+    redis, _ = reports(monkeypatch)
+    fans, networks = "feed:unplayable:fan:anon-1", "feed:unplayable:address:81.2.69.50"
+    redis.data[fans], redis.data[networks] = feed.UNPLAYABLE_PER_FAN, feed.UNPLAYABLE_PER_ADDRESS  # their hours' votes all cast
+    videos = lambda fan: {i.title for g in page(made, fan, pid).groups for i in g.items if i.kind == "video"}  # noqa: E731
+    every = {"Verma's hundred, every boundary", "Verma's fifty", "Verma talks through the hundred"}
+    for fan, address, vid, title in (("anon-1", "81.2.69.142", "blocked0001", "Verma's hundred, every boundary"), ("anon-2", "81.2.69.50", "blocked0002", "Verma's fifty")):
+        item = feed.item_id(f"https://www.youtube.com/watch?v={vid}")
+        assert said_unplayable(pid, item, fan, address, "Asia/Kolkata") == {"item_id": item, "unplayable": True, "marked": False}
+        assert videos(fan) == every - {title}  # gone from their Feed
+        assert f"feed:unplayable:votes:youtube:{vid}" not in redis.data  # and no vote
+    assert videos("fan") == every
+    assert (redis.data[fans], redis.data[networks]) == (feed.UNPLAYABLE_PER_FAN, feed.UNPLAYABLE_PER_ADDRESS)
 
 
 def said_unplayable(pid: int, item: str, fan: str, address: str, zone: str | None) -> dict:
@@ -589,15 +620,12 @@ def test_a_fan_abroad_saying_a_video_wont_play_hides_it_from_them_and_takes_it_f
     there): an app abroad is refused it and says so. It leaves that fan's Feed, but their word isn't a vote on
     everyone's: only an app in FEED_COUNTRY's time zone casts one (Chrome names India's the old way, Asia/Calcutta),
     and an app that names none (from before it said) doesn't."""
-    from tests.test_api import KEY, Redis
-
     monkeypatch.setattr(feed, "UNPLAYABLE_VOTES", 3, raising=False)
     pid = asha()
     stored(pid, "indiaonly01", "Verma's hundred, every boundary", EDITS, 5, verdict=said())
     stored(pid, "plays000001", "Verma talks through the hundred", TALKS, 4, verdict=said())
     rank.rescore()
-    monkeypatch.setitem(server.state, "redis", Redis())
-    monkeypatch.setattr(server, "cookie_key", lambda: KEY)
+    _, queue = reports(monkeypatch)
     item = feed.item_id("https://www.youtube.com/watch?v=indiaonly01")
     videos = lambda fan: {i.title for g in page(made, fan, pid).groups for i in g.items if i.kind == "video"}  # noqa: E731
     both = {"Verma's hundred, every boundary", "Verma talks through the hundred"}
@@ -613,6 +641,106 @@ def test_a_fan_abroad_saying_a_video_wont_play_hides_it_from_them_and_takes_it_f
     assert videos("fan") == both
     assert said_unplayable(pid, item, "chennai", "81.2.70.3", "Asia/Kolkata")["marked"] is True
     assert videos("fan") == {"Verma talks through the hundred"} and all(r.unplayable_at for r in rows_of("indiaonly01"))
+    assert queue.jobs == []
+
+
+def as_admin(method: str, path: str, body: dict) -> dict:
+    """A request as the admin panel sends it, signed in: its answer."""
+
+    async def go() -> httpx.Response:
+        transport = httpx.ASGITransport(app=server.app, client=("81.2.69.9", 50000))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.request(method, path, json=body)
+
+    server.app.dependency_overrides[server.require_admin] = lambda: None
+    try:
+        answer = asyncio.run(go())
+    finally:
+        server.app.dependency_overrides.pop(server.require_admin, None)
+    assert answer.status_code == 200, answer.text
+    return answer.json()
+
+
+def admin_review(row: int, said: str | None) -> dict:
+    """PUT /api/admin/feed/<row>: an admin's word on a candidate."""
+    return as_admin("PUT", f"/api/admin/feed/{row}", {"review": said})
+
+
+def test_an_admins_word_on_a_video_fans_said_wont_play_starts_their_votes_on_it_over(made, monkeypatch):
+    """BUG-100: an admin approving a video three networks' apps said won't play, and later taking that back, left their
+    votes kept for a month, so the next fan's app to say so took it from every Feed at once. An admin's approve, pin,
+    hide or take-back clears its votes: it takes three networks again."""
+    monkeypatch.setattr(feed, "UNPLAYABLE_VOTES", 3, raising=False)
+    pid = asha()
+    row = stored(pid, "blocked0001", "Verma's hundred, every boundary", EDITS, 5, verdict=said())
+    rank.rescore()
+    redis, _ = reports(monkeypatch)
+    votes = "feed:unplayable:votes:youtube:blocked0001"
+    for said_ in ("pinned", "hidden", "approved", None):  # None: the approval taken back
+        redis.data[votes] = {"81.2.69.1", "81.2.69.2", "81.2.69.3"}  # three networks said so before
+        admin_review(row, said_)
+        assert votes not in redis.data, said_
+    # The next fan's app to say so: their Feed loses it, nobody else's.
+    item = feed.item_id("https://www.youtube.com/watch?v=blocked0001")
+    assert said_unplayable(pid, item, "anon-4", "81.2.69.4", "Asia/Kolkata")["marked"] is False
+    assert all(r.unplayable_at is None for r in rows_of("blocked0001"))
+    assert redis.data[votes] == {"81.2.69.4"}
+
+
+def test_the_admin_panel_lists_each_video_fans_reports_took_out_once_and_put_back_leaves_the_judges_word_as_it_was(made, monkeypatch):
+    """BUG-100: a video fans' apps on three networks said won't play leaves every Feed at once, and the admin panel's
+    Feed tab lists each such video once (admin.taken_out), newest first, with every player it's kept for, and counts
+    videos, not rows; one an admin hid isn't listed. Put back (feed.put_back) takes the mark off every player's row of
+    it and clears its votes, approving nothing: a row the judge held back for its player stays held. Approving one
+    puts it back too, as before."""
+    monkeypatch.setattr(feed, "UNPLAYABLE_VOTES", 3, raising=False)
+    pid = asha()
+    with db_module.session() as s:
+        p = Player(slug="ravi-rao", name="Ravi Rao", sport="cricket", teams=["Riverside XI"])
+        s.add(p)
+        s.flush()
+        s.add(PlayerCard(player_id=p.id, status="ready", card={"player": {"name": "Ravi Rao"}, "news": []}))
+        other = p.id
+    stored(pid, "blocked0001", "Verma's hundred, every boundary", EDITS, 5, verdict=said())
+    held = stored(other, "blocked0001", "Verma and Rao's stand", EDITS, 5, verdict=said(about_player="no"))  # not about Rao, the judge said
+    later = stored(pid, "blocked0002", "Verma's fifty", STATS, 6, verdict=said())
+    hid = stored(pid, "blocked0003", "Verma in the nets", TALKS, 7, verdict=said())
+    stored(pid, "plays000001", "Verma talks through the hundred", TALKS, 4, verdict=said())
+    rank.rescore()
+    redis, queue = reports(monkeypatch)
+    for vid in ("blocked0001", "blocked0003", "blocked0002"):  # taken out in this order
+        item = feed.item_id(f"https://www.youtube.com/watch?v={vid}")
+        assert [said_unplayable(pid, item, f"fan-{n}", f"81.2.70.{n}", "Asia/Kolkata")["marked"] for n in (1, 2, 3)] == [False, False, True]
+    admin.review_candidate(hid, "hidden")
+    videos = lambda: {i.title for g in page(made, "fan", pid).groups for i in g.items if i.kind == "video"}  # noqa: E731
+    assert videos() == {"Verma talks through the hundred"}
+
+    def listed() -> tuple[list[tuple[str, list[str]]], int]:
+        s = made()
+        try:
+            shown = admin.feed_page(s, "unplayable")
+            return [(c["title"], [p["name"] for p in c["players"]]) for c in shown["candidates"]], shown["totals"]["unplayable"]
+        finally:
+            s.close()
+
+    assert listed() == ([("Verma's fifty", ["Asha Verma"]), ("Verma's hundred, every boundary", ["Asha Verma", "Ravi Rao"])], 2)
+    # Put back from Rao's row, which the judge held back: every row loses the mark, and Rao's stays held.
+    assert as_admin("POST", f"/api/admin/feed/{held}/put-back", {}) == {"put_back": "youtube:blocked0001"}
+    assert {r.player_id: (r.unplayable_at, r.review, r.served_now) for r in served_rows("blocked0001")} == {pid: (None, None, True), other: (None, None, False)}
+    assert videos() == {"Verma's hundred, every boundary", "Verma talks through the hundred"}
+    assert "feed:unplayable:votes:youtube:blocked0001" not in redis.data and "feed:unplayable:votes:youtube:blocked0002" in redis.data
+    assert listed() == ([("Verma's fifty", ["Asha Verma"])], 1)
+    # Approving one puts it back too, and clears its votes.
+    assert admin_review(later, "approved")["unplayable_at"] is None
+    assert "feed:unplayable:votes:youtube:blocked0002" not in redis.data and listed() == ([], 0)
+    assert queue.jobs == []
+
+
+def served_rows(vid: str) -> list[Any]:
+    """Each player's row of a video, and whether the Feed serves it now (FeedCandidate.served)."""
+    with db_module.session() as s:
+        return list(s.execute(select(FeedCandidate.player_id, FeedCandidate.unplayable_at, FeedCandidate.review, FeedCandidate.served().label("served_now"))
+                              .where(FeedCandidate.external_id == vid)))  # fmt: skip
 
 
 def all_rows() -> list[FeedCandidate]:

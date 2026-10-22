@@ -311,3 +311,35 @@ def test_a_reminder_leaves_the_games_own_alerts_as_they_were(db, redis, pushed):
     notify.send([moment])
     push = heard(pushed)["asha"]
     assert push["loud"] is True and "Make your pick" not in push["body"]  # its game's first moment, as without the reminder
+
+
+def test_calls_reach_their_fans_among_more_than_a_query_can_name(db, redis, pushed):  # noqa: F811
+    """BUG-325: a game followed by 70,000 fans, and a question 70,000 of them picked, past the 65,535 values Postgres
+    takes in a statement. Who muted it, whose devices and whose leagues were each read naming them all at once: no
+    "Make your pick" for anyone, and no word of how a pick went."""
+    start = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=90)
+    chess_board(db, start)
+    carlsen(db)
+    campaign(db, start, players=["Q106807"])
+    db.add(Follow(fan_id="asha", player_id=1, alert_rules={"level": "key"}))
+    db.execute(text("INSERT INTO follow (fan_id, player_id, alert_rules, created_at) SELECT 'crowd-' || g, 1, '{}'::jsonb, now() FROM generate_series(1, 70000) g"))
+    db.commit()
+    devices(db, "asha")
+    poll(1, board(status="*"))
+    poll(2, board(status="*", fide=LAZAVIK))
+    predictions_push.run(start - timedelta(minutes=80))
+    assert sorted(heard(pushed)) == ["asha"]
+    q = db.scalars(select(Question)).one()
+    predictions.pick(db, "asha", q.id, CARLSEN)
+    predictions.pick(db, "ravi", q.id, "draw")
+    gang = predictions.create(db, "asha", "Chess gang", "Asha")
+    predictions.join(db, "ravi", gang.code, "Ravi")
+    db.execute(text("INSERT INTO prediction_pick (question_id, fan_id, option, counted, moved_late, created_at, updated_at)"
+                    " SELECT :q, 'crowd-' || g, 'draw', false, false, now(), now() FROM generate_series(1, 70000) g"), {"q": q.id})
+    db.commit()
+    poll(1, board(0))  # the recorded result: Carlsen won
+    predictions_push.run()
+    told = heard(pushed)
+    assert sorted(told) == ["asha"] and told["asha"]["title"] == "You got it right: Magnus Carlsen" and told["asha"]["body"].endswith("· 1st in Chess gang")
+    crowd = {f"crowd-{n}" for n in range(1, 70_001)}
+    assert predictions_push._places(db, crowd | {"asha"}) == {"asha": (1, "Chess gang")}  # pyright: ignore[reportPrivateUsage]

@@ -461,7 +461,8 @@ class FeedCandidate(Base):
     # An admin's word on it (rank.REVIEWS: approved, hidden, pinned), which stands over the judge's.
     review: Mapped[str | None] = mapped_column(String(10))
     # When enough fans' apps said its source's player won't play it inside the app (feed.unplayable): its owner keeps
-    # it off other sites, which the source's facts didn't say. Never served after, whatever the judge or an admin said.
+    # it off other sites, which the source's facts didn't say. Never served after, whatever the judge said, until an
+    # admin approves or pins it (the admin panel's Feed tab lists them).
     unplayable_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     @classmethod

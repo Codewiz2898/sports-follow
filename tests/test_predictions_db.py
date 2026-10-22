@@ -193,6 +193,67 @@ def test_a_tiebreak_rounds_question_is_settled_by_its_match_through_its_polls(db
     assert db.scalars(select(Question)).all() == [q]  # one question, the match's, through all its boards
 
 
+def test_a_tiebreak_rounds_question_waits_through_lichess_calling_the_round_finished_between_its_games(db, redis, monkeypatch):
+    # BUG-213 reopened (R4, R8): Lichess calls a round finished as soon as every game in it has a result, and on again
+    # as the next game's first moves come. "Who wins?" was settled on game 1 (Carlsen) when it did; game 2 listed, it
+    # switched to the match and was settled again, the other way, its fans told twice; at 1–1 between games, a draw.
+    # Through the source's own reads and the poller, it's settled once, when no game has followed game 3 for GRACE:
+    # Lazavik, 2–1.
+    chess_board(db, soon())
+    round_now: dict = {}
+    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: round_now)
+    chess = lichess_chess.LichessChess()
+
+    def look(*results: str, **when) -> tuple[str, str | None]:
+        round_now.clear()
+        round_now.update(tiebreak(*results, **when))
+        for event_id, fide in ((1, CARLSEN), (2, LAZAVIK)):
+            poll(event_id, chess.snapshot({"round": ROUND, "fide": fide}))
+        db.expire_all()
+        [q] = db.scalars(select(Question)).all()
+        return q.status, q.answer
+
+    look("*", to_come=True)
+    [q] = db.scalars(select(Question)).all()
+    for fan, option in (("asha", CARLSEN), ("ravi", LAZAVIK), ("meera", "draw")):
+        predictions.pick(db, fan, q.id, option)
+    db.commit()
+    between = {"finished": True, "ago": 0}  # every game so far decided: Lichess calls the round finished
+    for results, when in ((("*",), {}), (("1-0",), between), (("1-0", "*"), {}), (("1-0", "1-0"), between), (("1-0", "1-0", "*"), {}), (("1-0", "1-0", "0-1"), between)):
+        assert look(*results, **when) == ("closed", None), results
+    assert look("1-0", "1-0", "0-1", finished=True, ago=lichess_chess.GRACE) == ("settled", LAZAVIK)
+    assert {fan: points > 0 for fan, (_, points) in picks(db).items() if points is not None} == {"asha": False, "ravi": True, "meera": False}
+
+
+def test_a_chess_question_told_isnt_settled_again_the_other_way_by_games_after_its_board_was_over(db, redis):
+    # R8's cross-talk on BUG-213: a question settled and told stays as told. "Who wins?" settled on game 1, Carlsen's,
+    # no game 2 having come within GRACE; then one comes after all (a longer break), and Lazavik wins games 2 and 3: the
+    # match's board answers Lazavik, but its fans were told Carlsen, and aren't told the other way. A single game's result
+    # corrected at its source still settles again (test_a_chess_game_is_asked_…).
+    chess_board(db, soon())
+    for event_id, fide in ((1, CARLSEN), (2, LAZAVIK)):
+        poll(event_id, lichess_chess.parse_board(tiebreak("*", to_come=True), fide))
+    [q] = db.scalars(select(Question)).all()
+    for fan, option in (("asha", CARLSEN), ("ravi", LAZAVIK)):
+        predictions.pick(db, fan, q.id, option)
+    db.commit()
+    for event_id, fide in ((1, CARLSEN), (2, LAZAVIK)):
+        poll(event_id, lichess_chess.parse_board(tiebreak("1-0", finished=True, ago=lichess_chess.GRACE), fide))
+    db.expire_all()
+    told = datetime.now(timezone.utc)
+    q = db.get(Question, q.id)
+    assert (q.status, q.answer) == ("settled", CARLSEN)  # type: ignore[union-attr]
+    q.told_at = told  # type: ignore[union-attr]  # as predictions_push.tell marks it
+    db.commit()
+    before = picks(db)
+    for event_id, fide in ((1, CARLSEN), (2, LAZAVIK)):
+        poll(event_id, lichess_chess.parse_board(tiebreak("1-0", "1-0", "0-1", finished=True, ago=lichess_chess.GRACE), fide))
+    db.expire_all()
+    q = db.get(Question, q.id)
+    assert (q.status, q.answer, q.told_at) == ("settled", CARLSEN, told)  # type: ignore[union-attr]
+    assert picks(db) == before == {"asha": (CARLSEN, 50), "ravi": (LAZAVIK, 0)}
+
+
 def test_a_series_settles_map_by_map_and_a_map_never_played_is_voided(db, redis):
     db.add(Event(id=5, key=SERIES, sport="Valorant", title="Sentinels vs NRG", start_utc=soon(), status="armed", live_binding={"adapter": "pandascore_esports", "locator": {"match": "777"}}))
     db.commit()
