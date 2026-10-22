@@ -649,15 +649,25 @@ def _code() -> str:
 
 
 JOINERS = ("\u200c", "\u200d")  # zero-width (non-)joiners: Indic scripts and emoji are drawn with them
+# What's drawn as nothing, as ranges of code points: Unicode's default ignorables (the JOINERS, a grapheme joiner, the
+# variation selectors an emoji is drawn with, the Hangul fillers) and the blank Braille pattern. Those _name keeps tell
+# no two names apart (_same), and a name of nothing else is none.
+BLANKS = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F),
+          (0x202A, 0x202E), (0x2060, 0x206F), (0x2800, 0x2800), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF), (0xFFA0, 0xFFA0),
+          (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF))
+
+
+def _blank(c: str) -> bool:
+    return any(low <= ord(c) <= high for low, high in BLANKS)
 
 
 def _name(raw: Any, most: int, what: str) -> str:
     """A name as given, its spaces made single, with what can't be seen taken out (control and format characters,
     but the JOINERS, and halves of characters): Postgres keeps no NUL, and an invisible name, or one that turns the
-    text after it around, isn't a name. Raises Refused for one with nothing left to see, or too long."""
+    text after it around, isn't a name. Raises Refused for one with nothing left to see (BLANKS aside), or too long."""
     kept = "".join(c for c in str(raw or "") if c.isspace() or unicodedata.category(c) not in ("Cc", "Cf", "Cs") or c in JOINERS)
     name = " ".join(kept.split())
-    if not any(unicodedata.category(c)[0] in "LNPS" for c in name):
+    if not any(unicodedata.category(c)[0] in "LNPS" and not _blank(c) for c in name):
         raise Refused(400, f"Give {what}.")
     if len(name) > most:
         raise Refused(400, f"{what[0].upper()}{what[1:]} can be {most} characters at most.")
@@ -665,8 +675,10 @@ def _name(raw: Any, most: int, what: str) -> str:
 
 
 def _same(name: str) -> str:
-    """A name as two members' are told apart: "Asha", " asha " and "ASHA" with a joiner in it are one."""
-    return unicodedata.normalize("NFKC", "".join(c for c in name if c not in JOINERS)).casefold()
+    """A name as two members' are told apart: "Asha", " asha " and "ASHA" with a joiner, a variation selector or a
+    blank filler in it (BLANKS) are one."""
+    folded = unicodedata.normalize("NFKC", name).casefold()
+    return " ".join("".join(c for c in folded if not _blank(c)).split())
 
 
 def _room(db: Session, fan: str) -> None:

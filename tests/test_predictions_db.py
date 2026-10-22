@@ -1170,6 +1170,32 @@ def test_two_members_of_a_league_cant_go_by_one_name(db, redis):
     assert sorted(db.scalars(select(LeagueMember.name))) == ["Asha", "Ravi K"]
 
 
+def test_a_mark_or_a_blank_filler_drawn_as_nothing_tells_no_two_names_apart_nor_makes_one(db, redis):
+    """BUG-111, round two: characters drawn as nothing that aren't control or format characters (a grapheme joiner, a
+    variation selector, the Hangul fillers, the blank Braille pattern) told names apart, so "Asha" and "Asha" with one
+    of them were two members of one league; and a name of only those was taken. They tell no names apart now, and a
+    name needs something to see besides them. An emoji keeps its own selector."""
+    gang = predictions.create(db, "acct-asha", "Derby", "Asha")
+    db.commit()
+    for taken in ("Asha͏", "Asha️", "Ashaㅤ", "Asha ⠀", "ﾠAsha", "Asᅟha"):
+        with pytest.raises(predictions.Refused) as clash:
+            predictions.join(db, "acct-ravi", gang.code, taken)
+        assert clash.value.status == 409, repr(taken)
+        db.rollback()
+    for blank in ("ㅤ", "⠀⠀", "ᅟ", "ﾠ", "ㅤ ͏"):
+        with pytest.raises(predictions.Refused) as nothing:
+            predictions.join(db, "acct-ravi", gang.code, blank)
+        assert (nothing.value.status, nothing.value.message) == (400, "Give your name."), repr(blank)
+        db.rollback()
+    with pytest.raises(predictions.Refused) as unnamed:
+        predictions.create(db, "acct-ravi", "ㅤ⠀", "Ravi")
+    assert (unnamed.value.status, unnamed.value.message) == (400, "Give the league a name.")
+    db.rollback()
+    predictions.join(db, "acct-sita", gang.code, "Sita ❤️")
+    db.commit()
+    assert db.scalar(select(LeagueMember.name).where(LeagueMember.fan_id == "acct-sita")) == "Sita ❤️"
+
+
 def test_signing_in_brings_every_pick_and_those_on_games_under_way_count_in_no_league(db, redis):
     """BUG-091 (BHA-413): signing in (to join a friend's league mid-game, say) brought only the picks on games still to
     start: the rest stayed with the device's anonymous id, which no device holds after, so the fan lost those calls,
