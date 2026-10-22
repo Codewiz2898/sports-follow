@@ -182,6 +182,11 @@ export function shortName(name: string): string {
 // Letters Unicode doesn't decompose into a base letter plus an accent (espn._LETTERS on the server).
 const LETTERS: Record<string, string> = { ø: 'o', Ø: 'O', æ: 'ae', Æ: 'Ae', œ: 'oe', Œ: 'Oe', ß: 'ss', đ: 'd', Đ: 'D', ł: 'l', Ł: 'L', þ: 'th', Þ: 'Th', ð: 'd', ı: 'i' }
 
+/** The text with those letters written plainly ("Bodo/Glimt" for "Bodø/Glimt"), for comparing what a fan typed. */
+export function plainLetters(text: string): string {
+  return text.replace(/[øØæÆœŒßđĐłŁþÞðı]/g, (c) => LETTERS[c])
+}
+
 // Each capital's width in the display face, in ems: Anton's own advance widths (Anton_400Regular.ttf). The
 // Android app's slanted copy sets the letters of a word the same, with up to 0.13 em more at its ends for
 // the lean (mobile/scripts/slant_font.py): LEAN holds that. SPACING is .dsp's letter spacing. A letter the
