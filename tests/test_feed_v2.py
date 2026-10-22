@@ -283,3 +283,21 @@ def test_for_yous_others_last_two_months_are_one_list_best_first_whatever_the_da
     mixed = feed.page(db, "fan", now=NOW, limit=50, tab=feed.FOR_YOU)
     assert [e.item.title for e in mixed.items] == ["a0", "a1", "y-strong-3wk", "x-weak-today", "z-old-best"]
     assert [e.day for e in mixed.items][2:] == [feed.THIS_MONTH, feed.TODAY, feed.EARLIER]  # each keeps its own day
+
+
+@needs_db
+def test_for_you_shows_a_video_a_followed_player_holds_as_theirs_in_its_place_not_as_an_others(db, monkeypatch):  # noqa: F811
+    # BUG-122: one video kept for Kohli (followed) and for Rohit (not) came under Rohit, with a Follow button, among
+    # the others, and left Kohli's place: the others' list was made first and took it.
+    kohli = made_player(db, "Virat Kohli", served=False)
+    rohit = made_player(db, "Rohit Sharma", served=False)
+    both = item("both", 2)
+    kept = {
+        kohli: [Candidate(item("k0", 1), score=0.9, channel="k0"), Candidate(both, score=0.5, channel="icc")],
+        rohit: [Candidate(both, score=0.5, channel="icc"), Candidate(item("r1", 3), score=0.4, channel="r1")],
+    }
+    monkeypatch.setattr(feed, "judged", lambda db, ids, now=None: {i: kept[i] for i in ids if i in kept})
+    monkeypatch.setattr(feed, "others", lambda db, followed, now: {p: 0 for p in (rohit,) if p not in followed})
+    follow(db, "fan", kohli)
+    mixed = feed.page(db, "fan", now=NOW, limit=50, tab=feed.FOR_YOU)
+    assert [(e.item.title, e.player.id, e.following) for e in mixed.items] == [("k0", kohli, True), ("both", kohli, True), ("r1", rohit, False)]

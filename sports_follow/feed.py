@@ -553,6 +553,7 @@ def _everyone(db: Session, fan: str, now: datetime, tz: int, player: int | None 
                 continue
             (mine if pid in followed else theirs)[_day(c, now, tz)].append((pid, c))
     seen: set[str] = set()
+    ordered = _in_turns(mine, player, seen)  # first: a video a followed player holds too is theirs, in its place
     if strangers:
         # Others a tier at a time (others: the fan's sports first, then a big moment today); within a tier, the last
         # OTHERS_WINDOW's best first whatever the day, in turns, then the older ones by day.
@@ -562,9 +563,7 @@ def _everyone(db: Session, fan: str, now: datetime, tz: int, player: int | None 
             recent = [(d, pid, c) for d in DAYS for pid, c in these[d] if _within(c, now, OTHERS_WINDOW)]
             older = {d: [(pid, c) for pid, c in these[d] if not _within(c, now, OTHERS_WINDOW)] for d in DAYS}
             tiered += _best_in_turns(recent, seen) + _in_turns(older, None, seen)
-        ordered = _mix(_in_turns(mine, player, seen), tiered)
-    else:
-        ordered = _in_turns(mine, player, seen)
+        ordered = _mix(ordered, tiered)
     entries: list[tuple[Entry, int | None, bool]] = []
     counts: dict[int, int] = {}
     newest: dict[int, datetime] = {}
