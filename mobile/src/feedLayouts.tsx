@@ -32,6 +32,7 @@ import { useFollowing } from './following'
 import { BackIcon, CheckIcon, MutedIcon, PlayIcon, PlusIcon, ShareIcon, SoundIcon } from './icons'
 import { useMyFeed } from './myFeed'
 import { Face, ItemSheet, Picture } from './post'
+import { feedReads, type FeedReads } from './refetchFeed'
 import { setSound, useSound } from './sound'
 import { share, ShareButton } from './share'
 import { useGoToPlace } from './tabbar'
@@ -692,17 +693,28 @@ export function ShortsViewer({ entries, start, now, follows, onMore, onNear, onC
 /** Today's "From your players" (the web's components/Feed.tsx): at its foot, after This week and the Wire; the two
  * best of the fan's Feed (Following) right now in the edge layout's cards, boxed (whichever layout the Feed tab
  * draws: a full-screen one doesn't sit in a page), and the way to the rest. Absent while their Feed is empty. Read
- * once the follow list is in, and again when it comes back changed, when Today is pulled (`again`) and when the app
- * comes back to the front, since Today stays open where the web's page would be loaded anew. */
+ * once the follow list is in, and again when the fan's players change, when Today is pulled (`again`) and when the
+ * app comes back to the front, since Today stays open where the web's page would be loaded anew; after news (a
+ * notification, a followed game moving on), only minutes later, at a moment of this phone's own (refetchFeed.ts). */
 export function FromYourPlayers({ now, again = 0 }: { now: number; again?: number }) {
   const { cards, loaded, heard } = useFollowing()
   const [back, setBack] = useState(0)
+  const [told, setTold] = useState(0) // the reads after news
+  const reads = useRef<FeedReads | null>(null)
   useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') setBack((n) => n + 1) })
-    return () => sub.remove()
+    const r = feedReads(() => setTold((n) => n + 1), () => AppState.currentState === 'active')
+    reads.current = r
+    // Back in front: a read at once, in place of one after news still waiting (before its timer can run it too).
+    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') { r.now(); setBack((n) => n + 1) } })
+    return () => { r.stop(); sub.remove() }
   }, [])
   const who = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
-  const { page, hide } = useMyFeed(null, 2, loaded ? `${who}:${heard}:${again}:${back}` : null)
+  const key = loaded ? `${who}:${again}:${back}` : null
+  // News waits (refetchFeed.ts). Heard first: news that comes with a read at once (the follow list in or changed) is
+  // that read's.
+  useEffect(() => { if (heard) reads.current?.heard() }, [heard])
+  useEffect(() => { if (key != null) reads.current?.now() }, [key])
+  const { page, hide } = useMyFeed(null, 2, key == null ? null : `${key}:${told}`)
   const [opened, setOpened] = useState<FeedEntry | null>(null)
   // Its videos play in their cards on a tap, never by themselves (it isn't the Feed), and stop once Today's left.
   const focused = useIsFocused()
