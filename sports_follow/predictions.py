@@ -135,8 +135,8 @@ def ensure(db: Session, system: str, fixture: str, sport: str | None, status: st
     """A game's questions: those its sport asks of its board, made now if it hasn't started and its start is known
     (each one closed by now left out), and those made before, by their place in it; each knowing every event key
     it's shown under and, where one's given, the event it's polled by. A game to come whose start moved has its
-    first question's close move with it while it's open; one closed stays closed (friends' picks may have shown).
-    Returns the game's key and its questions."""
+    first question's close move with it while it's open, and one whose board has other sides now its answers (_sides);
+    one closed stays closed (friends' picks may have shown). Returns the game's key and its questions."""
     now = now or _now()
     rules = _rules(sport, state)
     game = game_key(system, fixture, rules.question_board(state))
@@ -164,7 +164,25 @@ def ensure(db: Session, system: str, fixture: str, sport: str | None, status: st
         ask = asks.get(q.ask)
         if ask is not None and ask.first and start is not None and start > now and q.status == OPEN and q.locks_at != start:
             q.locks_at, q.reminded_at = start, None  # moved: reminded again before its new start
+        if ask is not None and q.status == OPEN and {k for k, _ in ask.options} != {o["key"] for o in q.options or []}:
+            _sides(db, q, ask, title)
     return game, rows
+
+
+def _sides(db: Session, q: Question, ask: sports.Ask, title: str) -> None:
+    """A question still open whose game's board has other sides now (one decided since it was asked: a final's, once
+    its other semi-final is over): its answers as its sport asks them now, and its game's title. A pick on a side
+    that's gone goes too, and its fan can pick again: the side that came through would be no answer to the question
+    as it was, which would be voided, every pick with it."""
+    gone = [o["key"] for o in q.options or [] if o["key"] not in {k for k, _ in ask.options}]
+    q.options = [{"key": k, "label": label} for k, label in ask.options]
+    if title:
+        q.game_title = title[:300]
+    if gone:
+        db.flush()  # its answers first: a pick made meanwhile, checked against the old ones, waits for them and goes too
+        db.execute(delete(Pick).where(Pick.question_id == q.id, Pick.option.in_(gone)))
+        if q.split:
+            q.split = {k: n for k, n in q.split.items() if k not in gone} or None
 
 
 def polled(db: Session, event: Event, status: str, state: dict[str, Any], now: datetime) -> list[int]:

@@ -178,6 +178,19 @@ def test_cricket_asks_who_wins_a_limited_overs_match():
     assert CRICKET.asks(espn_cricket.parse_summary(load("espn/cricket-summary-innings-win")).state) == []
 
 
+def test_a_final_with_a_side_still_to_be_decided_asks_nothing_till_both_are_known():
+    """BUG-311: a final whose other semi-final is still to come lists that side as "TBC" (an id of its own at the
+    source): asked then, "India / TBC" would be the question, and the side that came through no answer to it."""
+    cricket = sc.parse_match(cricket_match("NS", [])).state
+    india = cricket["teams"][0]
+    for placeholder in ("TBC", "TBA", "To be decided"):
+        assert CRICKET.asks({**cricket, "teams": [india, {"id": "9999", "name": placeholder}]}) == []
+    assert CRICKET.asks({**cricket, "teams": [india, {"id": "8", "name": "Sri Lanka"}]})[0].options == ((str(IND), "India"), ("8", "Sri Lanka"))
+    football = sm.parse_match(football_match("NS", 0, 0)).state
+    assert FOOTBALL.asks({**football, "away": {"id": "9999", "name": "TBD"}}) == []
+    assert FOOTBALL.asks({**football, "home": {"id": "9998", "name": "tbc"}}) == []
+
+
 def test_cricket_closes_at_the_first_ball_and_settles_from_the_winner():
     live = sc.parse_match(cricket_match("1st Innings", [FIRST]))
     assert CRICKET.closed("result", live.status, live.state) and CRICKET.answer("result", live.status, live.state) is None
