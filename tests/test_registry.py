@@ -122,20 +122,26 @@ def test_names_wikidata_keeps_for_every_language_are_read(monkeypatch):
     assert messi["teams"] == ["Inter Miami CF"]  # named in English and in mul: one club, by its English name
     dhoni = stars(monkeypatch, "cricket", DHONI)
     assert dhoni["name"] == "MS Dhoni" and dhoni["teams"] == ["Chennai Super Kings"]
-    # Still eight at most, the first the service lists: MSD is Wikidata's tenth of Dhoni's (see MAX_ALIASES).
-    assert dhoni["aliases"] == DHONI_ALIASES[:8] and len(dhoni["aliases"]) == registry.MAX_ALIASES
+    # All of his 18, MSD (Wikidata's tenth) among them: eight at most dropped every name after "Mr Cool". The four
+    # that fold to one already kept ("M.S. Dhoni" is "M. S. Dhoni" to search) take no place.
+    assert dhoni["aliases"] == [
+        "Mahi", "Mahendra Singh Dhoni", "Mahendra Singh Dhauni", "MS Dhauni", "Dhauni", "D. Dhenier", "Captain Cool", "Mr Cool",
+        "Finisher", "MSD", "M. S. Dhoni", "M. S. Dhauni", "Dhoni", "Thala",
+    ]
+    kept = {" ".join(registry.words(a)) for a in ["MS Dhoni", *dhoni["aliases"]]}
+    assert all(" ".join(registry.words(a)) in kept for a in DHONI_ALIASES)
 
 
 def test_english_aliases_come_first_and_a_spelling_search_cant_tell_apart_takes_no_place():
     names = [
         {"p": WD + "Q9", "n": "Asha Rao", "kind": "label", "lang": "en"},
-        *({"p": WD + "Q9", "n": f"Nickname {i}", "kind": "alias", "lang": "mul"} for i in range(8)),
+        *({"p": WD + "Q9", "n": f"Nickname {i}", "kind": "alias", "lang": "mul"} for i in range(registry.MAX_ALIASES)),
         {"p": WD + "Q9", "n": "A. Rao", "kind": "alias", "lang": "mul"},
         {"p": WD + "Q9", "n": "A.Rao", "kind": "alias", "lang": "en"},
     ]
     [rao] = registry.build("football", [{"p": WD + "Q9", "id_transfermarkt": "9"}], names, [], TODAY)
     # "A. Rao" is "A.Rao" to search (words "a rao"): one place, the English spelling's.
-    assert rao["aliases"] == ["A.Rao", *(f"Nickname {i}" for i in range(7))]
+    assert rao["aliases"] == ["A.Rao", *(f"Nickname {i}" for i in range(registry.MAX_ALIASES - 1))]
 
 
 def test_words_and_search_text_fold_names():

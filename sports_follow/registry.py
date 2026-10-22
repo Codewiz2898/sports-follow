@@ -60,7 +60,9 @@ LABEL_LANGS = ("en", "mul", "es", "pt", "fr", "de", "it", "nl")
 # Aliases and the names of teams and other items: English, then "mul", the name every language shares, where
 # Wikidata keeps most people's other names now ("Leo Messi", "MSD") and many clubs' names.
 NAME_LANGS = ("en", "mul")
-MAX_ALIASES = 8
+# A star has many (MS Dhoni 18, 14 that search tells apart): room for every name fans type ("MSD" is Wikidata's
+# tenth of his). search_text's only index is a trigram one (GIN), with no limit on a row's length.
+MAX_ALIASES = 16
 
 # The sports this build runs that are imported from Wikidata (sports.Sport.wikidata: who counts as one of their athletes, and the
 # ids kept), smallest first, so a first import has most sports searchable long before football is done;
