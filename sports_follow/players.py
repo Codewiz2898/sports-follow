@@ -30,7 +30,8 @@ Removing shows what it will delete and asks first, unless given --yes.
 
 Unmatching is for a pro matched to the wrong Wikidata person, and so shown with someone else's face
 (roster_wikidata.py): it takes the match and photo back at once, off every card showing it and the
-Credits page too, and kept in athlete_unmatch, no run matches them to that person again, or to anyone. It's apart from keeping and
+Credits page too, with what that person's Wikidata and Wikipedia said on the pro's page (About, birth date,
+honours), and kept in athlete_unmatch, no run matches them to that person again, or to anyone. It's apart from keeping and
 removing: a kept pro can be unmatched, and removing one leaves it, so restoring them doesn't bring the face
 back. Rematching takes it back; the next weekly run (or roster_wikidata by hand) may match them again.
 
@@ -52,7 +53,7 @@ import re
 import secrets
 import sys
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Sequence, get_args
 
 from sqlalchemy import delete, func, or_, select
@@ -274,6 +275,21 @@ def unmatches(db: Session) -> list[AthleteUnmatch]:
     return list(db.scalars(select(AthleteUnmatch).order_by(AthleteUnmatch.created_at.desc())))
 
 
+def take_profiles_off(qids: list[str]) -> int:
+    """Take what Wikidata and Wikipedia said of the person a match was taken back from (unmatch) off the pages of
+    the players holding these registry athletes, now: their About, birth date, country, role and honours were that
+    person's, not the player's (pipeline.apply_profile with no profile). Returns how many pages."""
+    from . import pipeline  # pipeline reads search, which this reads
+
+    if not qids:
+        return 0
+    with session() as db:
+        held = select(PlayerIdentity.player_id).where(PlayerIdentity.system == "wikidata", PlayerIdentity.external_id.in_(qids))
+        ids = sorted({*db.scalars(held), *db.scalars(select(Player.id).where(Player.wikidata_qid.in_(qids)))})
+    now = datetime.now(timezone.utc)
+    return sum(pipeline.apply_profile(pid, None, now) is not None for pid in ids)
+
+
 def take_photos_off(files: list[str]) -> int:
     """Take photos taken back off the Credits page, unless an athlete's is the same file, and off every card
     that shows one its athlete no longer has, followed or not: now, not at the photos job's next run.
@@ -458,6 +474,7 @@ def main(argv: list[str], ask: Any = input) -> int:
             with session() as db:
                 done = unmatch(db, find(db, args.ref, args.sport), args.person, args.note)
             cards = take_photos_off([image for _, _, image in done if image]) if any(now for _, now, _ in done) else 0
+            take_profiles_off([a.qid for a, now, _ in done if now])
             for a, now, _ in done:
                 print(f"{'Took back' if now else 'Nothing to take back now for'} {a.name} ({a.sport}, {a.qid}){f' (not matched to {args.person})' if args.person and not now else ''}; "
                       f"no run matches them to {args.person or 'anyone'} again.")

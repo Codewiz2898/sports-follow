@@ -314,6 +314,29 @@ def test_unmatching_takes_the_photo_off_a_card_nobody_follows_now(db, monkeypatc
     assert card is not None and "photo" not in card.card["player"] and published == {3: card.card}
 
 
+def test_unmatching_takes_the_persons_profile_off_the_card_at_once(db, monkeypatch):
+    # BUG-255: unmatching took back the photo but left that person's About, birth date and honours on the card until
+    # the next monthly profile read, though the command says it's off every card at once.
+    from sports_follow import pipeline
+
+    tenz(db)
+    wrong = {"born": "1975-01-01", "nationality": "Someland", "honours": ["Someone's award (2001)"], "summary": "Someone else, a cyclist.",
+             "about": {"source": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Someone"},
+             "profile_from": {"born": "wikidata", "nationality": "wikidata", "honours": "wikidata", "summary": "wikipedia"}}
+    card = db.get(PlayerCard, 3)
+    assert card is not None
+    card.card = {**card.card, "player": {**card.card["player"], **wrong}}
+    db.commit()
+    monkeypatch.setattr(pipeline, "session", players.session)
+    published: dict[int, dict] = {}
+    monkeypatch.setattr(bus, "store_card", published.__setitem__)
+    assert players.main(["unmatch", "3"]) == 0
+    db.expire_all()
+    shown = db.get(PlayerCard, 3).card["player"]  # pyright: ignore[reportOptionalMemberAccess]
+    assert not {"born", "nationality", "honours", "summary", "about", "photo"} & set(shown) and shown["profile_from"] == {}
+    assert published[3]["player"] == shown and shown["name"] == "TenZ"
+
+
 def test_unmatching_takes_back_only_a_match_to_the_person_named(db, capsys):
     tenz(db)
     assert players.main(["unmatch", "pandascore:20401", "Q1"]) == 0  # he's matched to Q113450352
