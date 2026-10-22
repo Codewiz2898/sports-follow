@@ -1,12 +1,13 @@
 // One team's page, the web's TeamPage.tsx: a band of its sport's colour with share, alerts and follow, then its
 // game on now (to its match page), its games to come, its form and last results from its side, and its squad to
-// follow player by player. Read again every 30 s while the page is open, sooner while a read of its games is on
-// its way (a team nobody followed yet is read when its page opens). Following a team doesn't follow its players.
+// follow player by player. Read again every 30 s while the page is open and the app in front, sooner while a read of
+// its games is on its way (a team nobody followed yet is read when its page opens). Following a team doesn't follow
+// its players.
 
 import Constants from 'expo-constants'
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { StyleSheet, Text, View } from 'react-native'
+import { AppState, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LEVELS, teamLevelText } from '../../../../web/src/alerts'
 import { relative } from '../../../../web/src/format'
@@ -51,27 +52,37 @@ export default function TeamScreen() {
   followingNow.current = following
   useEffect(() => { if (read && followingNow.current.isFollowingTeam(teamId)) void followingNow.current.reload() }, [read, teamId])
 
-  // The page, and again while it's in front: soon while its games are being read, else every 30 s (match.ts). A
-  // team the server doesn't have isn't asked about again.
+  // The page, and again while it's in front: soon while its games are being read, else every 30 s (match.ts). Not
+  // while the app is away, as the match page: back in front, at once (BUG-161). A team the server doesn't have isn't
+  // asked about again.
   useFocusEffect(useCallback(() => {
     if (!Number.isFinite(teamId)) { setError('No such team.'); return }
     let gone = false
+    let missing = false // the server doesn't have it: nothing to look at again, come back or not
     let timer: ReturnType<typeof setTimeout> | undefined
-    const look = (tries: number) => api.team(teamId)
-      .then((x) => {
-        if (gone) return
-        setTeam(x)
-        setError(null)
-        const next = nextLook(x.refreshing, tries)
-        timer = setTimeout(() => look(next.tries), next.wait)
-      })
-      .catch((e: Error) => {
-        if (gone) return
-        setError(e.message)
-        if (!(e instanceof ApiError && e.status === 404)) timer = setTimeout(() => look(tries), EVERY)
-      })
+    let latest = 0 // the newest look: an older one's answer starts no second loop
+    const look = (tries: number) => {
+      clearTimeout(timer)
+      if (AppState.currentState !== 'active' || missing) return // nobody's looking; coming back looks
+      const mine = ++latest
+      api.team(teamId)
+        .then((x) => {
+          if (gone || mine !== latest) return
+          setTeam(x)
+          setError(null)
+          const next = nextLook(x.refreshing, tries)
+          timer = setTimeout(() => look(next.tries), next.wait)
+        })
+        .catch((e: Error) => {
+          if (gone || mine !== latest) return
+          setError(e.message)
+          missing = e instanceof ApiError && e.status === 404
+          if (!missing) timer = setTimeout(() => look(tries), EVERY)
+        })
+    }
+    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') look(0); else clearTimeout(timer) })
     look(0)
-    return () => { gone = true; clearTimeout(timer) }
+    return () => { gone = true; clearTimeout(timer); sub.remove() }
   }, [teamId, asked]))
 
   if (!team || team.team_id !== teamId) {

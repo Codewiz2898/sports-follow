@@ -39,7 +39,7 @@ def week_lines() -> str:
 # The two hooks, each as a function of what it reads: the file's lines inside, the rest handed in.
 HOOKS = """
 import { ACTIVITY, WEEK, refetcher } from %(refetch)s
-export function activity({ epoch, heard }: any, { useRef, useEffect, AppState, api, setItems }: any) {
+export function activity({ epoch, heard }: any, { useRef, useEffect, AppState, api, setItems, readMutes }: any) {
 %(activity)s
 }
 export function week(_: any, { useRef, useEffect, useState, AppState, api, useFollowing, NONE }: any) {
@@ -91,7 +91,7 @@ const run = (which, woke) => {
     week: () => { asks.push(clock.t); return Promise.resolve({ posters: [], wire: [] }) } }
   const following = { cards: [{ player_id: 7 }], loaded: true, heard: 0 }
   const render = which === 'activity'
-    ? ((r) => () => r({ epoch: 0, heard: following.heard }))(mount(activity, { api, setItems: () => {} }))
+    ? ((r) => () => r({ epoch: 0, heard: following.heard }))(mount(activity, { api, setItems: () => {}, readMutes: () => {} }))
     : ((r) => () => r({}))(mount(week, { api, useFollowing: () => following, NONE: { posters: [], wire: [] } }))
   const heard = () => { following.heard++; render() }
   render()

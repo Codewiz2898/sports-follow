@@ -37,6 +37,23 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
   const [muted, setMutedIds] = useState<Set<number>>(new Set())
   // Following someone new, or turning a player off, changes the whole list; a game or a team too.
   const who = followsKey(cards, matches, teams)
+  // Which fan this is (account.tsx's epoch), and the mutes and unmutes under way here and how many have begun or
+  // finished: a read of the muted games asked by an earlier fan, or that overlapped one, is dropped (it may be from
+  // before it), and the next one wins.
+  const fan = useRef(epoch)
+  fan.current = epoch
+  const muteWrites = useRef({ busy: 0, seen: 0 })
+
+  // The games the fan muted, as the server has them now: one muted from its notification's button (straight from
+  // the phone's own code, the app away or not) or on another device too (BUG-279).
+  const readMutes = useCallback(() => {
+    const before = muteWrites.current.seen
+    const asked = fan.current
+    api.mutes().then((r) => {
+      if (fan.current !== asked || muteWrites.current.busy > 0 || muteWrites.current.seen !== before) return
+      setMutedIds(new Set(r.event_ids))
+    }).catch(() => {})
+  }, [])
 
   // What this phone last saw, read again for each fan (a sign-in or out forgets it: account.tsx).
   useEffect(() => {
@@ -66,14 +83,15 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
         return top
       })
     }).catch(() => {}).finally(() => { if (!stale) setLoaded(true) })
-    api.mutes().then((r) => { if (!stale) setMutedIds(new Set(r.event_ids)) }).catch(() => {})
+    readMutes()
     return () => { stale = true }
-  }, [following, who, seenRead])
+  }, [following, who, seenRead, readMutes])
 
   // New moments, when there may be some (following.tsx's heard): the follow list came back changed, a followed
   // game's status or score moved on, a notification came, or the app came back to the front. Asked after a wait
   // of this phone's own (web/src/refetch.ts): every phone that got the same goal's notification hears it at once.
-  // Not while the app is away: coming back says there's news, and asks.
+  // Not while the app is away: coming back says there's news, and asks. The muted games are read with them (one
+  // muted on another device), and at once on coming back (one muted from a notification meanwhile).
   const later = useRef<Refetcher | null>(null)
   useEffect(() => {
     let stale = false
@@ -86,12 +104,13 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
           return [...res.items.filter((i) => i.id > newest), ...prev]
         })
       }).catch(() => {})
+      readMutes()
     })
     later.current = r
     // Back in front: a wait begun while away (React Native held its timer) goes, as coming back's news starts one.
-    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') r.stop() })
+    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') { r.stop(); readMutes() } })
     return () => { stale = true; r.stop(); sub.remove() }
-  }, [epoch])
+  }, [epoch, readMutes])
   useEffect(() => { if (heard) later.current?.heard() }, [heard])
 
   const more = useCallback(async () => {
@@ -111,8 +130,11 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
       setMutedIds((prev) => { const s = new Set(prev); if (value) s.add(eventId); else s.delete(eventId); return s })
       setItems((prev) => prev.map((i) => (i.event_id === eventId ? { ...i, muted: value } : i)))
     }
+    const w = muteWrites.current
+    w.busy++
+    w.seen++
     apply(on)
-    try { await api.mute(eventId, on) } catch (e) { apply(!on); throw e }
+    try { await api.mute(eventId, on) } catch (e) { apply(!on); throw e } finally { w.busy--; w.seen++ }
     // Muted: its live card goes now, as the card's own Mute button takes it down, not with the server's next.
     if (on) StannNotifications?.takeDownLive(String(eventId))
   }, [])

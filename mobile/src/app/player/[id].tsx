@@ -1,12 +1,13 @@
 // One player's page, the web's PlayerPage.tsx: a band of their sport's colour edge to edge with share, alerts and
 // follow, then Overview (the live board or next game, the last game, what fans shared, form, numbers, news,
 // about), Matches, Stats and the Feed (feed.tsx). Always from the full card, read again every 30 s while the page
-// is open (every 3 s while it's built). ?tab=feed opens the Feed (Today's "From your players" links there).
+// is open and the app in front (every 3 s while it's built). ?tab=feed opens the Feed (Today's "From your players"
+// links there).
 
 import Constants from 'expo-constants'
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useCallback, useEffect, useState } from 'react'
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native'
+import { AppState, Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LEVELS, levelText } from '../../../../web/src/alerts'
 import { day, playedOn, relative, resultOutcome, safeHref, shortName } from '../../../../web/src/format'
@@ -52,17 +53,25 @@ export default function PlayerScreen() {
   const [alertsOpen, setAlertsOpen] = useState(false)
   const [busy, setBusy] = useState(false)
 
-  // The card, and again every 30 s while the page is in front (every 3 s while it's being built).
+  // The card, and again every 30 s while the page is in front (every 3 s while it's being built). Not while the app
+  // is away, as the match page: back in front, at once (BUG-161).
   useFocusEffect(useCallback(() => {
     if (!Number.isFinite(playerId)) { setError('No such player.'); return }
     let gone = false
     let timer: ReturnType<typeof setTimeout> | undefined
-    const tick = () => api.card(playerId)
-      .then((c) => { if (!gone) { setCard((prev) => (!prev || c.version >= prev.version ? c : prev)); setError(null) } return c })
-      .catch((e: Error) => { if (!gone) setError((prev) => prev ?? e.message); return null })
-      .then((c) => { if (!gone) timer = setTimeout(tick, c?.status === 'building' ? BUILDING_MS : EVERY_MS) })
+    let latest = 0 // the newest read: an older one's answer starts no second loop
+    const tick = () => {
+      clearTimeout(timer)
+      if (AppState.currentState !== 'active') return // nobody's looking; coming back reads it
+      const mine = ++latest
+      api.card(playerId)
+        .then((c) => { if (!gone) { setCard((prev) => (!prev || c.version >= prev.version ? c : prev)); setError(null) } return c })
+        .catch((e: Error) => { if (!gone) setError((prev) => prev ?? e.message); return null })
+        .then((c) => { if (!gone && mine === latest) timer = setTimeout(tick, c?.status === 'building' ? BUILDING_MS : EVERY_MS) })
+    }
+    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') tick(); else clearTimeout(timer) })
     tick()
-    return () => { gone = true; clearTimeout(timer) }
+    return () => { gone = true; clearTimeout(timer); sub.remove() }
   }, [playerId]))
   useEffect(() => { if (params.tab === 'feed') setTab('feed') }, [params.tab]) // a link to this page's Feed, while on it
 

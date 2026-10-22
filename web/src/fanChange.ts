@@ -23,4 +23,4 @@ export function welcome(added: number, teamsDropped = 0): string {
  * localStorage, the Android app in AsyncStorage.
  */
 export const WEB_KEPT = ['sf-alerts-seen', 'sf-feed-opened', 'sf-feed-seen', 'sf-signin', 'sf-save-nudge', 'sf-source-noted']
-export const PHONE_KEPT = ['stann.alerts-seen', 'stann.feed-opened', 'stann.feed-seen', 'stann.signin']
+export const PHONE_KEPT = ['stann.alerts-seen', 'stann.feed-opened', 'stann.feed-seen', 'stann.signin', 'stann.save-nudge', 'stann.source-noted']
