@@ -40,7 +40,7 @@ export default function AlertsScreen() {
 
 /** Every moment of the fan's players, newest first, by day; what came since they last looked is marked. */
 function Latest({ onSettings }: { onSettings: () => void }) {
-  const { cards, matches } = useFollowing()
+  const { cards, matches, teams } = useFollowing()
   const activity = useActivity()
   // What was new when the list opened stays marked while it's open; the badge clears at once.
   const [seenAtOpen] = useState(activity.seen)
@@ -51,10 +51,12 @@ function Latest({ onSettings }: { onSettings: () => void }) {
 
   if (!activity.loaded) return <Empty><Spinner /></Empty>
   if (!activity.items.length) {
+    // A fan of a team alone, or a game, hears its moments too: Settings turns this phone's alerts on for them.
+    const follows = cards.length + teams.length + matches.length > 0
     return (
       <Card style={{ paddingVertical: 28, paddingHorizontal: 20, alignItems: 'center', gap: 4 }}>
-        <Text style={[t.small, t.muted, { textAlign: 'center' }]}>{cards.length || matches.length ? 'Nothing yet. Line-ups, goals, wickets and results for your players and games show up here as they happen.' : 'Follow a player, or a game, to see their moments here.'}</Text>
-        {cards.length > 0 ? <Btn kind="link" label="Choose what reaches this phone" onPress={onSettings} /> : null}
+        <Text style={[t.small, t.muted, { textAlign: 'center' }]}>{follows ? 'Nothing yet. Line-ups, goals, wickets and results for your players, teams and games show up here as they happen.' : 'Follow a player, a team or a game to see their moments here.'}</Text>
+        {follows ? <Btn kind="link" label="Choose what reaches this phone" onPress={onSettings} /> : null}
       </Card>
     )
   }

@@ -25,7 +25,7 @@ const ActivityContext = createContext<Activity | null>(null)
 const SEEN = 'stann.alerts-seen'
 
 export function ActivityProvider({ children }: { children: ReactNode }) {
-  const { cards, loaded: following, heard, matches } = useFollowing()
+  const { cards, loaded: following, heard, matches, teams } = useFollowing()
   const { epoch } = useAccount()
   const [items, setItems] = useState<ActivityItem[]>([])
   const [next, setNext] = useState<number | null>(null)
@@ -33,8 +33,9 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
   const [seen, setSeen] = useState<number | null>(null)
   const [seenRead, setSeenRead] = useState(false)
   const [muted, setMutedIds] = useState<Set<number>>(new Set())
-  // Following someone new, or turning a player off, changes the whole list; a game too.
-  const who = [...cards.map((c) => `${c.player_id}:${c.alerts ?? 'key'}`), ...matches.map((m) => `game${m.event_id}:${m.alerts}`)].sort().join(',')
+  // Following someone new, or turning a player off, changes the whole list; a game or a team too.
+  const who = [...cards.map((c) => `${c.player_id}:${c.alerts ?? 'key'}`), ...matches.map((m) => `game${m.event_id}:${m.alerts}`),
+    ...teams.map((x) => `team${x.team_id}:${x.alerts}`)].sort().join(',')
 
   // What this phone last saw, read again for each fan (a sign-in or out forgets it: account.tsx).
   useEffect(() => {
