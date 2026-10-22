@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import create_engine, delete, select, text, update
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import bus, candidates, controls, curate, db as db_module, feed, news, rank, week
+from sports_follow import bus, candidates, controls, curate, db as db_module, feed, news, rank, registry, week
 from sports_follow.adapters import publisher_rss
 from sports_follow.models import Athlete, Event, FeedCandidate, Follow, Moment, NewsItem, Player, PlayerCard, SourceBinding
 
@@ -92,12 +92,30 @@ def test_a_common_surname_in_the_registry_names_a_player_only_with_their_side(wo
     _, feeds = world
     smith = player("Dev Smith", ["Eastern Stars"])
     with db_module.session() as s:
-        s.add_all(Athlete(qid=f"Q{i}", sport="cricket", name=n, search_text=n.lower()) for i, n in enumerate(["Dev Smith", "Ann Smith", "Joe Smith", "Ravi Kumar"]))
+        s.add_all(Athlete(qid=f"Q{i}", sport="cricket", name=n, search_text=registry.search_text(n, [])) for i, n in enumerate(["Dev Smith", "Ann Smith", "Joe Smith", "Ravi Kumar"]))
     feeds[WICKET] = rss(("Smith ruled out", "https://wicket.example.com/s/1", "A hamstring.", 2),
                         ("Smith back for Eastern Stars", "https://wicket.example.com/s/2", "Fit again.", 1))  # fmt: skip
     feeds[GAZETTE] = rss()
     news.poll(NOW)
     assert stories() == [(smith, "https://wicket.example.com/s/2", "Daily Wicket")]
+
+
+def test_a_surname_the_registry_writes_with_accents_is_as_common_as_it_is(world):
+    # BUG-250: namesakes were counted by an unaccented match on the registry's names, which keep their accents, so
+    # Giménez, Sørensen and Yıldırım counted as rare and a namesake's story went to the followed player.
+    _, feeds = world
+    gomez = player("Dev Gómez", ["Eastern Stars"])
+    names = ["Dev Gómez", "Ann Gómez", "Joe Gomez", "Jan Sørensen", "Ida Sørensen", "Ole Sorensen", "Kim Sørensen-Holm"]
+    with db_module.session() as s:
+        s.add_all(Athlete(qid=f"Q{i}", sport="cricket", name=n, search_text=registry.search_text(n, [])) for i, n in enumerate(names))
+        group = candidates.followed(s) + [candidates.Followed(99, "cricket", "Lars Sørensen")]
+        found = news.names(group)
+        assert news.common(s, group, found) == {("cricket", "gomez"), ("cricket", "sorensen")}
+    feeds[WICKET] = rss(("Gómez ruled out", "https://wicket.example.com/g/1", "A hamstring.", 2),
+                        ("Gómez back for Eastern Stars", "https://wicket.example.com/g/2", "Fit again.", 1))  # fmt: skip
+    feeds[GAZETTE] = rss()
+    news.poll(NOW)
+    assert stories() == [(gomez, "https://wicket.example.com/g/2", "Daily Wicket")]
 
 
 def said(**kw) -> dict:

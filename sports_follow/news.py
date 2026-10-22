@@ -158,7 +158,8 @@ def names(players: Sequence[Followed]) -> dict[int, Names]:
 
 def common(session: Session, players: Sequence[Followed], found: dict[int, Names]) -> set[tuple[str, str]]:
     """The (sport, surname) pairs of these players' surnames that COMMON or more of the sport's athletes in the
-    registry share: one query a sport, over the registry's names."""
+    registry share, however their names are accented ("Giménez" and "Gimenez" are one): one query a sport, over the
+    registry's names as search reads them (Athlete.search_text, plain words)."""
     wanted: dict[str, set[str]] = {}
     for p in players:
         registry = sports.of(p.sport).group or p.sport
@@ -168,7 +169,7 @@ def common(session: Session, players: Sequence[Followed], found: dict[int, Names
         if not words:
             continue
         counts: dict[str, int] = {}
-        rows = session.scalars(select(Athlete.name).where(Athlete.sport == registry, or_(*(Athlete.name.ilike(f"% {w}") for w in sorted(words)))))
+        rows = session.scalars(select(Athlete.name).where(Athlete.sport == registry, or_(*(Athlete.search_text.like(f"% {w} |%") for w in sorted(words)))))
         for name in rows:
             last = naming.words(name)[-1:]
             if last and last[0] in words:
