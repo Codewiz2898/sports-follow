@@ -187,7 +187,8 @@ export function plainLetters(text: string): string {
   return text.replace(/[øØæÆœŒßđĐłŁþÞðı]/g, (c) => LETTERS[c])
 }
 
-// Each capital's width in the display face, in ems: Anton's own advance widths (Anton_400Regular.ttf). The
+// Each capital's width in the display face, in ems: Anton's own advance widths (Anton_400Regular.ttf), and those
+// of the marks a stat's value has (a clock's colons, a score's dash, a not-out's star) and the space. The
 // Android app's slanted copy sets the letters of a word the same, with up to 0.13 em more at its ends for
 // the lean (mobile/scripts/slant_font.py): LEAN holds that. SPACING is .dsp's letter spacing. A letter the
 // table doesn't have counts as the widest.
@@ -195,6 +196,7 @@ const ANTON: Record<string, number> = {
   A: 0.485, B: 0.479, C: 0.474, D: 0.493, E: 0.412, F: 0.399, G: 0.485, H: 0.499, I: 0.227, J: 0.466, K: 0.472, L: 0.397, M: 0.746,
   N: 0.498, O: 0.486, P: 0.472, Q: 0.494, R: 0.477, S: 0.461, T: 0.396, U: 0.474, V: 0.469, W: 0.712, X: 0.484, Y: 0.446, Z: 0.41,
   0: 0.494, 1: 0.331, 2: 0.494, 3: 0.494, 4: 0.494, 5: 0.494, 6: 0.494, 7: 0.494, 8: 0.494, 9: 0.494, '-': 0.311, "'": 0.214, '.': 0.229,
+  ' ': 0.234, ':': 0.242, ',': 0.236, '+': 0.355, '/': 0.405, '%': 1.057, '*': 0.452, '½': 0.726, '–': 0.311, '−': 0.311, '(': 0.291, ')': 0.291,
 }
 const WIDEST = 0.746
 const LEAN = 0.15
@@ -206,9 +208,25 @@ const SPACING = 0.005
  * so the name breaks between words, never inside one. A hyphen ends a word, as a line may break after it.
  */
 export function longestWordEms(name: string): number {
-  const plain = name.replace(/[øØæÆœŒßđĐłŁþÞðı]/g, (c) => LETTERS[c]).normalize('NFKD').replace(/\p{M}/gu, '').toUpperCase()
-  const ems = (word: string) => [...word].reduce((sum, c) => sum + (ANTON[c] ?? WIDEST) + SPACING, LEAN)
-  return Math.max(1, ...plain.split(/(?<=-)|\s+/).filter(Boolean).map(ems))
+  return Math.max(1, ...capitals(name).split(/(?<=-)|\s+/).filter(Boolean).map(ems))
+}
+
+/** How wide a text is on one line in the display face, in ems, its spaces too (longestWordEms: its longest word). */
+export function lineEms(text: string): number {
+  return ems(capitals(text))
+}
+
+/** A text in plain capitals, as the width table has them ("BODO" for "Bodø"): what it has kept as it is ("½", which
+ * NFKD would make "1⁄2"), the rest without accents. */
+function capitals(text: string): string {
+  return [...text.replace(/[øØæÆœŒßđĐłŁþÞðı]/g, (c) => LETTERS[c])]
+    .map((c) => (c.toUpperCase() in ANTON ? c.toUpperCase() : c.normalize('NFKD').replace(/\p{M}/gu, '').toUpperCase()))
+    .join('')
+}
+
+/** The width of a run of capitals (capitals()), in ems: each one's, its letter spacing, and the lean at its ends. */
+function ems(run: string): number {
+  return [...run].reduce((sum, c) => sum + (ANTON[c] ?? WIDEST) + SPACING, LEAN)
 }
 
 /** A team name reduced for exact comparison, as the server's espn.team_key: "Australia 'A'" is "australia a". */
@@ -259,15 +277,17 @@ export function resultOutcome(r: { result: string; title?: string | null; outcom
   return r.outcome !== undefined ? r.outcome : outcome(r.result, teams, sidesOf(r.title))
 }
 
+const STAT_NUMBER = 34  // a stat as a number, in px (.stat .num)
 const STAT_WORDS = 22  // a stat in words, in px (.stat.words .num)
-const STAT_ROOM = 76  // a stat tile's room for its words: 104px less its padding
+const STAT_ROOM = 76  // a stat tile's room for its value: 104px less its padding (a wide card's tiles are about that)
 
 /** How a stat tile sets its value: big as a number ("2712", "82*"), or, when it's words ("Black", an opponent's name),
- * smaller so it breaks only between words, over two tiles when it's long or a word of it wouldn't fit one. A word is
- * three letters or more, so "3rd" and "W" stay numbers. */
+ * smaller so it breaks only between words; over two tiles when it wouldn't fit one on a line at its size (a name of
+ * two words, "V Pranav", rather than a word a line; a clock, "1:24:50", rather than cut at a colon). A word is three
+ * letters or more, so "3rd" and "W" stay numbers. */
 export function statFit(value: string): { words: boolean; wide: boolean } {
   const words = /\p{L}{3,}/u.test(value)
-  return { words, wide: words && (value.length > 12 || longestWordEms(value) * STAT_WORDS > STAT_ROOM) }
+  return { words, wide: lineEms(value) * (words ? STAT_WORDS : STAT_NUMBER) > STAT_ROOM }
 }
 
 /** "22 PTS · 11 REB · 10 AST" as numbers and labels, when the whole line reads that way. */
