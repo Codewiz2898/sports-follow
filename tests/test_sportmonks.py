@@ -119,6 +119,23 @@ def test_a_live_match_has_score_clock_scorers_lines_and_moments():
     assert snap.moments[-1]["athlete_ids"] == [str(STAR), str(SUB)]
 
 
+def test_a_late_sub_whose_minutes_still_read_0_has_come_on():
+    # BUG-243: a stoppage-time sub's MINUTES_PLAYED reads 0 for a while, and their line said "On the bench" with no
+    # stats: a goal of theirs was told late, or not at all while it stayed 0.
+    late = 7004
+    scored = [*LINEUPS, {"player_id": late, "team_id": HOME, "type_id": 12, "details": [_detail("GOALS", 1), _detail("MINUTES_PLAYED", 0)]}]
+    snap = sm.parse_match(_match("INPLAY_2ND_HALF", 4, 0, lineups=scored, events=EVENTS))
+    assert (snap.lines[str(late)].headline, snap.lines[str(late)].stats) == ("1 goal", [{"label": "Goals", "value": "1"}])
+    bench = moments.Seen("live", snap.state, {"headline": "On the bench", "stats": []}, snap.score_label, snap.clock_label)
+    now = moments.Seen("live", snap.state, {"headline": "1 goal", "stats": snap.lines[str(late)].stats}, snap.score_label, snap.clock_label)
+    assert "goal" in [f.kind for f in moments.detect("Football", "Late Sub", str(late), bench, now)]
+    # One a substitution brought on, with nothing to show yet, is on too; one it didn't is still on the bench.
+    zero = [{**row, "details": [_detail("MINUTES_PLAYED", 0)]} if row["player_id"] == UNUSED else row for row in LINEUPS]
+    brought_on = {"type": {"developer_name": "SUBSTITUTION"}, "minute": 90, "extra_minute": 3, "participant_id": HOME, "player_id": UNUSED, "player_name": "Late Sub"}
+    assert sm.parse_match(_match("INPLAY_2ND_HALF", 3, 0, lineups=zero, events=[*EVENTS, brought_on])).lines[str(UNUSED)].headline == "Came on"
+    assert sm.parse_match(_match("INPLAY_2ND_HALF", 3, 0, lineups=zero, events=EVENTS)).lines[str(UNUSED)].headline == "On the bench"
+
+
 def test_a_goal_ruled_out_corrects_the_goals_alert():
     # Ozan Tufan's 62' goal was told, keyed by its minute; Sportmonks has since rescinded it.
     snap = sm.parse_match(_match("INPLAY_2ND_HALF", 3, 0, lineups=LINEUPS, events=EVENTS))

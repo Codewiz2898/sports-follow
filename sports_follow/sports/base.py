@@ -94,6 +94,7 @@ class Fired:
     game: str = ""  # the game's title: "India vs England"
     competition: str = ""
     venue: str = ""
+    notes: str = ""  # the game's own note, its stage or round where its source names one: "Final", "Round Robin", "1st ODI"
 
 
 # The statuses of a game not under way yet.

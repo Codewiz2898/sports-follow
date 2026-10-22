@@ -150,11 +150,11 @@ def test_a_football_match_called_off_is_voided_and_one_put_back_waits():
     put_back = sm.parse_match(football_match("POSTPONED", 0, 0))
     assert (put_back.status, put_back.state["cancelled"]) == ("postponed", False)
     assert FOOTBALL.answer("result", put_back.status, put_back.state) is None  # its new date, or the sweep, settles it
-    # ESPN calls an abandoned match over ("post"), with the score it stopped at: that's no result.
+    # ESPN calls an abandoned match over ("post"), with the score it stopped at: that's no result (off, BUG-137).
     data = load("espn/soccer-summary-final")
     data["header"]["competitions"][0]["status"]["type"] = {"name": "STATUS_ABANDONED", "state": "post", "description": "Abandoned"}
     abandoned = espn_soccer.parse_summary(data, "uefa.nations")
-    assert abandoned.status == "final" and FOOTBALL.answer("result", abandoned.status, abandoned.state) == sports.VOID
+    assert abandoned.status == "postponed" and FOOTBALL.answer("result", abandoned.status, abandoned.state) == sports.VOID
 
 
 # ---------------------------------------------------------------- cricket: who wins a limited-overs match

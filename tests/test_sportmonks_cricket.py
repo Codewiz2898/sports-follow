@@ -180,17 +180,28 @@ def test_form_note_names_the_formats():
 
 
 def test_cricket_keeps_the_match_endpoint_for_live_matches():
-    budget.observe(sportmonks.BUDGET, "Cricket fixtures", 0, 600)
-    assert sc.SportmonksCricket().spare()  # lists of fixtures are counted apart from matches
+    budget.observe(sportmonks.BUDGET, "Cricket livescores", 0, 600)
+    assert sc.SportmonksCricket().spare()  # the live lane's livescores are counted apart from matches
     budget.observe(sportmonks.BUDGET, sportmonks.CRICKET_MATCH, sportmonks.LIVE_RESERVE, 600)
     assert not sc.SportmonksCricket().spare()
     budget.observe(sportmonks.BUDGET, sportmonks.CRICKET_MATCH, sportmonks.LIVE_RESERVE + 1, 600)
     assert sc.SportmonksCricket().spare()
 
 
+def test_cricket_refreshes_wait_while_the_hours_lists_of_fixtures_are_spent():
+    # BUG-270: refreshes, team reads and older results read lists of fixtures, but spare() asked only about the match
+    # endpoint: with the hour's lists spent, every tick still queued cricket refreshes and team reads, each refused.
+    adapter = sc.SportmonksCricket()
+    with budget.in_lane("refresh"), pytest.raises(budget.RateLimited):
+        for _ in range(2000):
+            budget.take(sportmonks.BUDGET, sportmonks.CRICKET_FIXTURES)
+    assert sportmonks.spare(sportmonks.CRICKET_MATCH)  # the scorecards' endpoint has room
+    assert not adapter.spare() and not structured.spare(adapter)
+
+
 def test_cricket_requests_count_against_their_endpoint():
     assert sportmonks._bucket(f"{sportmonks.CRICKET}/fixtures/71012") == sportmonks.CRICKET_MATCH
-    assert sportmonks._bucket(f"{sportmonks.CRICKET}/fixtures") == "Cricket fixtures"
+    assert sportmonks._bucket(f"{sportmonks.CRICKET}/fixtures") == sportmonks.CRICKET_FIXTURES == "Cricket fixtures"
     assert sportmonks._bucket(f"{sportmonks.CRICKET}/teams/10/squad/1689") == "Cricket teams/{id}/squad/{id}"
     assert sportmonks._bucket(f"{sportmonks.CRICKET}/livescores") == "Cricket livescores"  # the live lane's own 2,000
 

@@ -106,6 +106,22 @@ def test_a_moment_search_asks_for_the_player_by_the_name_fans_write(world):
     assert queued() == [(bumrah, mid, "jasprit bumrah 5 wickets Lord's", 95, None, None)]
 
 
+def test_a_tennis_win_is_searched_for_by_its_round_not_its_tournaments_name(world):
+    # BUG-239: a Grand Slam final won had no search (the round was read from the game's title, "A vs B"), while every
+    # round-robin win at the ATP Finals searched for "wins final" (from the tournament's name).
+    sabalenka, sinner = player("Aryna Sabalenka", sport="tennis"), player("Jannik Sinner", sport="tennis")
+    with db_module.session() as s:
+        final = Event(key="usopen-final", sport="tennis", title="Aryna Sabalenka vs Jessica Pegula", notes="Final", competition="US Open", status="final")
+        group = Event(key="atp-finals-rr", sport="tennis", title="Jannik Sinner vs Ben Shelton", notes="Round Robin", competition="Nitto ATP Finals", status="final")
+        s.add_all([final, group])
+        s.flush()
+        games = final.id, group.id
+    mid = fire(sabalenka, games[0], Found("final", "key", "Aryna Sabalenka: Won in 2 sets", "A. Sabalenka 6-3 7-6(4) J. Pegula", priority=80))
+    fire(sinner, games[1], Found("final", "key", "Jannik Sinner: Won in 2 sets", "J. Sinner 6-4 6-4 B. Shelton", priority=80))
+    searches.queue(NOW + timedelta(minutes=5))
+    assert queued() == [(sabalenka, mid, "Aryna Sabalenka wins final US Open", 80, None, None)]
+
+
 def test_a_later_moment_in_the_game_takes_its_search_over_until_its_last_run(world):
     salah = player("Mohamed Salah", sport="football")
     derby = game("Liverpool vs Everton", sport="football")

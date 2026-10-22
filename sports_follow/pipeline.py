@@ -27,7 +27,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import bus, livecards, matches, metrics, moments, notify, photos, predictions, shutdown, sports, structured, wiki
+from . import bus, livecards, matches, metrics, moments, naming, notify, photos, predictions, shutdown, sports, structured, wiki
 from .agent import AgentError, follow_player, gateway, live_update
 from .config import AGENT_LIVE
 from .db import session
@@ -695,6 +695,17 @@ def merge_profile(player: dict[str, Any], found: wiki.Profile | None, bound: boo
     return out
 
 
+def known_name(name: str, label: str | None) -> str:
+    """The name a player goes by: Wikidata's label (wiki.Profile.name) where it's a shorter form of the one their source
+    gave them, every word of it theirs in fewer words ("Jasprit Bumrah" for ESPNcricinfo's "Jasprit Jasbirsingh
+    Bumrah", "Rohit Sharma" for "Rohit Gurunath Sharma"), and not a surname alone; else the source's. A label in other
+    words (another spelling, a nickname, initials) isn't theirs to take."""
+    short, full = naming.words(label or ""), naming.words(name)
+    if 1 < len(short) < len(full) and all(w in full for w in short) and naming.names_match(label or "", name):
+        return label or name
+    return name
+
+
 def keep_profile(previous: dict[str, Any], player: dict[str, Any]) -> dict[str, Any]:
     """An agent report's player section, with what Wikidata and Wikipedia gave the page before kept over it."""
     theirs = previous.get("profile_from") or {}
@@ -723,6 +734,9 @@ def apply_profile(player_id: int, found: wiki.Profile | None, now: datetime) -> 
         before = (card.get("player") or {}).get("profile_from") or {}
         merged = merge_profile(card.get("player") or {}, found, bound)
         given = merged["profile_from"]
+        if found is not None and (name := known_name(player.name, found.name)) != player.name:
+            log.info("profile %s: %r goes by %r, as Wikidata has them", player_id, player.name, name)
+            player.name = merged["name"] = name
         if "nationality" in given:
             player.nationality = merged["nationality"]
         if "role" in given:

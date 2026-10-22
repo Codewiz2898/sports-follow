@@ -146,7 +146,7 @@ def parse_match(event: dict[str, Any], comp: dict[str, Any]) -> Snapshot:
         if ending == "walkover":
             headline = "Won by walkover" if me.get("winner") else "Withdrew"
         elif ending == "retired":
-            headline = "Won, opponent retired" if me.get("winner") else "Retired"
+            headline = "Won, opponent retired" if me.get("winner") else "Lost, retired from the match"  # "Retired" alone reads as a career over
         elif status == "final":
             headline = f"{'Won' if me.get('winner') else 'Lost'} in {won + lost} set{'s' if won + lost != 1 else ''}"
         elif status == "live":

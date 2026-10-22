@@ -10,6 +10,8 @@ from .base import ORDINAL, Fired, Found, Glance, Line, Played, Poster, Seen, Spo
 if TYPE_CHECKING:
     from ..models import Athlete
 
+UPSET_GAP = 4  # seeds between a winner and the better seed they beat for an upset: [5] over [1] is one, [2] over [1] not
+
 
 class Tennis(Sport):
     key = "tennis"
@@ -24,7 +26,7 @@ class Tennis(Sport):
     pattern = r"tennis"
     exclude = r"table tennis|padel|beach tennis"
     alerts = {
-        "key": ("Matches, upsets and results", "The match starting, beating a higher seed, the result and injuries"),
+        "key": ("Matches, upsets and results", "The match starting, beating a much higher seed, the result and injuries"),
         "more": ("every set", "each set and milestones"),
     }
     game_alerts = {
@@ -59,19 +61,27 @@ class Tennis(Sport):
         where = "Final" if status == "final" else f"Set {state['set']}" if state.get("set") else clock or ""
         return Glance(sides if len(sides) == 2 else [], where)
 
+    def outcome(self, result: str, teams: list[str], board: dict[str, Any] | None = None, side: str | None = None) -> str | None:
+        """As every sport's, but a result with no score wasn't played: a walkover kept before walkovers were told
+        apart ("Lost ", where it's "Lost (w/o)" now) is no more form than one kept since. A retirement counts."""
+        word, _, score = (result or "").strip().partition(" ")
+        if word in ("Won", "Lost") and not score.strip():
+            return None
+        return super().outcome(result, teams, board, side)
+
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
         winner = next((p for p in state.get("players") or [] if p.get("winner")), None)
         return f"{winner['name']} won" if winner and winner.get("name") else ""
 
     def after_final(self, who: str, athlete_id: str, now: Seen) -> list[Found]:
-        """A win over a better-seeded player (or any seed, for an unseeded one), in a match played to the
-        end: a walkover or a retirement isn't an upset."""
+        """A win over a much better-seeded player (UPSET_GAP seeds or more; any seed, for an unseeded one), in a match
+        played to the end: [2] beating [1] in a final isn't an upset, nor is a walkover or a retirement."""
         if now.state.get("ending"):
             return []
         players = now.state.get("players") or []
         me = next((p for p in players if str(p.get("id")) == athlete_id), None)
         other = next((p for p in players if p is not me), None)
-        if not (me and me.get("winner") and other and other.get("seed")) or (me.get("seed") and me["seed"] < other["seed"]):
+        if not (me and me.get("winner") and other and other.get("seed")) or (me.get("seed") and me["seed"] - other["seed"] < UPSET_GAP):
             return []
         return [Found("upset", "key", f"Upset: {who} beats [{other['seed']}] {other.get('name')}", now.score)]
 
@@ -157,8 +167,9 @@ tournament and tour channels' highlights are official."""
         return "tennis"
 
     def search_words(self, fired: Fired) -> str | None:
-        """An upset, or a win from the semi-finals on, at the tournament."""
-        late, word = stage(fired.game, fired.competition)
+        """An upset, or a win from the semi-finals on, at the tournament: its round as the game's note names it
+        ("Final"), never the tournament's name, which may hold "Finals" for every match of it."""
+        late, word = stage(fired.notes)
         if fired.kind == "upset":
             return words("upset", fired.competition)
         if fired.kind == "final" and ": won" in fired.title.lower() and late >= 2:
