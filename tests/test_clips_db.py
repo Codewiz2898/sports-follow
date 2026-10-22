@@ -293,3 +293,9 @@ def test_a_failed_upload_is_kept_failed_and_only_its_key_takes_it_down(api, db, 
     assert api.delete(f"/api/clips/{second['id']}", headers={"Authorization": f"Bearer {mine}"}).status_code == 204
     with db() as s:
         assert s.query(Clip).filter_by(slug=second["id"]).one().status == "removed"
+
+
+def test_a_key_id_no_row_can_have_is_refused_before_it_reaches_the_database(api):
+    """BUG-263: revoking a publishing key by an id past what its column holds reached Postgres, which failed on it: a 500."""
+    answer = api.delete("/api/admin/clip-keys/99999999999999999999")
+    assert answer.status_code == 422 and "less than or equal to 2147483647" in answer.text

@@ -1820,7 +1820,7 @@ def admin_new_clip_key(body: dict[str, Any] = Body(...), db: Session = Depends(g
 
 
 @app.delete("/api/admin/clip-keys/{key_id}", status_code=204, dependencies=AdminOnly)
-def admin_revoke_clip_key(key_id: int, db: Session = Depends(get_db)) -> None:
+def admin_revoke_clip_key(key_id: RowId, db: Session = Depends(get_db)) -> None:
     if not clips.revoke(db, key_id):
         raise HTTPException(404, "No such key, or revoked already.")
     db.commit()
