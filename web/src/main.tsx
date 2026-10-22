@@ -1,6 +1,6 @@
-import { lazy, StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { lazy, StrictMode, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate, useNavigationType } from 'react-router-dom'
 import { AccountNotice, AccountProvider, useAccount } from './account'
 import { APP_NAME } from './app'
 import { ActivityProvider, useActivity } from './activity'
@@ -158,11 +158,49 @@ function Sidebar() {
   )
 }
 
-/** A new page opens at its top, not wherever the last one was scrolled to. */
+// Where each page the fan has been on was scrolled to, by its step in the browser's history (location.key).
+const scrolled = new Map<string, number>()
+// What the fan does that says they've taken over the scrolling.
+const TAKEN_OVER = ['wheel', 'touchstart', 'keydown', 'pointerdown'] as const
+
+/** A new page opens at its top, not wherever the last one was scrolled to; Back (or Forward) to one goes back to
+ * where the fan was on it, rather than to its top (BUG-163): its lists come from memory (the Feed's pages: myFeed.ts),
+ * so it's tall enough again at once or nearly. The browser's own restoring is off: it ran before the page was drawn. */
 function ScrollToTop() {
-  const { pathname } = useLocation()
-  useEffect(() => { window.scrollTo(0, 0) }, [pathname])
+  const { pathname, key } = useLocation()
+  const how = useNavigationType()
+  const at = useRef(key)
+  useLayoutEffect(() => { at.current = key }, [key])
+  useEffect(() => {
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual'
+    const note = () => { scrolled.set(at.current, window.scrollY) }
+    window.addEventListener('scroll', note, { passive: true })
+    return () => window.removeEventListener('scroll', note)
+  }, [])
+  useEffect(() => {
+    if (how !== 'POP') { window.scrollTo(0, 0); return }
+    return scrollBack(scrolled.get(key) ?? 0)
+  }, [pathname])  // eslint-disable-line react-hooks/exhaustive-deps -- a new page, as it came (how, key)
   return null
+}
+
+/** Scrolls the window to `y` as soon as the page is tall enough to: at once, or over the next two seconds as what it
+ * shows comes in; not once the fan scrolls, taps or types first. Returns a way to stop. */
+function scrollBack(y: number): () => void {
+  const until = performance.now() + 2000
+  let frame = 0
+  const stop = () => {
+    cancelAnimationFrame(frame)
+    for (const e of TAKEN_OVER) window.removeEventListener(e, stop)
+  }
+  const step = () => {
+    window.scrollTo(0, y)
+    if (Math.abs(window.scrollY - y) < 2 || performance.now() > until) stop()
+    else frame = requestAnimationFrame(step)
+  }
+  for (const e of TAKEN_OVER) window.addEventListener(e, stop, { passive: true })
+  step()
+  return stop
 }
 
 function Toasts() {

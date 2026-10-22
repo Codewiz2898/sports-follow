@@ -238,9 +238,10 @@ export function EdgePost({ entry, now, follows, playing, onPlay, onMore }: {
  * last few come up (onNear). The video on screen plays by itself as the fan's setting allows (usePlaying), muted till
  * they turn the sound on (the sound button at the top right, by the tabs), and what plays stops once it's scrolled
  * away. */
-export function Reels({ entries, now, tab, onTab, follows, onMore, onNear, footer }: {
+export function Reels({ entries, now, tab, onTab, follows, onMore, onNear, footer, start = 0, onScrolled }: {
   entries: FeedEntry[]; now: number; tab: FeedTabKey; onTab: (tab: FeedTabKey) => void; follows: Follows
   onMore: (entry: FeedEntry) => void; onNear: () => void; footer?: ReactNode
+  start?: number; onScrolled?: (top: number) => void  // where the reels were, Back to the Feed (myFeed.ts), and where they are
 }) {
   const [box, setBox] = useState<HTMLDivElement | null>(null)
   const [shown, setShown] = useState(0)
@@ -269,14 +270,14 @@ export function Reels({ entries, now, tab, onTab, follows, onMore, onNear, foote
   // A Short on screen: the tab bar over it turns dark and see-through, as Shorts' own (:root[data-reels='short']).
   const short = isShort(entries[shown]?.item)
   useEffect(() => { document.documentElement.dataset.reels = short ? 'short' : '' }, [short])
-  // A new tab starts from its top.
-  useEffect(() => { box?.scrollTo({ top: 0 }); setShown(0) }, [box, tab])
+  // A new tab starts from its top; Back to the Feed, where the fan was (`start`).
+  useEffect(() => { box?.scrollTo({ top: start }); setShown(0) }, [box, tab])  // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="reels" data-tab={tab}>
       <FeedTabs tab={tab} onTab={onTab} className="reels-tabs" />
       {playing && <SoundButton className="reels-sound" />}
-      <div ref={setBox} className="reels-snap">
+      <div ref={setBox} className="reels-snap" onScroll={onScrolled && ((e) => onScrolled(e.currentTarget.scrollTop))}>
         {entries.map((e, n) => (
           isShort(e.item) ? (
             <ShortReel key={e.item.id} n={n} entry={e} now={now} follows={follows} playing={playing?.id === e.item.id}

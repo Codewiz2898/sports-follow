@@ -85,7 +85,7 @@ export function FeedPage() {
   const wanted = Number(params.get('player'))
   const player = Number.isInteger(wanted) && wanted > 0 ? wanted : null
   const tab: FeedTabKey = player != null || params.get('tab') === 'following' ? 'following' : 'for_you'
-  const { page, error, loading, more, hide } = useMyFeed(player, undefined, undefined, tab)
+  const { page, error, loading, more, hide, top, keepTop } = useMyFeed(player, undefined, undefined, tab)
   const layout = useLayout(page)
   const { follows, error: followError } = useFollows()
   const [open, setOpen] = useState<FeedEntry | null>(null)
@@ -159,7 +159,7 @@ export function FeedPage() {
   if (layout === 'full') {
     return (
       <>
-        <Reels entries={items} now={now} tab={tab} onTab={showTab} follows={follows} onMore={setOpen} onNear={more}
+        <Reels entries={items} now={now} tab={tab} onTab={showTab} follows={follows} onMore={setOpen} onNear={more} start={top} onScrolled={keepTop}
           footer={error ? (
             <div className="stack" style={{ gap: 12, alignItems: 'center', textAlign: 'center' }}>
               <span className="eyebrow">{error}</span>
