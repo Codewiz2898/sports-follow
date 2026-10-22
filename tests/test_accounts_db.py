@@ -257,6 +257,24 @@ def test_google_finds_by_its_id_then_links_the_address_and_never_takes_over_anot
     assert db.get(Account, by_email).google_sub == "g-1"
 
 
+def test_an_account_stands_once_its_a_day_old_and_the_codes_kept_for_accounts_are_for_those(db):
+    """BUG-093, reopened: an account made minutes before counted as one with standing, so accounts made for it could
+    spend the sign-in codes kept for fans with accounts."""
+    account(db, "new@example.com")
+    db.add(Account(email="old@example.com", fan_id="acct-old", created_at=NOW - timedelta(days=1, minutes=1), last_sign_in_at=NOW - timedelta(days=1)))
+    db.commit()
+    assert [accounts.standing(db, e) for e in ("new@example.com", "old@example.com", "nobody@example.com")] == [False, True, False]
+
+
+def test_counting_inboxes_in_sql_agrees_with_python_and_an_account_is_still_its_whole_address(db):
+    """BUG-296: queries that count fans count inboxes (accounts.inbox_of, the SQL twin of accounts.inbox); an account
+    made with a +tag, or a dot, is its own account still, and signs in as itself."""
+    emails = ["me+1@gmail.com", "m.e@googlemail.com", "me@gmail.com", "first.last+news@example.com", "first.last@example.com", "+only@example.com", "plain@example.org"]
+    ids = [account(db, e)[0] for e in emails]
+    assert len(set(ids)) == len(emails) and account(db, "me+1@gmail.com")[0] == ids[0]
+    assert {e: i for e, i in db.execute(select(Account.email, accounts.inbox_of(Account.email)))} == {e: accounts.inbox(e) for e in emails}
+
+
 # ---------------------------------------------------------------- sessions
 
 

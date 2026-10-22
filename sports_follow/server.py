@@ -1297,6 +1297,52 @@ def client_address(request: Request) -> str | None:
     return str(ipaddress.ip_network(f"{ip}/64", strict=False)) if ip.version == 6 else str(ip)
 
 
+# How big "one address" is, for every per-address limit (BUG-106, BUG-299, BUG-326). An IPv4 address is one, though it
+# may be a phone network's, shared by thousands of its fans (carrier-grade NAT), so its limits are generous. An IPv6
+# client's is its /64 (client_address), a household's or a phone's. Its /48 (_network) is neither: a free tunnel or a
+# fibre plan gives one person a whole /48, and a phone network may share one among many subscribers. So an IPv6 limit
+# is a /64's, and a /48's /64s together have a ceiling of their own, several /64s' worth (_address_limits); a /48 at
+# its ceiling is logged (_at_ceiling), a script or a crowd for someone to look at.
+limits_log = logging.getLogger("sports_follow.limits")
+_ceilings_logged: dict[tuple[str, str], float] = {}  # (limit, network): when this process last logged it at its ceiling
+
+
+def _address_limits(address: str | None, per_address: int, per_48: int, unknown: int | None = None) -> list[tuple[str, int]]:
+    """Who a per-address limit counts a client as, and how many each may: an IPv4 address, `per_address`; an IPv6
+    client's /64, `per_address`, and its /48, `per_48` for all of its /64s together; a client without a public
+    address, `unknown` for every such client together (none at all when None)."""
+    if not address:
+        return [] if unknown is None else [("unknown", unknown)]
+    if ":" not in address:
+        return [(address, per_address)]
+    return [(address, per_address), (_network(address), per_48)]
+
+
+def _at_ceiling(limit: str, network: str) -> None:
+    """Log a network (an IPv6 /48, or an IPv4 /24's streams) at its ceiling for a limit, once an hour in each process:
+    so much from all its addresses together is a script, or a phone network's crowd that the ceiling may need to make
+    room for. Named by a hash, as fans are: the log never holds a client's address (RequestLog)."""
+    now = time.monotonic()
+    if now - _ceilings_logged.get((limit, network), float("-inf")) < 3600:
+        return
+    if len(_ceilings_logged) >= 1000:  # a process's memory of them stays small
+        _ceilings_logged.clear()
+    _ceilings_logged[limit, network] = now
+    limits_log.warning("limits: a /%s reached its ceiling for %s (%s)", network.rpartition("/")[2], limit, hashlib.sha256(network.encode()).hexdigest()[:12])
+
+
+async def _take_address(limit: str, address_limits: list[tuple[str, int]], when: str, ttl: int, refusal: str) -> None:
+    """Count one against each of a client's per-address limits (_address_limits) in turn, keyed "<limit>:<who>:<when>";
+    past any, a 429 (the counts taken stay: the limit is on attempts), and a /48 past its ceiling is logged."""
+    for who, most in address_limits:
+        try:
+            await _take(f"{limit}:{who}:{when}", most, ttl, refusal)
+        except HTTPException:
+            if who.endswith("/48"):
+                _at_ceiling(limit, who)
+            raise
+
+
 async def research_used(fan: str) -> int:
     return int(await state["redis"].get(player_search.research_key(fan)) or 0)
 
@@ -1592,16 +1638,18 @@ def set_alerts(player_id: RowId, body: dict = Body(...), fan: str = Depends(fan_
 # ---------------------------------------------------------------- accounts (accounts.py)
 
 CODE_LIFE = 600  # seconds an emailed code works
-CODE_TRIES = 5  # wrong codes from one network (_network) before it stops working there
+# A code's wrong tries, and an address's in a day, are counted by the network they came from: a client address (an IPv4
+# address, or an IPv6 /64), not its /48, which a phone network shares among its subscribers (BUG-326).
+CODE_TRIES = 5  # wrong codes from one network before it stops working there
 CODE_TRIES_ELSEWHERE = 10  # wrong codes from every network but the one that asked for it, together: then it works only there
 RESEND_AFTER = 60  # seconds before another code to the same address
-CODES_PER_EMAIL = 5  # an hour
-CODES_PER_ADDRESS = 20  # an hour, from one client address (an IPv6 /64)
+CODES_PER_EMAIL = 5  # an hour, to one inbox (accounts.inbox): its plus-addresses don't each get five (BUG-296)
+CODES_PER_ADDRESS = 20  # an hour, from one client address (an IPv4 address, or an IPv6 /64)
 CODES_UNKNOWN_ADDRESS = 100  # an hour, from every client without a public address together
 CODES_PER_ADDRESS_DAY = 20  # a UTC day, from one client address: one network can't spend the day's mail
-CODES_PER_NETWORK_DAY = 40  # a UTC day, from one IPv6 /48 (a site's): its 65,536 /64s can't each take twenty
+CODES_PER_NETWORK_DAY = 200  # a UTC day, from one IPv6 /48's /64s together (_address_limits): a phone network's subscribers, not 65,536 /64s' worth
 CODES_PER_HOUR = 200  # an hour, to everyone: the mail provider's bill
-KEPT_FOR_ACCOUNTS = 0.3  # of the day's codes (MAIL_CODES_PER_DAY), kept for addresses with an account: made-up ones can't spend them
+KEPT_FOR_ACCOUNTS = 0.3  # of the day's codes (MAIL_CODES_PER_DAY), kept for accounts that have stood a day (accounts.standing)
 FAILS_PER_DAY = 20  # wrong codes for one address from one network in a UTC day, across new codes
 BLOCKED = "This account has been blocked."  # by an admin (admin.py)
 TOO_MANY_WRONG = "Too many wrong codes. Ask for a new one."
@@ -1616,8 +1664,8 @@ async def _take(key: str, limit: int, ttl: int, refusal: str) -> None:
 
 
 def _network(address: str | None) -> str:
-    """Where a client's wrong codes are counted, and a site's codes: an IPv6 client's /48 (a home or an office may
-    hold all of it; client_address gives its /64), else its address; "unknown" without a public one."""
+    """The network a client address (client_address's) is in: an IPv6 client's /48, whose /64s together have a
+    ceiling on each per-address limit (_address_limits); else the address itself; "unknown" without a public one."""
     if not address:
         return "unknown"
     network = ipaddress.ip_network(address, strict=False)
@@ -1694,7 +1742,7 @@ async def app_start(request: Request, response: Response, signed: accounts.Signe
 
 @app.post("/api/auth/email/start")
 async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any]:
-    """Email a 6-digit sign-in code. Part of the day's codes is kept for addresses with an account
+    """Email a 6-digit sign-in code. Part of the day's codes is kept for addresses whose account has stood a day
     (KEPT_FOR_ACCOUNTS)."""
     if not mail.configured(_secure(request)):
         raise HTTPException(503, "Signing in by email isn't set up on this server yet.")
@@ -1704,23 +1752,23 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
     who, now = accounts.email_key(email), datetime.now(timezone.utc)
     hour, day = now.strftime("%Y-%m-%dT%H"), now.strftime("%Y-%m-%d")
     address = client_address(request)
-    network = _network(address)
-    # Wrong codes from this network only: anyone's elsewhere don't shut the fan out for the day (BUG-092).
+    network = address or "unknown"  # where its wrong codes are counted
+    # Wrong codes from this network only: anyone's elsewhere, another subscriber's on the fan's phone network among
+    # them, don't shut the fan out for the day (BUG-092, BUG-326).
     if int(await state["redis"].get(f"auth-fails:{who}:{network}:{day}") or 0) >= FAILS_PER_DAY:
         raise HTTPException(429, "Too many wrong codes for this address today. Try again tomorrow.")
     if not await state["redis"].set(f"auth-wait:{who}", "1", nx=True, ex=RESEND_AFTER):
         # Asked again within the minute (a second tap, the app reloaded): the code sent then is the one.
         return {"ok": True, "resend_in": max(int(await state["redis"].ttl(f"auth-wait:{who}")), 1)}
     try:
-        await _take(f"auth-email:{who}:{hour}", CODES_PER_EMAIL, 2 * 3600, "That's a lot of codes for one address. Try again in an hour.")
-        await _take(f"auth-address:{address or 'unknown'}:{hour}", CODES_PER_ADDRESS if address else CODES_UNKNOWN_ADDRESS, 2 * 3600, "Your network has asked for a lot of codes. Try again in an hour.")
-        if address:
-            await _take(f"auth-address-day:{address}:{day}", CODES_PER_ADDRESS_DAY, 2 * DAY, "Your network has asked for a lot of codes today. Try again tomorrow.")
-        if network != (address or "unknown"):  # an IPv6 client: its site's day too
-            await _take(f"auth-network-day:{network}:{day}", CODES_PER_NETWORK_DAY, 2 * DAY, "Your network has asked for a lot of codes today. Try again tomorrow.")
+        await _take(f"auth-email:{accounts.email_key(accounts.inbox(email))}:{hour}", CODES_PER_EMAIL, 2 * 3600, "That's a lot of codes for one address. Try again in an hour.")
+        await _take(f"auth-address:{network}:{hour}", CODES_PER_ADDRESS if address else CODES_UNKNOWN_ADDRESS, 2 * 3600, "Your network has asked for a lot of codes. Try again in an hour.")
+        await _take_address("auth-address-day", _address_limits(address, CODES_PER_ADDRESS_DAY, CODES_PER_NETWORK_DAY), day, 2 * DAY,
+                            "Your network has asked for a lot of codes today. Try again tomorrow.")
         used_up = f"{APP_NAME} has sent all the sign-in codes it can today. Try again tomorrow."
-        # Part of the day's codes is kept for fans with an account: made-up addresses can't leave none (BUG-093).
-        if not await in_db(accounts.known, email):
+        # Part of the day's codes is kept for fans whose account has stood a day: made-up addresses, and accounts made
+        # for it minutes before, can't leave none (BUG-093).
+        if not await in_db(accounts.standing, email):
             await _take(f"auth-day-new:{day}", MAIL_CODES_PER_DAY - round(MAIL_CODES_PER_DAY * KEPT_FOR_ACCOUNTS), 2 * DAY, used_up)
         await _take(f"auth-hour:{hour}", CODES_PER_HOUR, 2 * 3600, f"{APP_NAME} is sending a lot of codes right now. Try again in a few minutes.")
         await _take(f"auth-day:{day}", MAIL_CODES_PER_DAY, 2 * DAY, used_up)
@@ -1753,7 +1801,7 @@ async def email_verify(request: Request, response: Response, body: dict = Body(.
     if email is None or not re.fullmatch(r"\d{6}", code):
         raise HTTPException(400, "Enter the 6-digit code from the email.")
     who, day = accounts.email_key(email), datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    network = _network(client_address(request))
+    network = client_address(request) or "unknown"  # as email_start counts it
     expected = await state["redis"].get(f"auth-code:{who}")
     if not expected:
         raise HTTPException(400, "That code has run out. Ask for a new one.")
