@@ -89,6 +89,10 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   meRef.current = me
   const asked = useRef(Date.now())  // the last time who this device is was asked
   const who = useRef<WhoAsker | null>(null)
+  // The app is starting over (signed in, out or deleted here, or found someone else): one start over, saying what
+  // happened. A sign-out here ends the session, which the server says on this tab's own stream before it answers:
+  // asked again then, the app started over a second time, as signed out elsewhere, on the page it was on.
+  const leaving = useRef(false)
   const [config, setConfig] = useState<ServerConfig | null>(null)
   const [notice, setNotice] = useState<string | null>(() => {
     try {
@@ -127,6 +131,8 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     const asker = whoAsker(() => api.account(), (now) => {
       const shown = meRef.current
       if (changedHands(shown, now)) {
+        if (leaving.current) return
+        leaving.current = true
         const out = !now.signed_in
         startOver(window.location.pathname + window.location.search, out ? SIGNED_OUT : null, out)
         return
@@ -147,7 +153,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   const recheck = useCallback((now = false) => {
     // Not known yet: asked at once (a stream connecting again says the server is back). `now`: anew, an answer under
     // way from before the session ended dropped.
-    if (!now && meRef.current !== null && Date.now() - asked.current < RECHECK_MS) return
+    if (leaving.current || (!now && meRef.current !== null && Date.now() - asked.current < RECHECK_MS)) return
     asked.current = Date.now()
     who.current?.ask(now)
   }, [])
@@ -160,16 +166,25 @@ export function AccountProvider({ children }: { children: ReactNode }) {
 
   const dismissNotice = useCallback(() => setNotice(null), [])
   const signedIn = useCallback((account: Account, back?: string) => {
+    leaving.current = true
     startOver(ownPage(back) ?? '/account', welcome(account.players_added ?? 0, account.teams_dropped ?? 0), false)
   }, [])
-  const signOut = useCallback(async (everywhere = false) => {
-    await api.signOut(everywhere)
-    await startOver('/', everywhere ? 'Signed out on every device.' : 'Signed out. Your players are kept in your account.', true)
+  /** Sign out or delete the account (`end`), then start over saying `said`. If that fails, the app is as it was, and
+   * who it is is asked again: the server may have ended the session all the same. */
+  const leave = useCallback(async (end: () => Promise<unknown>, said: string) => {
+    if (leaving.current) return
+    leaving.current = true
+    try {
+      await end()
+    } catch (e) {
+      leaving.current = false
+      who.current?.ask(true)
+      throw e
+    }
+    await startOver('/', said, true)
   }, [])
-  const deleteAccount = useCallback(async () => {
-    await api.deleteAccount()
-    await startOver('/', 'Your account and everything kept with it are deleted.', true)
-  }, [])
+  const signOut = useCallback((everywhere = false) => leave(() => api.signOut(everywhere), everywhere ? 'Signed out on every device.' : 'Signed out. Your players are kept in your account.'), [leave])
+  const deleteAccount = useCallback(() => leave(() => api.deleteAccount(), 'Your account and everything kept with it are deleted.'), [leave])
 
   const value = useMemo<AccountState>(
     () => ({ me, config, notice, dismissNotice, signedIn, signOut, deleteAccount, recheck }),
