@@ -2,7 +2,7 @@ import { useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useNow } from '../clock'
 import type { Card, FollowedTeam, LiveStatus, MyPredictions, NewsItem, Photo, Provenance, RecentResult, Stat, UpcomingEvent } from '../api'
-import { clockPieces, countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName, statFit } from '../format'
+import { clockPieces, countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, parseDate, playedOn, relative, resultOutcome, safeHref, shortName, statFit } from '../format'
 import { comingCard, highlight as sportHighlight, liveLine, playerLine, resultCard, statusLine as sharedStatusLine, teamLine, teamNameSize, WON, wordSize, type GameResult } from '../lines'
 import { Backdrop, sportDrawn, sportKey, sportName, viewOfKind } from '../sports'
 import type { LatestMoment } from '../today'
@@ -406,7 +406,7 @@ export function ResultsList({ items, teams }: { items?: RecentResult[]; teams?: 
   return (
     <ul className="card list">
       {items.map((r) => {
-        const wl = outcome(r.result, teams)
+        const wl = resultOutcome(r, teams)
         const score = /^(Won|Lost|Drew)\s+/.test(r.result) ? r.result.replace(/^(Won|Lost|Drew)\s+/, '') : null
         return (
           <li key={`${r.title}-${r.date ?? ''}`} className="row" style={{ alignItems: 'flex-start', justifyContent: 'flex-start' }}>
@@ -429,7 +429,7 @@ export function ResultsList({ items, teams }: { items?: RecentResult[]; teams?: 
 
 /** Won, drew or lost for the last five results whose outcome is known, newest first. */
 export function formMarks(results: RecentResult[], teams?: string[]): ('W' | 'D' | 'L')[] {
-  return results.map((r) => outcome(r.result, teams)).filter((m): m is 'W' | 'D' | 'L' => m != null).slice(0, 5)
+  return results.map((r) => resultOutcome(r, teams)).filter((m): m is 'W' | 'D' | 'L' => m != null).slice(0, 5)
 }
 
 /** The last few results as a row of badges, newest first. */

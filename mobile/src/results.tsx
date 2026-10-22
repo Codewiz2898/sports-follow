@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from 'react'
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native'
-import { day, hostname, outcome, playedOn, safeHref } from '../../web/src/format'
+import { day, hostname, playedOn, resultOutcome, safeHref } from '../../web/src/format'
 import { api, type Card, type Form, type GameDetail, type RecentResult, type ResultsPage } from './api'
 import { Empty, openMatch, SourceNote, StatGrid } from './blocks'
 import { useSports } from './catalog'
@@ -65,7 +65,7 @@ function GameRow({ r, playerId, teams, teamOnly, last }: { r: RecentResult; play
   const [detail, setDetail] = useState<GameDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const canOpen = r.event_id != null
-  const wl = outcome(r.result, teams)
+  const wl = resultOutcome(r, teams)
   // The badge says won or lost, so the score stands alone ("Won 133–128" → "133–128").
   const score = wl ? r.result.replace(/^(Won|Lost|Drew)\s+/, '') : r.result
   const long = score.length > 14

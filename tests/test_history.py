@@ -84,6 +84,9 @@ class FakeSource:
     def history_pages(self, ref, anchor):
         return [{"n": i} for i in range(3)]
 
+    def sport_of(self, ref):
+        return self.sport
+
     def history(self, ref, page):
         self.pages_read.append((ref.athlete_id, page["n"]))
         if self.page_error and ref.athlete_id == "A1":

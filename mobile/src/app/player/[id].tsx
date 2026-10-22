@@ -9,7 +9,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LEVELS, levelText } from '../../../../web/src/alerts'
-import { day, outcome, playedOn, relative, safeHref, shortName } from '../../../../web/src/format'
+import { day, playedOn, relative, resultOutcome, safeHref, shortName } from '../../../../web/src/format'
 import { bareScore, highlight, lastChecked, liveLag, liveUpdates, newsOf, nextGame, pendingLine, profileFacts } from '../../../../web/src/lines'
 import { sharePlayer } from '../../../../web/src/share'
 import { useAccount } from '../../account'
@@ -185,7 +185,7 @@ function Overview({ card, feed, show, onError }: { card: Card; feed: Feed | null
   const results = card.recent_results ?? []
   const marks = formMarks(results, p.teams)
   const last = results[0]
-  const wl = last && outcome(last.result, p.teams)
+  const wl = last && resultOutcome(last, p.teams)
   const word = last && highlight(sports.drawn(p.sport), last.player_contribution)
   const score = last && bareScore(last.result)
   const sportName = sports.name(p.sport) || 'this sport'

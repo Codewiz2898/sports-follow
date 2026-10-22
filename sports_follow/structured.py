@@ -724,11 +724,26 @@ def _upcoming_item(f: Fixture, event: Event, ref: PlayerRef) -> dict[str, Any]:
     }
 
 
+def _side(f: Fixture, snap: Snapshot | None, ref: PlayerRef) -> str | None:
+    """The id of the side the player played for in a game: the one the scorecard has them in (a traded player's old
+    side), else the one of their teams in it."""
+    if snap is not None and (side := snap.sides.get(ref.athlete_id)):
+        return side
+    ours = [t for t in f.team_ids if t in ref.team_ids]
+    return ours[0] if len(ours) == 1 else None
+
+
 def result_item(adapter: Adapter, f: Fixture, snap: Snapshot | None, event: Event | None, ref: PlayerRef) -> dict[str, Any]:
+    # A lagging schedule has no result yet for a game the poller saw finish; the scorecard does.
+    said = adapter.result_label(f, ref.team_ids) or snap_result(snap)
+    # The game's sides as the source marks them: its final board, else the schedule's result.
+    board = snap.state if snap is not None and snap.status == "final" else f.result or (snap.state if snap else None)
+    rules = sports.of(f.sport or adapter.sport_of(ref))
     return {
         "title": f"{f.title} · {f.detail}" if f.detail else f.title,
-        # A lagging schedule has no result yet for a game the poller saw finish; the scorecard does.
-        "result": adapter.result_label(f, ref.team_ids) or snap_result(snap),
+        "result": said,
+        # Won, drew or lost, told now from the side the player played for, so the app needn't guess it from names.
+        "outcome": rules.outcome(said, [*ref.team_names, *ref.other_teams], board, _side(f, snap, ref)),
         "date": f.start_utc.date().isoformat() if f.start_utc else None,
         "start_utc": _iso(f.start_utc),  # the app dates a result by the fan's local day of the game
         "player_contribution": contribution(snap, ref.athlete_id),
@@ -751,13 +766,16 @@ def snap_result(snap: Snapshot | None) -> str:
 
 
 def merged_result(old: dict[str, Any] | None, item: dict[str, Any], scorecard: bool) -> dict[str, Any]:
-    """A result read again: a read without the scorecard keeps what an earlier scorecard added."""
+    """A result read again: a read without the scorecard keeps what an earlier scorecard added, and the outcome it
+    told from the side it had the player in (the schedule alone knows only their teams now)."""
     old = old or {}
     new = {**item, "scorecard": True if scorecard else old.get("scorecard", False)}
     if not scorecard:
         for key in ("player_contribution", "source_url", "result", "game_key"):
             if old.get(key) and not new.get(key):
                 new[key] = old[key]
+        if old.get("outcome") and (old.get("scorecard") is True or not new.get("outcome")):
+            new["outcome"] = old["outcome"]
     return new
 
 
@@ -778,7 +796,12 @@ def add_scorecard(db: Session, event: Event, player_id: int, athlete_id: str, sn
     row = db.get(EventPlayer, (event.id, player_id))
     if row is None or row.result is None:
         return
-    row.result = {**row.result, "player_contribution": contribution(snap, athlete_id), "source_url": snap.source_url, "result": row.result.get("result") or snap_result(snap), "scorecard": True}
+    said = row.result.get("result") or snap_result(snap)
+    # The outcome again, from the side the scorecard has the player in, where it says.
+    side = snap.sides.get(athlete_id)
+    told = sports.of_state(snap.state).outcome(said, [], snap.state, side) if side else None
+    row.result = {**row.result, "player_contribution": contribution(snap, athlete_id), "source_url": snap.source_url, "result": said, "scorecard": True,
+                  **({"outcome": told} if told else {})}
 
 
 # ---------------------------------------------------------------- live polling

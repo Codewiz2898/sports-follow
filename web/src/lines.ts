@@ -3,7 +3,7 @@
 // Android app (mobile/), so it touches nothing of a browser's. A sport is passed by its key (each app finds
 // it its own way: sports/catalog.ts, mobile/src/sports.tsx).
 
-import { ahead, countdown, dateOnly, day, dayLabel, lineStats, outcome, parseDate, playedOn, shortName, shortWhen } from './format'
+import { ahead, countdown, dateOnly, day, dayLabel, lineStats, parseDate, playedOn, resultOutcome, shortName, shortWhen } from './format'
 import { factsOf, factsOfKind } from './sports/facts'
 import type { Card, FollowedTeam, LatestResult, LiveStatus, NewsItem, Stat, UpcomingEvent } from './types'
 
@@ -148,7 +148,7 @@ export function resultCard(game: GameResult, hero: boolean, now: number, key: st
   const lead = game.players[0]
   const r = lead.result
   const several = game.players.length > 1
-  const marks = game.players.map((p) => outcome(p.result.result, p.teams))
+  const marks = game.players.map((p) => resultOutcome(p.result, p.teams))
   // Their games went differently: they played each other (one won), or finished apart in a lobby ("3rd of
   // 16" and "9th of 16"). Then no one result is everyone's.
   const split = new Set(marks).size > 1 || new Set(game.players.map((p) => p.result.result)).size > 1
