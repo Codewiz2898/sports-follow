@@ -7,17 +7,19 @@
 // notifications.
 
 //
-// The site's links open in the app (Android App Links): its pages, read from its routes (src/app), so a new page
-// needs no second list. A folder is every address under it, and [slug].tsx is the one-word addresses
+// The site's links open in the app (Android App Links): its pages, read from its routes (src/app) by links.js, so a
+// new page needs no second list. A folder is every address under it, and [slug].tsx is the one-word addresses
 // (campaigns, campaigns.SLUG), from Android 12; older phones open those in the browser. Android matches a path as
-// it's typed, capitals and all, so that pattern takes them: the server finds a campaign whatever its case. Android
-// trusts the claim once the site's /.well-known/assetlinks.json names this package and the certificate that signed
-// it (README.md, "Android app").
+// it's typed, capitals and all, so that pattern takes them: the server finds a campaign whatever its case. Not the
+// site's own one-word pages the app has no screen for (links.js WEB_ONLY: the admin panel), which stay the
+// browser's. Android trusts the claim once the site's /.well-known/assetlinks.json names this package and the
+// certificate that signed it (README.md, "Android app").
 
 /// <reference types="node" />
 import fs from 'node:fs'
 import path from 'node:path'
-import type { ExpoConfig, ExpoConfigAndroidIntentFiltersData } from 'expo/config'
+import type { ExpoConfig } from 'expo/config'
+import { pages } from './links'
 
 const { name } = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'sports_follow', 'app.json'), 'utf8')) as { name: string }
 if (!name) throw new Error('sports_follow/app.json has no name')
@@ -51,17 +53,6 @@ function firebase(): boolean {
 
 const FIREBASE = firebase()
 
-/** The addresses on the site the app has a page for: one per route file, every one under a route folder. */
-function pages(): ExpoConfigAndroidIntentFiltersData[] {
-  return fs.readdirSync(path.join(__dirname, 'src', 'app'), { withFileTypes: true }).flatMap((f): ExpoConfigAndroidIntentFiltersData[] => {
-    const route = f.name.replace(/\.tsx$/, '')
-    if (f.isDirectory()) return [{ pathPrefix: `/${route}/` }]
-    if (route === 'index') return [{ path: '/' }, { path: '' }] // "https://stann.in/", and without its slash
-    if (route === '[slug]') return [{ pathAdvancedPattern: '/[a-zA-Z0-9-]+' }] // as typed: /Gukesh is /gukesh to the server
-    return /^[a-z]+$/.test(route) ? [{ path: `/${route}` }] : [] // not _layout or +not-found
-  })
-}
-
 export default (): ExpoConfig => ({
   name,
   slug: 'slam',
@@ -85,7 +76,7 @@ export default (): ExpoConfig => ({
       action: 'VIEW',
       autoVerify: true,
       category: ['BROWSABLE', 'DEFAULT'],
-      data: [{ scheme: 'https', host: SITE }, ...pages()],
+      data: [{ scheme: 'https', host: SITE }, ...pages(path.join(__dirname, 'src', 'app'))],
     }],
     ...(FIREBASE ? { googleServicesFile: GOOGLE_SERVICES } : {}),
   },

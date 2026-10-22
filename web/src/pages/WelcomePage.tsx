@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { LiveNow } from '../components/LiveNow'
 import { StarterPicker, useStarters } from '../components/Starters'
 import { CheckIcon, PlusIcon } from '../components/Icons'
+import { longestWordEms } from '../format'
 import { useFollowing } from '../following'
 
 const WELCOMED = 'sf-welcomed'
@@ -77,7 +78,7 @@ export function WelcomePage() {
             return (
               <button key={s.key} type="button" className="tile pick sport" data-sport={s.key} aria-pressed={on} onClick={() => pick(s.key)}>
                 <span className="corner">{on ? <CheckIcon width={20} height={20} /> : <PlusIcon width={20} height={20} />}</span>
-                <span className="dsp name">{s.label}</span>
+                <span className="dsp name" style={{ '--ems': longestWordEms(s.label) } as CSSProperties}>{s.label}</span>
               </button>
             )
           })}

@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useAccount } from './account'
 import { api, subscribe, type AlertLevel, type Card, type FollowedMatch, type FollowedTeam, type FollowTarget, type PlayerMoment, type StreamEvent } from './api'
 import { wanted } from './notifications'
-import { listed } from './resync'
+import { listed, withFollowed } from './resync'
 
 interface FollowingState {
   cards: Card[]
@@ -183,17 +183,21 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
 
   // Back in the app after a while: what came while it was away may be in the activity list. Not on every reconnect
   // of the stream, which every open app makes at once when the server restarts (BUG-265): only one after a while
-  // without it (below).
+  // without it (below). And the fan's list as it is now: a stream sends it when a follow is made on another device
+  // (BUG-165), but an app following no one yet has no stream to hear it on.
   useEffect(() => {
     let away = document.visibilityState === 'hidden' ? Date.now() : null
     const seen = () => {
       if (document.visibilityState === 'hidden') { away ??= Date.now(); return }
-      if (away != null && Date.now() - away >= AWAY_MS) setHeard((n) => n + 1)
+      if (away != null && Date.now() - away >= AWAY_MS) {
+        setHeard((n) => n + 1)
+        if (loadedRef.current) { void reloadRef.current(); void reloadMatches() }
+      }
       away = null
     }
     document.addEventListener('visibilitychange', seen)
     return () => document.removeEventListener('visibilitychange', seen)
-  }, [])
+  }, [reloadMatches])
 
   const apply = useCallback((e: StreamEvent) => {
     if (e.type === 'following') {
@@ -314,7 +318,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
 
   const follow = useCallback((target: FollowTarget) => changing(async () => {
     const { card } = await api.follow(target)
-    setCards((prev) => (prev.some((c) => c.player_id === card.player_id) ? prev.map((c) => (c.player_id === card.player_id ? card : c)) : [...prev, card]))
+    setCards((prev) => withFollowed(prev, card))
     return card
   }), [changing])
 

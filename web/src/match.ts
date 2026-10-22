@@ -23,8 +23,22 @@ export function nextLook(refreshing: boolean, tries: number): { wait: number; tr
 const UNDER_WAY = ['live', 'final', 'armed']
 
 /** The board the head draws: the game's live block once it's under way, else none. */
-export function boardOf(match: Match): LiveStatus | null {
+export function boardOf(match: Pick<Match, 'live' | 'status'>): LiveStatus | null {
   return match.live && UNDER_WAY.includes(match.status) ? match.live : null
+}
+
+/** Who won, big over a finished game's board, as its sport says it ("Arsenal won" over 2-1 FT): "" while it's on,
+ * and where the board's line under the score says it already (a cricket match's summary is both), which a phone
+ * showed again, four lines tall (BUG-088). */
+export function pageResult(match: Pick<Match, 'status' | 'verdict' | 'live'>): string {
+  const verdict = match.status === 'final' ? match.verdict ?? '' : ''
+  return verdict && verdict !== boardOf(match)?.clock ? verdict : ''
+}
+
+/** A fan's player's result in the game, as Your players lists it: theirs ("Won 2-1"), not the game's said again
+ * (the board's line, or who won over it). */
+export function ownResult(result: string | null | undefined, match: Pick<Match, 'status' | 'verdict' | 'live'>): string | null {
+  return result && result !== match.verdict && result !== boardOf(match)?.clock ? result : null
 }
 
 const LATE = 6 * 36e5  // how long after its start a game that hasn't begun is still "starting soon"

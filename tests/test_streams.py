@@ -165,8 +165,9 @@ def test_the_fan_stream_opens_with_the_fans_players_and_holds_no_session(api):
     assert [(p["player_id"], p["version"], p["live"]["score"], p["alerts"]) for p in event["players"]] == [(1, 4, "1-0", "key"), (2, 9, "2-2", "off")]
     assert event["matches"] == [] and event["teams"] == []
     assert held == 0 and api.opened == ["thread"] * 4  # the follow ids, the players, the followed games, the teams: each closed at once
-    # Read once subscribed, so a card published while the stream connects can't fall in a gap.
-    assert api.redis.log == ["subscribe player:1 player:2", "mget card:1 card:2", "unsubscribe"]  # every card in one request (BUG-269)
+    # Read once subscribed, so a card published while the stream connects can't fall in a gap. The fan's own channel
+    # too: a follow on another device (BUG-165).
+    assert api.redis.log == ["subscribe player:1 player:2 follows:fan", "mget card:1 card:2", "unsubscribe"]  # every card in one request (BUG-269)
 
 
 def test_a_fan_who_follows_nothing_hears_so_first(api, monkeypatch):
@@ -184,7 +185,53 @@ def test_the_fan_stream_carries_the_games_the_fan_follows_by_themselves(api, mon
     response = asyncio.run(server.my_stream(Request(), fan="fan"))
     first_frame(response, api)
     # Each followed game's channel: its board as it's polled, and its own moments (bus.match_channel).
-    assert api.redis.log[0] == "subscribe player:1 player:2 match:41 match:42"
+    assert api.redis.log[0] == "subscribe player:1 player:2 match:41 match:42 follows:fan"
+
+
+class Told(PubSub):
+    """A stream's pubsub with one message waiting on the fan's own channel: what they follow changed."""
+
+    def __init__(self, log: list[str]):
+        super().__init__(log)
+        self.waiting = [{"type": "message", "channel": "follows:fan", "data": "{}"}]
+
+    async def get_message(self, ignore_subscribe_messages, timeout):
+        await asyncio.sleep(0)
+        return self.waiting.pop(0) if self.waiting else None
+
+
+def frames(response, n: int, between) -> list[dict]:
+    """The stream's first n events, `between` run after the first; within seconds, or the test fails."""
+
+    async def read():
+        out, body = [], response.body_iterator
+        try:
+            while len(out) < n:
+                frame = await anext(body)
+                if frame.startswith("data: "):
+                    out.append(json.loads(frame.removeprefix("data: ")))
+                    if len(out) == 1:
+                        between()
+        finally:
+            await body.aclose()
+        return out
+
+    return asyncio.run(asyncio.wait_for(read(), 5))
+
+
+@pytest.mark.parametrize("before", [FOLLOWS, []])
+def test_a_follow_on_another_device_reaches_the_fans_open_streams(api, monkeypatch, before):
+    """BUG-165: a stream's channels are fixed as it connects, and a follow or unfollow elsewhere told it nothing, so
+    an open app never saw a player followed on the fan's phone. Every fan stream listens on the fan's own channel too
+    (with nothing else to hear yet as well), and answers a word there by sending the fan's list again."""
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "FOLLOWS", before)
+    monkeypatch.setattr(api.redis, "pubsub", lambda: Told(api.redis.log))
+    response = asyncio.run(server.my_stream(Request(), fan="fan"))
+    first, again = frames(response, 2, lambda: monkeypatch.setattr(module, "FOLLOWS", [(2, {"level": "off"})]))  # followed elsewhere
+    assert [p["player_id"] for p in first["players"]] == [p for p, _ in before]
+    assert again == {"type": "following", "players": [{**again["players"][0], "player_id": 2, "alerts": "off"}], "matches": [], "teams": []}
+    assert api.redis.log[0].startswith("subscribe") and api.redis.log[0].endswith("follows:fan")
 
 
 def test_the_player_stream_rebuilds_a_lost_hot_copy_without_holding_a_session(api):

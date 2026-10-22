@@ -29,7 +29,7 @@ import { PrivacyPage } from './pages/PrivacyPage'
 import { FriendLeaguePage, InvitePage, LeaguesPage } from './pages/LeaguesPage'
 import { InstallButton, PwaNotices, PwaProvider } from './pwa'
 import { SearchPage } from './pages/SearchPage'
-import { loadSports } from './sports'
+import { loadSports, useSports } from './sports'
 import { TodayPage } from './pages/TodayPage'
 import { WelcomePage } from './pages/WelcomePage'
 import { noteVisit } from './visit'
@@ -237,6 +237,7 @@ function NotFound() {
 
 function App() {
   const { pathname } = useLocation()
+  useSports()  // every page draws again when a sport is switched on or off (sports/catalog.ts)
   // A wide screen's side column (Side.tsx), and where in it a page stands its own part.
   const wide = useWide()
   const [slot, setSlot] = useState<HTMLDivElement | null>(null)

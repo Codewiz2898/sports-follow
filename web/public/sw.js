@@ -2,11 +2,13 @@
 // your players. Live data stays live: scores and streams always go to the network.
 //
 // Pages: network first, the cached app shell when offline (the app is one page, so "/" serves every
-// route). Built assets: cache first (their names change with their content). Fonts and other files:
-// served from cache while refreshed. /api/me/following and player cards: network first, the last
-// answer offline. The sports and their colours (/api/sports, /api/sports.css): from cache while
-// refreshed. Players' photos (/api/photos/): cache first, like built assets. Every other /api call and
-// every live stream passes straight through.
+// route); only the app's page is kept as the shell, and an address of the API opened as a page (a photo, a
+// share picture) passes through. Built assets: cache first (their names change with their content), in a
+// cache of the build's own, which goes when the next build takes over. Fonts and other files: served from
+// cache while refreshed. /api/me/following, player cards and the sports (/api/sports): network first, the
+// last answer offline. The sports' colours (/api/sports.css): from cache while refreshed. Players' photos
+// (/api/photos/): cache first, like built assets. Every other /api call and every live stream passes
+// straight through.
 //
 // Push: moments (a goal, a fifty, a result; see sports_follow/moments.py) arrive as notifications,
 // planned by sports_follow/alerts.py. Each game is one notification (its tag): a new moment replaces
@@ -22,9 +24,14 @@ const BUILD = 'dev'
 const SHELL = `shell-${VERSION}`
 const FILES = `files-${VERSION}`
 const DATA = `data-${VERSION}`
-const OFFLINE_DATA = /^\/api\/(me\/following|players\/\d+\/card)$/
-// The sports the app knows and their colours: from cache at once, refreshed for next time (and offline).
-const SPORTS = /^\/api\/sports(\.css)?$/
+// This build's files (/assets/): a cache of its own, so those of the builds before it go when it takes over,
+// rather than piling up on every device a deploy at a time (BUG-168). It's the next build's to drop.
+const ASSETS = `assets-${BUILD}`
+// The fan's list, a player's card, and the sports the app knows (what's switched on: catalog.ts applies a new
+// answer as it comes, so a copy kept here mustn't stand in for it, BUG-166).
+const OFFLINE_DATA = /^\/api\/(me\/following|players\/\d+\/card|sports)$/
+// The sports' colours: from cache at once, refreshed for next time (and offline).
+const SPORTS_CSS = '/api/sports.css'
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(SHELL).then((cache) => cache.addAll(['/', '/manifest.webmanifest', '/icons/icon-192.png'])))
@@ -34,7 +41,10 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => ![SHELL, FILES, DATA].includes(k)).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => ![SHELL, FILES, DATA, ASSETS].includes(k)).map((k) => caches.delete(k))))
+      // Builds from before ASSETS kept theirs in FILES, beside the photos and fonts, which stay.
+      .then(() => caches.open(FILES))
+      .then((files) => files.keys().then((kept) => Promise.all(kept.filter((r) => new URL(r.url).pathname.startsWith('/assets/')).map((r) => files.delete(r)))))
       .then(() => self.clients.claim()),
   )
 })
@@ -51,13 +61,17 @@ self.addEventListener('fetch', (event) => {
 
   if (url.origin === self.location.origin) {
     if (url.pathname.startsWith('/watch/')) return  // a stream's player alone (the Android app's), never the app's page
-    if (req.mode === 'navigate') return event.respondWith(networkFirst(req, SHELL, '/'))
-    if (url.pathname.startsWith('/assets/')) return event.respondWith(cacheFirst(req, FILES))
+    if (req.mode === 'navigate') {
+      // A picture of the API's opened as a page (a player's photo, a share picture) is the network's (BUG-164).
+      if (url.pathname.startsWith('/api/')) return
+      return event.respondWith(networkFirst(req, SHELL, '/', isPage))
+    }
+    if (url.pathname.startsWith('/assets/')) return event.respondWith(cacheFirst(req, ASSETS))
     // A player's photo: its address is its content, so the copy kept is always right.
     if (url.pathname.startsWith('/api/photos/')) return event.respondWith(cacheFirst(req, FILES))
     if (url.pathname.startsWith('/api/')) {
       if (OFFLINE_DATA.test(url.pathname)) event.respondWith(networkFirst(req, DATA))
-      else if (SPORTS.test(url.pathname)) event.respondWith(staleWhileRevalidate(req, DATA))
+      else if (url.pathname === SPORTS_CSS) event.respondWith(staleWhileRevalidate(req, DATA))
       return
     }
     if (url.pathname === '/sw.js') return
@@ -68,11 +82,14 @@ self.addEventListener('fetch', (event) => {
   }
 })
 
-async function networkFirst(req, cacheName, key) {
+// The app's own page, which alone may be kept as the shell: offline, the app opens as whatever was kept (BUG-164).
+const isPage = (res) => (res.headers.get('content-type') || '').startsWith('text/html')
+
+async function networkFirst(req, cacheName, key, keep = () => true) {
   const cache = await caches.open(cacheName)
   try {
     const res = await fetch(req)
-    if (res.ok) cache.put(key || req, res.clone())
+    if (res.ok && keep(res)) cache.put(key || req, res.clone())
     return res
   } catch (err) {
     const hit = await cache.match(key || req)

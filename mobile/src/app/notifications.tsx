@@ -1,11 +1,11 @@
-// Alerts, the web's NotificationsPage.tsx: what's happened to the fan's players and games (Latest), and what
-// reaches this phone (on or off, quiet hours: push.ts) and how much to hear about each player and each game
-// followed by itself (Settings).
+// Alerts, the web's NotificationsPage.tsx: what's happened to the fan's players, teams and games (Latest), and
+// what reaches this phone (on or off, quiet hours: push.ts) and how much to hear about each player, each team
+// and each game followed by itself (Settings).
 
 import { router, useLocalSearchParams } from 'expo-router'
 import { useEffect, useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
-import { DEVICE, gameLevelText, LEVELS, levelText } from '../../../web/src/alerts'
+import { DEVICE, gameLevelText, LEVELS, levelText, nothingYet, teamLevelText } from '../../../web/src/alerts'
 import { dayLabel, relative } from '../../../web/src/format'
 import { useAccount } from '../account'
 import { useActivity } from '../activity'
@@ -55,7 +55,7 @@ function Latest({ onSettings }: { onSettings: () => void }) {
     const follows = cards.length + teams.length + matches.length > 0
     return (
       <Card style={{ paddingVertical: 28, paddingHorizontal: 20, alignItems: 'center', gap: 4 }}>
-        <Text style={[t.small, t.muted, { textAlign: 'center' }]}>{follows ? 'Nothing yet. Line-ups, goals, wickets and results for your players, teams and games show up here as they happen.' : 'Follow a player, a team or a game to see their moments here.'}</Text>
+        <Text style={[t.small, t.muted, { textAlign: 'center' }]}>{nothingYet(cards.length, teams.length, matches.length)}</Text>
         {follows ? <Btn kind="link" label="Choose what reaches this phone" onPress={onSettings} /> : null}
       </Card>
     )
@@ -124,12 +124,17 @@ function AccountRow() {
   )
 }
 
-/** On this phone, and how much to hear about each player and each game followed by itself. */
+/** On this phone, and how much to hear about each player, each team and each game followed by itself. */
 function Settings() {
   const sports = useSports()
-  const { cards, setAlerts, matches, setMatchAlerts } = useFollowing()
+  const { cards, setAlerts, matches, setMatchAlerts, teams, setTeamAlerts } = useFollowing()
   const [failed, setFailed] = useState<Record<number, string>>({})
   const [gameFailed, setGameFailed] = useState<Record<number, string>>({})
+  const [teamFailed, setTeamFailed] = useState<Record<number, string>>({})
+  const chooseTeam = (teamId: number, level: AlertLevel) => {
+    setTeamFailed((f) => ({ ...f, [teamId]: '' }))
+    setTeamAlerts(teamId, level).catch((e: Error) => setTeamFailed((f) => ({ ...f, [teamId]: e.message })))
+  }
   const choose = (playerId: number, level: AlertLevel) => {
     setFailed((f) => ({ ...f, [playerId]: '' }))
     setAlerts(playerId, level).catch((e: Error) => setFailed((f) => ({ ...f, [playerId]: e.message })))
@@ -168,6 +173,28 @@ function Settings() {
           </Card>
         )}
       </View>
+
+      {/* The teams followed (sports_follow/teams.py): each of their games, from both sides, and their results. */}
+      {teams.length > 0 ? (
+        <View style={{ gap: 10 }}>
+          <SectionHead title="Per team" right={<Text style={[t.tiny, t.muted, { fontFamily: font[700] }]}>Every game of theirs</Text>} />
+          <Card style={s.list}>
+            {teams.map((x, i) => (
+              <View key={x.team_id} style={[{ gap: 10, paddingVertical: 14 }, i < teams.length - 1 && s.line]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <Avatar name={x.name} sport={x.sport} size="sm" />
+                  <View style={{ flex: 1 }}>
+                    <Text onPress={() => router.push(`/team/${x.team_id}`)} accessibilityRole="link" style={t.title}>{x.name}</Text>
+                    <Text style={[t.tiny, t.muted]}>{teamLevelText(x.alerts, sports.info(x.sport))}</Text>
+                  </View>
+                </View>
+                <Segmented full options={LEVELS.map((l) => [l.value, l.short])} value={x.alerts} onChange={(l) => chooseTeam(x.team_id, l)} />
+                {teamFailed[x.team_id] ? <ErrorBox>{teamFailed[x.team_id]}</ErrorBox> : null}
+              </View>
+            ))}
+          </Card>
+        </View>
+      ) : null}
 
       {/* The games followed by themselves, until each ends (sports_follow/matches.py). */}
       {matches.length > 0 ? (

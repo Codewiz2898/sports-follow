@@ -49,6 +49,21 @@ export function wanted(level: AlertLevel, moment: Pick<PlayerMoment, 'level' | '
   return moment.level === 'key'
 }
 
+/** Who the fan follows, each at its level, as one string: what the activity list (Alerts' Latest) loads again on.
+ * Following a player, a team or a game, or changing one's level, changes the whole list (BUG-160: a team didn't). */
+export function followsKey(players: { player_id: number; alerts?: AlertLevel | null }[], games: { event_id: number; alerts: AlertLevel }[], teams: { team_id: number; alerts: AlertLevel }[]): string {
+  return [...players.map((c) => `${c.player_id}:${c.alerts ?? 'key'}`), ...games.map((m) => `game${m.event_id}:${m.alerts}`),
+    ...teams.map((t) => `team${t.team_id}:${t.alerts}`)].sort().join(',')
+}
+
+/** What Alerts' Latest says before anything is in it, by how many players, teams and games the fan follows: a fan
+ * of a team alone hears its moments too (BUG-160). */
+export function nothingYet(players: number, teams: number, games: number): string {
+  return players + teams + games > 0
+    ? 'Nothing yet. Line-ups, goals, wickets and results for your players, teams and games show up here as they happen.'
+    : 'Follow a player, a team or a game to see their moments here.'
+}
+
 /** What Alerts' Settings says about notifications on this device: the web's (notifications.tsx,
  * NotificationsPage.tsx) and the Android app's (mobile/src/push.ts, app/notifications.tsx). */
 export const DEVICE = {

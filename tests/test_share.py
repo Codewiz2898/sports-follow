@@ -428,3 +428,17 @@ def test_a_long_events_tag_is_cut_to_stay_within_the_picture():
     img = picture(share.png(share.Picture("#7c3aed", "#ffffff", event, "Gukesh v Sindarov"))).convert("RGB")
     assert img.getpixel((share.PAD + 200, 60)) == (0xFF, 0xFF, 0xFF)  # the pill, above its letters
     assert img.getpixel((share.WIDTH - 30, 60)) == (0x7C, 0x3A, 0xED)  # the block, past the margin
+
+
+def test_words_no_typeface_has_leave_their_text_out_rather_than_drawn_with_gaps():
+    """A line in a script the typefaces lack (Devanagari) was drawn without those words: "Follow गुकेश and Sindarov"
+    read "Follow and Sindarov". Text whose letters can't all be drawn isn't drawn; a stray symbol one lacks is dropped."""
+    assert share._drawable("Follow गुकेश and Sindarov", "manrope")[1] == ""
+    assert share._drawable("गुकेश बनाम सिंदारोव", "anton", "manrope")[1] == ""
+    assert share._drawable("Kylian Mbappé ⚽", "anton", "manrope") == ("anton", "Kylian Mbappé")
+    assert share._drawable("Nguyễn Ngọc Trường Sơn", "anton", "manrope") == ("anton", "Nguyễn Ngọc Trường Sơn")
+    assert share._drawable("Иван Петров", "anton", "manrope") == ("manrope", "Иван Петров")  # Manrope has Cyrillic
+    # On the picture, the line goes as if it weren't there.
+    game = "Game 1: Tue 24 Nov, 3:00 pm IST"
+    drawn = [share.png(share.Picture("#7c3aed", "#ffffff", "Chess", "Gukesh v Sindarov", "", lines)) for lines in ((game, "Follow गुकेश and Sindarov"), (game,))]
+    assert drawn[0] == drawn[1]

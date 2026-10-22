@@ -39,6 +39,12 @@ def match_channel(event_id: int) -> str:
     return f"match:{event_id}"
 
 
+def follows_channel(fan: str) -> str:
+    """A fan's own channel: a word there says what they follow changed (a follow, an unfollow or a level, from any
+    of their devices), and each of their open streams sends their list again (server.my_stream)."""
+    return f"follows:{fan}"
+
+
 def publish_match(event_id: int, event: dict[str, Any]) -> None:
     """Tell the fans following a game by itself: its board as polled, a moment of its own."""
     sync_redis().publish(match_channel(event_id), json.dumps(event, default=str))

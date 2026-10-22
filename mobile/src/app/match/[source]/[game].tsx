@@ -13,7 +13,7 @@ import { AppState, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { gameLevelText, LEVELS } from '../../../../../web/src/alerts'
 import { dateTime, relative } from '../../../../../web/src/format'
-import { boardOf, EVERY, followedOf, followHead, keyEvents, nextLook, startsIn, watchable } from '../../../../../web/src/match'
+import { boardOf, EVERY, followedOf, followHead, keyEvents, nextLook, ownResult, pageResult, startsIn, watchable } from '../../../../../web/src/match'
 import { useActivity } from '../../../activity'
 import { api, ApiError, type GameTeam, type Match, type MatchFollowState } from '../../../api'
 import { Avatar, b as blocks, GameBoard, PlainScore, StatGrid } from '../../../blocks'
@@ -248,8 +248,8 @@ export default function MatchScreen() {
             </ErrorBoundary>
           </View>
         ) : null}
-        {/* Over: who won, big, as its sport says it. */}
-        {match.status === 'final' && match.verdict ? <Dsp size={36} color={tone.on}>{breakable(match.verdict)}</Dsp> : null}
+        {/* Over: who won, big, as its sport says it, unless the board's line under the score says it already. */}
+        {pageResult(match) ? <Dsp size={36} color={tone.on}>{breakable(pageResult(match))}</Dsp> : null}
         {board?.as_of ? <Text style={[t.tiny, { color: tone.onSoft }]}>Updated {relative(board.as_of, now)}{board.source ? ` · ${board.source}` : ''}</Text> : null}
       </View>
       {watch.error ? <ErrorBox>{watch.error}</ErrorBox> : null}
@@ -277,7 +277,7 @@ export default function MatchScreen() {
               <Pressable key={p.player_id} onPress={() => router.push({ pathname: '/player/[id]', params: { id: String(p.player_id) } })} accessibilityRole="link" style={{ gap: 6 }}>
                 <View style={s.row}>
                   <Text style={[t.title, { flexShrink: 1 }]}>{p.name}</Text>
-                  {p.result ? <Text style={[t.small, s.strong]}>{p.result}</Text> : null}
+                  {ownResult(p.result, match) ? <Text style={[t.small, s.strong]}>{ownResult(p.result, match)}</Text> : null}
                 </View>
                 {p.headline ? <Text style={[t.small, s.strong]}>{p.headline}</Text> : null}
                 {p.stats.length > 0 ? <StatGrid stats={p.stats} paper /> : null}
