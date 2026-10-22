@@ -284,8 +284,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   a draw), who takes each map of a team esports series, who wins a football match (home, a draw or away, from its
   final score: extra time counts, a shootout doesn't) and who wins a limited-overs cricket match (a tie a Super Over
   doesn't settle, no result or a washout is voided); a game called off is voided (the board's `cancelled`),
-  one postponed waits for its new date. Other sports ask nothing yet. A question (`prediction_question`)
-  belongs to the game, whichever fixture shows it (a chess board is one of each player's: `Sport.board` gives the
+  one postponed waits for its new date (no picks, no reminder and no closing till then). Other sports ask nothing
+  yet. A question (`prediction_question`) belongs to the game, whichever fixture shows it (a chess board is one of each player's: `Sport.board` gives the
   id they share), and is made from its board the first time it's seen before the start: a poll of a followed
   game, a look at its match page (which lists its questions), or the worker's read of a fan's game, or one of
   Today's big games, coming up within a day (`prepare_questions`, every ten minutes, at most once every two hours a
@@ -318,9 +318,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`GET /api/me/predictions`, `web/src/components/Calls.tsx`); `/me/leagues`, `/league/<code>` and the invite `/j/<code>`, whose sign-in comes back
   to it. A question's own link (`/match/<game>?q=<id>`, its card's Share) previews the question, and its split once
   it's closed (`share.of_question`).
-  The admin panel's Users tab counts leagues (and those of three or more), invites shared and opened, and fans who
-  picked on two game days. Pushes (`sports_follow/predictions_push.py`, the worker every minute): "Make your pick" two
-  hours before a campaign's game (`campaigns.player_ids`: its players' game within three hours of one on its
+  The admin panel's Users tab counts leagues (and those of three or more), invites shared (once a day a member) and
+  opened (by fans who came with their own cookie), and fans who picked on two days or more (IST). Pushes
+  (`sports_follow/predictions_push.py`, the worker every minute): "Make your pick" two hours before a campaign's game (`campaigns.player_ids`: its players' game within three hours of one on its
   schedule, not their other events) to the fans who follow someone in it, its team or the game
   and haven't picked, and how each pick went once its question settles, with the fan's best league place. They go as
   moments' pushes do (Web Push, FCM), logged as notification rows (kinds "pick" and "called"), and as each fan set
@@ -375,9 +375,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   sheet (on the web where the browser has one, else the link copied). It shares a link on the site, never
   the app's own, so it previews for anyone; `web/src/share.ts` says which link and title, for both. Every
   link carries `s=share`. Where a fan came from is kept with them (`fan_source`): the tags on the first link
-  they open (`s=`, `utm_source`, `utm_medium`, `utm_campaign`) and its page, told by the app before its other
-  calls (`web/src/visit.ts`, `POST /api/me/source`), moved to their account when they sign in and deleted
-  with it. Nothing reads it yet: the launch numbers (BHA-239) will.
+  they open (`s=`, `utm_source`, `utm_medium`, `utm_campaign`) and its page, told by the web app as it starts
+  (`web/src/visit.ts`) and by the Android app when a link opens it (`mobile/src/visit.ts`), to `POST
+  /api/me/source`, which keeps it for a fan whose cookie came with it, a hundred a day from one address; moved
+  to their account when they sign in and deleted with it. Nothing reads it yet: the launch numbers (BHA-239) will.
 - **A Feed on every player's page** (`sports_follow/feed.py`, `web/src/components/Feed.tsx`, epic BHA-296): what
   fans, creators and the player share about them, judged before a fan sees it. Three layers: L0 fetches
   candidates from the sources into `feed_candidates`, L1 (the judge) keeps the ones really about the player with
