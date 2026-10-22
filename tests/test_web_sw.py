@@ -2,7 +2,9 @@
 - a picture opened as a page (a player's photo, a share picture) never becomes the app's shell, so offline the
   installed app still opens as itself (BUG-164);
 - each build's files are kept in a cache of that build's, which goes when the next build takes over: they no longer
-  pile up, about 0.7 MB a deploy, on every device (BUG-168); photos stay.
+  pile up, about 0.7 MB a deploy, on every device (BUG-168); photos stay;
+- the sports (/api/sports) come from the network when there is one, so a sport switched on or off in /admin reaches
+  the app on its next load, not its third (BUG-166); the last answer offline.
 Skipped without Node 22.6 or later."""
 
 from __future__ import annotations
@@ -99,6 +101,19 @@ const after = Object.fromEntries([...stores.keys()].sort().map((n) => [n, kept(n
 console.log(JSON.stringify({ first, waiting, after, photo: photo.body }))
 """
 
+SPORTS = """
+const w = worker('one')
+await w.install(); await w.activate()
+site.set('/api/sports', ['application/json', JSON.stringify({ on: ['football', 'cricket'] })])
+const before = JSON.parse((await w.get('/api/sports')).body).on
+site.set('/api/sports', ['application/json', JSON.stringify({ on: ['cricket'] })])  // football switched off in /admin
+const next = JSON.parse((await w.get('/api/sports')).body).on
+offline = true
+const away = JSON.parse((await w.get('/api/sports')).body).on
+console.log(JSON.stringify({ before, next, away }))
+"""
+
+
 def run(scenario: str) -> dict:
     script = HARNESS % {"sw": json.dumps(str(SW))} + scenario
     done = subprocess.run([NODE or "node", "--no-warnings", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
@@ -125,3 +140,10 @@ def test_each_builds_files_go_when_the_next_build_takes_over_and_photos_stay():
     assert not any("one" in path for paths in after.values() for path in paths)
     assert [n for n in after if n.startswith("assets-")] == ["assets-two"] and after["assets-two"] == ["/assets/index-two.js"]
     assert after["files-v3"] == ["/api/photos/ab12.jpg"] and found["photo"] == "JPEG"
+
+
+def test_the_sports_come_from_the_network_and_the_last_answer_offline():
+    found = run(SPORTS)
+    assert found["before"] == ["football", "cricket"]
+    assert found["next"] == ["cricket"]  # the load after the switch, not the third
+    assert found["away"] == ["cricket"]

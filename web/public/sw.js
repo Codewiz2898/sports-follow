@@ -5,8 +5,8 @@
 // route); only the app's page is kept as the shell, and an address of the API opened as a page (a photo, a
 // share picture) passes through. Built assets: cache first (their names change with their content), in a
 // cache of the build's own, which goes when the next build takes over. Fonts and other files: served from
-// cache while refreshed. /api/me/following and player cards: network first, the last answer offline. The
-// sports and their colours (/api/sports, /api/sports.css): from cache while refreshed. Players' photos
+// cache while refreshed. /api/me/following, player cards and the sports (/api/sports): network first, the
+// last answer offline. The sports' colours (/api/sports.css): from cache while refreshed. Players' photos
 // (/api/photos/): cache first, like built assets. Every other /api call and every live stream passes
 // straight through.
 //
@@ -27,9 +27,11 @@ const DATA = `data-${VERSION}`
 // This build's files (/assets/): a cache of its own, so those of the builds before it go when it takes over,
 // rather than piling up on every device a deploy at a time (BUG-168). It's the next build's to drop.
 const ASSETS = `assets-${BUILD}`
-const OFFLINE_DATA = /^\/api\/(me\/following|players\/\d+\/card)$/
-// The sports the app knows and their colours: from cache at once, refreshed for next time (and offline).
-const SPORTS = /^\/api\/sports(\.css)?$/
+// The fan's list, a player's card, and the sports the app knows (what's switched on: catalog.ts applies a new
+// answer as it comes, so a copy kept here mustn't stand in for it, BUG-166).
+const OFFLINE_DATA = /^\/api\/(me\/following|players\/\d+\/card|sports)$/
+// The sports' colours: from cache at once, refreshed for next time (and offline).
+const SPORTS_CSS = '/api/sports.css'
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(SHELL).then((cache) => cache.addAll(['/', '/manifest.webmanifest', '/icons/icon-192.png'])))
@@ -69,7 +71,7 @@ self.addEventListener('fetch', (event) => {
     if (url.pathname.startsWith('/api/photos/')) return event.respondWith(cacheFirst(req, FILES))
     if (url.pathname.startsWith('/api/')) {
       if (OFFLINE_DATA.test(url.pathname)) event.respondWith(networkFirst(req, DATA))
-      else if (SPORTS.test(url.pathname)) event.respondWith(staleWhileRevalidate(req, DATA))
+      else if (url.pathname === SPORTS_CSS) event.respondWith(staleWhileRevalidate(req, DATA))
       return
     }
     if (url.pathname === '/sw.js') return

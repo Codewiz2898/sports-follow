@@ -1,16 +1,20 @@
 // The sports, from the server (GET /api/sports): what each is called, which free-text names are it (matched by
 // the web app's own rules, web/src/sports/naming.ts), and the colours it wears. The app keeps no list of its
 // own (CLAUDE.md). The last copy is kept on the phone; as on the web, the first screen waits for the sports
-// (the splash stays up), from that copy when there is one, so only a first start waits on the network.
+// (the splash stays up), from that copy when there is one, so only a first start waits on the network. The
+// server is asked again when the app comes back to the front, at most every ten minutes: a sport switched on
+// or off in /admin reaches a phone that keeps the app open for days (BUG-166).
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as SplashScreen from 'expo-splash-screen'
 import { createContext, use, useEffect, useState, type ReactNode } from 'react'
+import { AppState } from 'react-native'
 import { NO_SPORTS, sportsOf, type Sports } from '../../web/src/sports/naming'
 import { api, type SportCatalog } from './api'
 
 const KEPT = 'stann.sports'
 const LONGEST_MS = 4000 // the most a first start waits for the server (offline: the app starts without sport names)
+const AGAIN_MS = 10 * 60_000 // back in front this long after the server was last asked: asked again
 
 SplashScreen.preventAutoHideAsync().catch(() => {})
 
@@ -22,20 +26,26 @@ export function SportsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let fresh = false
+    let asked = 0
     const timer = setTimeout(() => setReady(true), LONGEST_MS)
     AsyncStorage.getItem(KEPT)
       .then((raw) => { if (raw && !fresh) { setSports(sportsOf(JSON.parse(raw) as SportCatalog)); setReady(true) } })
       .catch(() => {})
-    api.sports()
-      .then((catalog) => {
-        if (!catalog?.sports) return
-        fresh = true
-        setSports(sportsOf(catalog))
-        AsyncStorage.setItem(KEPT, JSON.stringify(catalog)).catch(() => {})
-      })
-      .catch(() => {}) // offline: the kept copy, or none
-      .finally(() => setReady(true))
-    return () => clearTimeout(timer)
+    const ask = () => {
+      asked = Date.now()
+      return api.sports()
+        .then((catalog) => {
+          if (!catalog?.sports) return
+          fresh = true
+          // The same catalog again draws nothing again.
+          setSports((shown) => (JSON.stringify(shown.catalog) === JSON.stringify(catalog) ? shown : sportsOf(catalog)))
+          AsyncStorage.setItem(KEPT, JSON.stringify(catalog)).catch(() => {})
+        })
+        .catch(() => {}) // offline: the kept copy, or none
+    }
+    ask().finally(() => setReady(true))
+    const sub = AppState.addEventListener('change', (state) => { if (state === 'active' && Date.now() - asked >= AGAIN_MS) void ask() })
+    return () => { clearTimeout(timer); sub.remove() }
   }, [])
 
   useEffect(() => { if (ready) SplashScreen.hideAsync().catch(() => {}) }, [ready])
