@@ -102,7 +102,9 @@ DAYS = (TODAY, YESTERDAY, THIS_WEEK, THIS_MONTH, EARLIER)  # the fan's Feed's gr
 PAGE = 20  # items on a page of the fan's Feed, unless the app asks for fewer (or up to MAX_PAGE)
 MAX_PAGE = 50
 CURSOR_AGE = timedelta(days=2)  # a cursor older than this carries on in today's order, from its last item
-CURSOR_TAIL = 5  # a page's last items its cursor keeps: the next page carries on after the last of them still there
+# The last items served that a page's cursor keeps (_served): the next page carries on after each player's last of them.
+CURSOR_TAIL = PAGE
+CURSOR_LENGTH = 600  # a cursor's characters at most (the route's limit): CURSOR_TAIL items' ids and its time and place fit
 FOLLOWING, FOR_YOU = "following", "for_you"  # the fan's Feed's tabs (page): their players only, or mixed with others
 TABS = (FOLLOWING, FOR_YOU)
 # For you: of every MIX[0] + MIX[1] items, MIX[0] from players the fan follows and MIX[1] from players they don't, while
@@ -458,42 +460,60 @@ def page(db: Session, fan: str, player: int | None = None, cursor: str | None = 
     every few items: those of the last OTHERS_WINDOW best first whatever their day, in turns, then older ones by day;
     with a player picked it's FOLLOWING's.
 
-    cursor: where the last page ended (Page.cursor), which carries on after its last item (the last of its last few
-    still in the feed, should it have left every fan's since) in the order as it was at the cursor's time: its days and fading, what the fan had hidden by then (an item hidden since keeps its place,
-    unserved), and only the rows that had come in by then (a newer one waits for the next first page). The judge's
-    scores aren't kept with it, so a rescore meanwhile (views growing) can still move an item across the page's end,
-    and For you's others are chosen again (a follow meanwhile moves a player across). ValueError for a cursor this
-    never made, or a tab that isn't one."""
+    cursor: where the last page ended (Page.cursor), which carries on with what the pages before didn't serve
+    (_served: each player's items after their last one served, so one gone from every fan's feed since doesn't take
+    the item that moves up into its place with it) in the order as it was at the cursor's time: its days and fading,
+    what the fan had hidden by then (an item hidden since keeps its place, unserved), and only the rows that had come
+    in by then (a newer one waits for the next first page). The judge's scores aren't kept with it, so a rescore
+    meanwhile (views growing) can still move an item across the page's end, and For you's others are chosen again (a
+    follow meanwhile moves a player across). ValueError for a cursor this never made, or a tab that isn't one."""
     if tab not in TABS:
         raise ValueError(f"The feed's tabs are {', '.join(TABS)}.")
     real = now or datetime.now(timezone.utc)
-    at, start, after = _read_cursor(cursor, real) if cursor else (real, 0, ())
+    at, offset, after = _read_cursor(cursor, real) if cursor else (real, 0, ())
     limit = max(0, min(limit, MAX_PAGE))
     everyone, circles = _everyone(db, fan, at, tz, player, cursor is not None, mix=tab == FOR_YOU and player is None)
     ordered = [(e, m, gone) for e, m, gone in everyone if player is None or e.player.id == player]
-    if after:
-        # After the last of the page's last items still in the feed: one gone from every feed since (an admin's hide,
-        # the weekly check, fans' apps saying it won't play) takes its place with it, so nothing after it is skipped.
-        # None of them still there: as many places back as they were.
-        place = {e.item.id: i for i, (e, _, _) in enumerate(ordered)}
-        start = next((place[i] + 1 for i in reversed(after) if i in place), max(0, start - len(after)))
+    served = _served(ordered, after, offset) if after else set()  # places in it of what the earlier pages served
     chunk: list[tuple[Entry, int | None]] = []
-    end = start
+    end = 0
     while end < len(ordered) and len(chunk) < limit:
         e, m, gone = ordered[end]
-        end += 1
-        if not gone:
+        if not gone and end not in served:
             chunk.append((e, m))
+            served.add(end)
+        end += 1
     moments = _moments(db, {m for _, m in chunk if m is not None})
     items = []
     for e, m in chunk:
         if m in moments:
             e = e.model_copy(update={"moment": moments[m].title, "match": moments[m].url if moments[m].url.startswith("/match/") else None})
         items.append(e)
-    more = any(not gone for _, _, gone in ordered[end:])
-    nxt = _write_cursor(at, end, [e.item.id for e in items[-CURSOR_TAIL:]]) if items and more else None
+    more = any(not gone and i not in served for i, (_, _, gone) in enumerate(ordered) if i >= end)
+    nxt = _write_cursor(at, end, [ordered[i][0].item.id for i in sorted(served)[-CURSOR_TAIL:]]) if items and more else None
     newest = max((c.newest for c in circles if c.newest), default=None)
     return Page(items=items, cursor=nxt, count=sum(not gone for _, _, gone in ordered), newest=newest, players=circles, tab=tab, layout=layout())
+
+
+def _served(ordered: list[tuple[Entry, int | None, bool]], last: Sequence[str], offset: int) -> set[int]:
+    """The places in the feed's order of what the pages before served, from the last few they served (a cursor's, in
+    their order) and how far they read (offset). Something gone from every feed since (an admin's hide, the weekly
+    check, fans' apps saying it won't play) closes the players' turns up round its gap (_turns, _mix), so items move
+    up past where the last page ended; but each player's own items keep their order. So it's each player's items up
+    to their last one among those last few still there, and for a player with none of them, whatever comes before
+    the first of them (less the places of those ahead of it now gone). None of them still there: the first offset
+    less as many places as there were of them."""
+    place = {e.item.id: i for i, (e, _, _) in enumerate(ordered)}
+    there = [place[i] for i in last if i in place]
+    if not there:
+        return set(range(max(0, offset - len(last))))
+    # Those gone ahead of the first still there held places a player with none of them left may have moved up into.
+    first = min(there) - next(n for n, i in enumerate(last) if i in place)
+    upto: dict[int, int] = {}  # each player's last place among them
+    for i in there:
+        who = ordered[i][0].player.id
+        upto[who] = max(upto.get(who, i), i)
+    return {i for i, (e, _, _) in enumerate(ordered) if i <= upto.get(e.player.id, first - 1)}
 
 
 def layout() -> str:
@@ -685,15 +705,15 @@ def _day(c: Candidate, now: datetime, tz: int) -> str:
 
 
 def _write_cursor(at: datetime, offset: int, last: Sequence[str]) -> str:
-    """A next page's cursor: the time the feed was put in order at, how many items came before, and the page's last
-    few (CURSOR_TAIL), the last of them last."""
+    """A next page's cursor: the time the feed was put in order at, how far it was read, and the last items served
+    (CURSOR_TAIL), in their order."""
     raw = json.dumps([int(at.timestamp()), offset, list(last[-CURSOR_TAIL:])], separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
 def _read_cursor(cursor: str, now: datetime) -> tuple[datetime, int, tuple[str, ...]]:
-    """A cursor's time (now instead, once it's over CURSOR_AGE old or ahead of now), offset and the page's last few
-    items, the last of them last (one made before it kept them all: its last alone); ValueError for one this never made."""
+    """A cursor's time (now instead, once it's over CURSOR_AGE old or ahead of now), offset and the last items served,
+    in their order (one made before it kept them: its last alone); ValueError for one this never made."""
     try:
         raw = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
     except (binascii.Error, ValueError, UnicodeDecodeError) as exc:

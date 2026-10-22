@@ -2869,7 +2869,7 @@ def my_feed(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[s
 @app.get("/api/me/feed/items")
 def my_feed_items(
     response: Response,
-    cursor: Annotated[str | None, Query(max_length=200)] = None,
+    cursor: Annotated[str | None, Query(max_length=feed.CURSOR_LENGTH)] = None,
     player: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None,
     limit: Annotated[int, Query(ge=0, le=feed.MAX_PAGE)] = feed.PAGE,
     tz: Annotated[int, Query(ge=-12 * 60, le=14 * 60)] = 0,

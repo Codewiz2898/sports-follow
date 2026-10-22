@@ -442,8 +442,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   This month, Earlier), the ranking deciding within a day and the players taking turns, so no two in a row are
   one player's while another has something to show; a story two players hold is one card, and hiding it from
   either hides it. A page is 20; its `cursor` keeps the order as it was read (an item the fan hides meanwhile
-  keeps its place, unserved, and rows that come in later wait for the next first page), though a rescore in
-  between (views growing) can still move an item across a page's end. Each item
+  keeps its place, unserved, and rows that come in later wait for the next first page) and the last 20 served, so
+  an item gone from every fan's Feed meanwhile skips nothing: each player's items carry on after their last one
+  served, whatever moved up into its place. A rescore in between (views growing) can still move an item across a
+  page's end. Each item
   carries its player (id, name, sport, photo with its framing) for the card's head; `players` are the circles
   across the top (a tap filters with `player=`), each with when their newest came in, which rings them in their
   sport's colour until the fan taps them; `newest` puts a dot on the tab until the fan opens it (only items of
