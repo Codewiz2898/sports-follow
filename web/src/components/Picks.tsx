@@ -103,7 +103,7 @@ export function PickCard({ q, onChange }: { q: Prediction; onChange: (q: Predict
         </span>
       ) : (
         <span className="tiny muted" style={{ fontWeight: 700 }}>
-          {open ? `${q.picks ? `${q.picks.toLocaleString()} ${q.picks === 1 ? 'fan has' : 'fans have'} picked. ` : ''}See how fans split once you pick.` : `Closed. ${q.picks.toLocaleString()} picked.`}
+          {open ? `${q.picks ? `${q.picks.toLocaleString()}+ fans have picked. ` : ''}See how fans split once you pick.` : `Closed. ${(q.picks ?? 0).toLocaleString()} picked.`}
         </span>
       )}
       {q.mine && open && (

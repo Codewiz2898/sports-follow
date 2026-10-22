@@ -679,10 +679,13 @@ def _refused(db: Session, refused: predictions.Refused) -> HTTPException:
 
 
 @app.put("/api/predictions/{question_id}/pick")
-async def make_pick(request: Request, question_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
+async def make_pick(request: Request, question_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id),
+                    signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
     """Call a game (or a map): this fan's answer to one of its questions, or a new one in place of theirs, while
     it's open. No account needed. Answers with the question as the app shows it, how fans split now included.
-    A question closed is a 409, an answer it doesn't offer a 400; PICKS_PER_ADDRESS an hour from one address."""
+    A question closed is a 409, an answer it doesn't offer a 400; PICKS_PER_ADDRESS an hour from one address.
+    It counts in the split and in what right picks score from an account, or a fan whose cookie came with it: a
+    fan this request made up (no cookie) has their pick, but it moves nobody else's numbers (predictions.pick)."""
     option = body.get("option")
     if not isinstance(option, str) or not 0 < len(option) <= 64:
         raise HTTPException(400, "option is one of the question's answers")
@@ -691,8 +694,9 @@ async def make_pick(request: Request, question_id: RowId, body: dict = Body(...)
                 "That's a lot of picks from your network. Try again in a while.")
 
     def call(db: Session) -> dict[str, Any]:
+        counted = signed is not None or _cookie_fan(request) == fan
         try:
-            q = predictions.pick(db, fan, question_id, option)
+            q = predictions.pick(db, fan, question_id, option, counted=counted)
         except predictions.Refused as refused:
             raise _refused(db, refused)
         db.commit()  # before the answer: the tick polls its game from now on

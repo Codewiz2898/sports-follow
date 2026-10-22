@@ -23,7 +23,7 @@ export function withWhom(q: Prediction): string {
   const share = shareOf(q, q.mine)
   const label = labelOf(q, q.mine)
   if (share == null || !label) return ''
-  if (q.picks <= 1) return `You're the first ${APP_NAME} fan to call it: ${label}.`
+  if (q.picks != null && q.picks <= 1) return `You're the first ${APP_NAME} fan to call it: ${label}.`
   if (share <= 15) return `Only ${share}% of ${APP_NAME} fans say ${label} with you.`
   return `You and ${share}% of ${APP_NAME} fans say ${label}.`
 }
@@ -50,7 +50,7 @@ export function leading(q: Prediction): { label: string; share: number } | null 
   return { label: top.label, share: top.share ?? 0 }
 }
 
-/** A question's own address, whose link preview shows its split (server.py, share.of_question). */
+/** A question's own address, whose link preview shows its split once it's closed (server.py, share.of_question). */
 export function questionPath(q: Prediction): string {
   return `/match/${q.match}?q=${q.id}`
 }

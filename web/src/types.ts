@@ -577,7 +577,7 @@ export interface Prediction {
   status: 'open' | 'closed' | 'settled' | 'void'
   locks_at: string | null
   answer: string | null
-  picks: number  // how many fans picked
+  picks: number | null  // how many fans picked; while it's open, as many as its split was last refreshed at (none before it shows)
   split_from: number  // picks before an open question's split shows: with fewer, it would tell a fan a friend's pick
   options: PredictionOption[]
   mine: string | null  // this fan's pick

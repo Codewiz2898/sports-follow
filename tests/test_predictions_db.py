@@ -721,6 +721,11 @@ def test_a_campaign_shows_its_players_games_to_call_and_a_link_previews_the_spli
     assert all("share" not in o for o in predictions.public(db, q.id)["options"])  # too few to show anyone
     predictions.pick(db, "last", q.id, "draw")
     db.commit()
+    # Enough to show it: to the fans who've picked while it's open, never to anyone (BUG-105); to anyone once it's closed.
+    assert all("share" not in o for o in predictions.public(db, q.id)["options"])
+    assert [o["share"] for o in predictions.shown(db, "last", [q], datetime.now(timezone.utc))[0]["options"]] == [80, 20, 0]
+    poll(1, board(status="*", ongoing=True))  # the first move: it closes
+    db.expire_all()
     shown = predictions.public(db, q.id)
     assert [o["share"] for o in shown["options"]] == [80, 20, 0] and shown["mine"] is None
     assert predictions.public(db, 9999) is None
