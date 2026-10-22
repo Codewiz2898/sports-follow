@@ -34,7 +34,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 ├─ fetch_photos, every 15 min: followed and starter players' photos from Wikimedia Commons, for their profiles
                                 ├─ read_sidelined, twice a day: who's out and who's back, league-wide, for the Wire (sidelined.py)
                                 ├─ refresh_campaigns, daily: each campaign page's teams' rosters from their sources (campaigns.py)
-                                └─ tick, every minute: arm events, queue polls, refreshes and rebuilds
+                                └─ tick, every minute, beside the jobs (no slot): arm events, queue polls, refreshes and rebuilds
                                          │                                  │
                               llm-providers gateway ──▶ LLM         adapters/ ──▶ ESPN JSON (football, cricket, basketball, tennis)
                                                                               ├─▶ Lichess API (chess)
