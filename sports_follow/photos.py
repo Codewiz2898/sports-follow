@@ -10,9 +10,10 @@ see it (public domain, CC0, CC BY, CC BY-SA, GODL-India: the user's choice; not 
 serves the same bytes at /api/photos/<digest>.jpg, cached for a year. Nothing is hot-linked. Each file is
 asked about again every REFETCH_DAYS (a new licence, author or upload, or a file Commons deleted), one
 that failed the next day, and one kept at another width than WIDTH at once (WIDTH changed: each is fetched
-again, PER_RUN a run). The job then looks for the face in each new thumbnail (faces.py), writes each
-followed player's photo into their card, and forgets files fetched over FORGET_DAYS ago that nobody
-follows or is offered now.
+again, PER_RUN a run). A thumbnail Wikimedia refuses or is too busy for (a 403, 429 or 5xx) ends the run, and
+is fetched again at the next, after the files that have waited longer. The job then looks for the face in
+each new thumbnail (faces.py), writes each followed player's photo into their card, and forgets files
+fetched over FORGET_DAYS ago that nobody follows or is offered now.
 
 Where the face is tells the app how to frame a photo (framing): the profile shows the square around it,
 head and shoulders, rather than the top of a photo that might be a full-length action shot. A photo with
@@ -86,7 +87,7 @@ _client = httpx.Client(headers={"user-agent": USER_AGENT}, timeout=30, follow_re
 
 
 class Unavailable(Exception):
-    """Commons didn't answer, or asked us to wait: the rest of this run waits for the next."""
+    """Commons didn't answer, refused for now or asked us to wait: the rest of this run waits for the next."""
 
 
 class TooBig(ValueError):
@@ -194,7 +195,9 @@ def download(url: str) -> tuple[bytes, str]:
         raise Unavailable(f"thumbnail: {exc}") from exc
     if not (res.url.host or "").endswith(".wikimedia.org"):
         raise ValueError(f"thumbnail redirected away from Wikimedia: {res.url.host}")
-    if res.status_code in (429, 503):
+    if res.status_code in (403, 429) or res.status_code >= 500:
+        # Refused for now (Wikimedia answers a client it's slowing down with a 403 as well as a 429) or busy: not
+        # the file's doing, so it isn't left a day (BUG-180).
         raise Unavailable(f"thumbnail: {res.status_code}")
     if res.status_code != 200:
         raise ValueError(f"thumbnail: {res.status_code}")
@@ -363,7 +366,8 @@ def serve(db: Session, name: str) -> tuple[bytes, str] | None:
 def _keep(db: Session, file: str, name: str, info: Info, now: datetime, known: Photo | None) -> Photo:
     """Write what Commons said, downloading the thumbnail when it's new, or was kept at another width (look()
     then finds its face); a photo no longer free to show loses its bytes. One kept at another width that
-    can't be fetched again keeps showing as it was, and is tried again in a day."""
+    can't be fetched again keeps showing as it was, and is tried again in a day. A thumbnail refused or busy
+    for now (Unavailable) is noted the same way, but tried again at the next run, and raises: the run stops."""
     photo = known or Photo(file=file)
     if known is None:
         db.add(photo)
@@ -376,13 +380,18 @@ def _keep(db: Session, file: str, name: str, info: Info, now: datetime, known: P
     elif not (kept and photo.asked_width == WIDTH):
         try:
             data, media = thumbnail(info.thumb or "")
-        except ValueError as exc:
+        except (ValueError, Unavailable) as exc:
             if kept:
                 photo.reason = f"not fetched again at {WIDTH} pixels: {exc}"
                 log.warning("photos: %s kept at its old width: %s", file, exc)
             else:
                 photo.status, photo.reason, photo.data, photo.digest, photo.media_type, photo.asked_width = "failed", str(exc), None, None, None, None
                 photo.width = photo.height = photo.face = None
+            if isinstance(exc, Unavailable):
+                # Due again at the next run, as one asked a day ago (_due), so it waits behind the files that
+                # have waited longer: one Wikimedia refuses every time never stops every run before them.
+                photo.fetched_at = now - RETRY
+                raise
             return photo
         photo.data, photo.media_type, photo.digest, photo.asked_width = data, media, hashlib.sha256(data).hexdigest()[:32], WIDTH
         photo.width = photo.height = photo.face = None
@@ -474,14 +483,19 @@ def refresh(limit: int = PER_RUN, now: datetime | None = None) -> dict[str, int]
     with session() as db:
         want = wanted(db)
         known = {p.file: p for p in db.scalars(select(Photo).where(Photo.file.in_(list(want))))} if want else {}
-        due = sorted((f for f in want if _due(known.get(f), now)), key=lambda f: f in known)[:limit]
+        # New files first, then those asked about longest ago.
+        due = sorted((f for f in want if _due(known.get(f), now)), key=lambda f: (f in known, known[f].fetched_at if f in known else now))[:limit]
     try:
         for i in range(0, len(due), BATCH):
             chunk = due[i : i + BATCH]
             answers = ask(chunk)
             with session() as db:
                 for file in chunk:
-                    photo = _keep(db, file, want[file], answers[file], now, db.scalar(select(Photo).where(Photo.file == file)))
+                    try:
+                        photo = _keep(db, file, want[file], answers[file], now, db.scalar(select(Photo).where(Photo.file == file)))
+                    except Unavailable:
+                        db.commit()  # its thumbnail refused for now, noted (_keep)
+                        raise
                     db.commit()
                     done["asked"] += 1
                     done["shown" if photo.status == "ok" else "left_out"] += 1
