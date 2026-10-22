@@ -146,3 +146,40 @@ def test_a_healthy_deploy_goes_live(server, services):
     done = deploy(server, "deploy", NEW, **({"FAKE_SERVICES": services} if services else {}))
     assert done.returncode == 0, done.stderr
     assert (state(server, "live"), state(server, "previous")) == (NEW, OLD) and checkouts(server) == [NEW]
+
+
+def workflow_step(name: str) -> str:
+    """The script of a step of .github/workflows/deploy.yml, by its id: its `run: |` block, as GitHub hands it to bash."""
+    lines = (DEPLOY.parent / ".github" / "workflows" / "deploy.yml").read_text().splitlines()
+    at = next(i for i, line in enumerate(lines) if line.strip() == f"id: {name}")
+    start = next(i for i in range(at, len(lines)) if lines[i].strip() == "run: |") + 1
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    block = []
+    for line in lines[start:]:
+        if line.strip() and len(line) - len(line.lstrip()) < indent:
+            break
+        block.append(line[indent:])
+    return "\n".join(block) + "\n"
+
+
+@pytest.mark.parametrize("event", ["workflow_dispatch", "workflow_run"])
+def test_no_run_deploys_while_production_has_no_reviewer_however_it_was_started(tmp_path, event):
+    # BUG-221: only a run after CI looked for production's required reviewer. With the reviewers cleared, a run started
+    # by hand (gh workflow run deploy.yml, which a Claude session may start) would have deployed with no one approving.
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "gh").write_text('#!/usr/bin/env bash\ncase "$*" in *environments/production*) echo "$FAKE_REVIEWERS" ;; *) echo "" ;; esac\n')
+    (fake / "gh").chmod(0o755)
+
+    def newest(reviewers: int) -> subprocess.CompletedProcess:
+        output = tmp_path / "output"
+        output.write_text("")
+        env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "FAKE_REVIEWERS": str(reviewers), "GITHUB_EVENT_NAME": event,
+               "GITHUB_REPOSITORY": "o/r", "GITHUB_OUTPUT": str(output), "SHA": NEW, "ACTION": "deploy", "GH_TOKEN": "x"}
+        return subprocess.run(["bash", "-e", "-c", workflow_step("newest")], env=env, capture_output=True, text=True, timeout=60)
+
+    stopped = newest(0)
+    assert stopped.returncode == 1 and "no required reviewer" in stopped.stdout
+    went = newest(1)
+    assert went.returncode == 0, went.stdout + went.stderr
+    assert (tmp_path / "output").read_text().strip() == "go=true"

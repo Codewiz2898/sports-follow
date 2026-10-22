@@ -316,6 +316,93 @@ def test_productions_reviewers_and_the_deploy_keys_command_stay_bharaths_however
     assert [c for c in stops if run("deploy_gate.py", c, tmp_path) != 2] == []
 
 
+def test_productions_reviewers_and_a_deploy_stay_bharaths_by_the_ways_round_two_found(tmp_path):
+    """BUG-221, round two: an environment's path built by a substitution, ssh's options bundled (-qi key, -vo X, -qF
+    file), a config file another includes, a deploy by hand over ssh (a checkout, a build or a tag, the migrations), ssh
+    run by `env -S` or xargs, a mutation that reaches `graphql --input -` through jq, and a gh alias that sends one."""
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "config").write_text("Host *\n  ServerAliveInterval 30\nInclude ~/.orbstack/ssh/config extra/*.conf\n")
+    (home / ".orbstack" / "ssh").mkdir(parents=True)
+    (home / ".orbstack" / "ssh" / "config").write_text("Host orb\n  HostName 127.0.0.1\n")
+    (home / ".ssh" / "extra").mkdir()
+    (home / ".ssh" / "extra" / "box.conf").write_text("Host box\n  HostName 203.0.113.7\n  User deploy\n")
+    mutation = "mutation { approveDeployments(input: {}) { clientMutationId } }"
+    (tmp_path / "body.json").write_text(json.dumps({"query": mutation}))
+    (tmp_path / "viewer.json").write_text(json.dumps({"query": "query { viewer { login } }"}))
+    (tmp_path / "cfg").write_text("Host deploy-box\n  HostName 203.0.113.7\n  User deploy\n  RemoteCommand rollback\n")
+    (tmp_path / "plain_cfg").write_text("Host box\n  HostName 203.0.113.7\n  User deploy\n")
+    (tmp_path / "release.sh").write_text("cd /opt/sports-follow\ngit checkout --detach origin/main\ndocker compose -f deploy/compose.yaml up -d --build\n")
+    (tmp_path / "look.sh").write_text("cd /opt/sports-follow\ngit log -1 --format=%h\ndocker compose -f deploy/compose.yaml ps\n")
+    (tmp_path / "aliases.yml").write_text("aliases:\n  ok: api graphql --input body.json\n")
+    (tmp_path / "views.yml").write_text("aliases:\n  me: api graphql --input viewer.json\n")
+    box = "deploy@16.178.106.36"
+    own_repo = "$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+    passes = [
+        f'gh api "repos/{own_repo}/environments/production" --jq .protection_rules',
+        "ssh -qi ~/.ssh/id_ed25519 box uptime",
+        "ssh -vo BatchMode=yes deploy@203.0.113.7 /opt/sports-follow/deploy/deploy.sh status",
+        "ssh -qF plain_cfg box 'cd /opt/sports-follow && deploy/deploy.sh status'",
+        "ssh orb uptime",
+        f"ssh {box} 'cd /opt/sports-follow && docker compose -f deploy/compose.yaml up -d --force-recreate api worker'",
+        f"ssh -o BatchMode=yes {box} 'sudo test -s /etc/sports-follow/files/resend-key && echo present'",
+        f"ssh {box} \"cd /opt/sports-follow && docker compose -f deploy/compose.yaml exec -T postgres psql -U sports sports_follow\" <<'SQL'\nselect 1;\nSQL",
+        f"ssh {box} 'cd /opt/sports-follow && docker compose -f deploy/compose.yaml logs --tail 30 api worker'",
+        f"ssh {box} 'cd /opt/sports-follow && git log -1 --oneline && docker compose -f deploy/compose.yaml ps'",
+        f"ssh {box} 'bash -s' < look.sh",
+        "git checkout -b fix/x && git log -1",
+        "docker compose build api && docker compose up -d",
+        "jq -c . viewer.json | gh api graphql --input -",
+        "gh alias import views.yml",
+        "gh alias set co 'pr checkout'",
+        "gh co 52",
+    ]
+    stops = [
+        f'gh api -X PUT "repos/{own_repo}/environments/production" --input env.json',
+        f'gh api --method DELETE "repos/{own_repo}/environments/production"',
+        'gh api -X PUT "repos/${OWNER}/${REPO}"/environments/production -F wait_timer=0',
+        f"ssh -qi ~/.ssh/id_ed25519 {box} deploy abc1234",
+        f"ssh -4p 22 {box} deploy abc1234",
+        f"ssh -tt -p 22 {box} rollback",
+        f"ssh -vo RemoteCommand=rollback {box}",
+        f"ssh -To 'RemoteCommand deploy abc1234' {box}",
+        "ssh -qF cfg deploy-box",
+        f"ssh {box} 'cd /opt/sports-follow && git fetch origin main && git checkout --detach origin/main && "
+        "docker compose -f deploy/compose.yaml build && docker compose -f deploy/compose.yaml run --rm migrate && docker compose -f deploy/compose.yaml up -d'",
+        f"ssh {box} 'cd /opt/sports-follow && docker tag sports-follow:abc1234 sports-follow:latest && docker compose -f deploy/compose.yaml up -d --no-build api worker'",
+        f"ssh {box} 'cd /opt/sports-follow && git reset --hard origin/main && docker compose -f deploy/compose.yaml up -d --build'",
+        f"ssh {box} 'cd /opt/sports-follow && docker compose -f deploy/compose.yaml run --rm migrate'",
+        f"ssh {box} 'bash -s' < release.sh",
+        f"cat release.sh | ssh {box}",
+        f"ssh {box} bash -s <<'EOF'\ncd /opt/sports-follow\ngit pull --ff-only\ndocker image tag sports-follow:abc1234 sports-follow:latest\nEOF",
+        f"env -S 'ssh {box} deploy abc1234'",
+        f"echo deploy abc1234 | xargs ssh {box}",
+        "jq -c . body.json | gh api graphql --input -",
+        'gh api graphql -f query="$(jq -r .query body.json)"',
+        "jq -c . body.json | curl -s -H \"Authorization: bearer $(gh auth token)\" -d @- https://api.github.com/graphql",
+        "gh alias import aliases.yml",
+        "gh alias set ok 'api graphql --input body.json'",
+        f"gh alias set --shell ok 'ssh {box} deploy'",
+    ]
+    assert [c for c in passes if run("deploy_gate.py", c, tmp_path, home=home) != 0] == []
+    assert [c for c in stops if run("deploy_gate.py", c, tmp_path, home=home) != 2] == []
+    # A config file that another includes is read too, as OpenSSH does: relative to ~/.ssh, globs and all.
+    (home / ".ssh" / "extra" / "box.conf").write_text("Host box\n  HostName 203.0.113.7\n  User deploy\n  RemoteCommand deploy\n")
+    assert run("deploy_gate.py", "ssh box", tmp_path, home=home) == 2
+    (home / ".orbstack" / "ssh" / "config").write_text("Host orb\n  RemoteCommand rollback\n")
+    (home / ".ssh" / "extra" / "box.conf").unlink()
+    assert run("deploy_gate.py", "ssh orb", tmp_path, home=home) == 2
+    (tmp_path / "outer_cfg").write_text(f"Include {tmp_path}/cfg\n")
+    assert run("deploy_gate.py", f"ssh -F {tmp_path}/outer_cfg deploy-box", tmp_path, home=home) == 2
+    # An alias already made runs what it was made with: judged as that.
+    (home / ".config" / "gh").mkdir(parents=True)
+    (home / ".config" / "gh" / "config.yml").write_text(f"version: 1\naliases:\n    co: pr checkout\n    ok: api graphql --input {tmp_path}/body.json\n"
+                                                        f"    up: '!ssh {box} deploy \"$1\"'\ngit_protocol: https\n")
+    assert run("deploy_gate.py", "gh co 52", tmp_path, home=home) == 0
+    assert run("deploy_gate.py", "gh ok", tmp_path, home=home) == 2
+    assert run("deploy_gate.py", "gh up abc1234", tmp_path, home=home) == 2
+
+
 @pytest.mark.parametrize("command, blocked", [
     ("curl -s localhost:18421/api/health", False),
     ("docker exec sports-follow-postgres psql -U sports -d sports_follow_r2 -c 'select 1'", False),
