@@ -10,7 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import Constants from 'expo-constants'
 import { Image } from 'expo-image'
 import { router, useIsFocused } from 'expo-router'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
 import { gameRow, gamesOnToday, narrow, NO_BLOCKS, nothingOn, theirGames, type TodayBlocks } from '../../../web/src/filter'
 import { AHEAD_DAYS, comingUp, FEW, followedLive, gamesOn, latestIn, leagueComingUp, liveGames, notTheirs, results, resultsDay, TAIL, teamsLive, theirEvents, type GameOn, type TeamGame } from '../../../web/src/today'
@@ -155,7 +155,11 @@ export default function TodayScreen() {
   // A visit to Today: it stays mounted under every page opened from it, so its Players to follow starts over each time
   // it's back in front, and for another fan (the web's unmounts with the page).
   const [visit, setVisit] = useState(0)
-  useEffect(() => { if (focused) setVisit((n) => n + 1) }, [focused])
+  const wasFocused = useRef(focused)
+  useEffect(() => {
+    if (focused && !wasFocused.current) setVisit((n) => n + 1) // back in front: not the first time it shows
+    wasFocused.current = focused
+  }, [focused])
   const [refreshing, setRefreshing] = useState(false)
 
   // A fan who follows only games by themselves, or only teams, has a Today of their own too.
