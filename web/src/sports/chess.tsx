@@ -1,6 +1,6 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ErrorBoundary } from '../components/ErrorBoundary'
-import { SwapIcon } from '../components/Icons'
+import { BackIcon, ChevronIcon, SwapIcon } from '../components/Icons'
 import { usePwa } from '../pwa'
 import './chess.css'
 import type { Opening, replayedMoves } from './facts/chessLine'
@@ -94,9 +94,10 @@ function useReplay(page: ChessPage | undefined, state: ChessState): Replay | nul
  * analysis board after it (`open`), and the one the board is after marked (the last, or where the fan has
  * stepped back to: `at`, 0 the start); while they don't (or chess.js is on its way), the pairs as words, and
  * those added since as the board gave them (a Freestyle game's: "d6d7"). Its opening and how it ended, or of a
- * mini-match the game's number, over them. Kept scrolled to the newest as moves come, unless the fan has
- * scrolled back or stepped back (then to the move the board is after). */
-function MovesPanel({ page, sans, at, open }: { page: ChessPage; sans: Replayed | null; at: number | null; open: (moves: string[], ply: number) => void }) {
+ * mini-match the game's number, over them, and the board's steps along them at the end of that line (`steps`).
+ * Kept scrolled to the newest as moves come, unless the fan has scrolled back or stepped back (then to the move
+ * the board is after). */
+function MovesPanel({ page, sans, at, open, steps }: { page: ChessPage; sans: Replayed | null; at: number | null; open: (moves: string[], ply: number) => void; steps: ReactNode }) {
   const list = useRef<HTMLOListElement>(null)
   const pinned = useRef(true)  // at the newest: false once the fan scrolls back, true again at the end
   const stepped = useRef(at)  // where the fan has stepped back to, for its room's changes
@@ -130,6 +131,7 @@ function MovesPanel({ page, sans, at, open }: { page: ChessPage; sans: Replayed 
       <span className="row" style={{ justifyContent: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
         <span className="eyebrow">Moves</span>
         {about && <span className="tiny muted">{about}</span>}
+        {steps}
       </span>
       <ol ref={list} className="chess-line" aria-label="Moves" onScroll={(e) => { const ol = e.currentTarget; pinned.current = ol.scrollHeight - ol.scrollTop - ol.clientHeight < 24 }}>
         {sans ? sans.map((m, i) => (
@@ -149,9 +151,10 @@ function MovesPanel({ page, sans, at, open }: { page: ChessPage; sans: Replayed 
  * the board is big, its players level with its edges (beside it on a wide screen, above and under it on a
  * phone: chess.css), the game's moves beside it (its `page`'s: MovesPanel), and Play from here opens the
  * analysis board over the page (chessAnalysis.tsx), as does a move tapped in the list; closing it is back to
- * the game. Once its moves replay, the left and right arrow keys step the board back and on along them (the
- * live bar empty while it's back: it's the position now's), and Play from here opens where it is; new moves
- * leave it there, and Back to live (or stepping on past the last) is the game as it is again. */
+ * the game. Once its moves replay, the left and right arrow keys step the board back and on along them, as do
+ * the buttons by the moves' heading on a touch screen (the live bar empty while it's back: it's the position
+ * now's), and Play from here opens where it is; new moves leave it there, and Back to live (or stepping on past
+ * the last) is the game as it is again. */
 function ChessBoard({ state, clock, compact, live, lines, explore, page }: BoardProps<ChessState>) {
   const [side, setSide] = useState<ChessColour | null>(null)
   const [opening, setOpening] = useState<Opening | null>(null)
@@ -195,6 +198,17 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
     back.current = at instanceof HTMLElement && at !== document.body ? at : null
     setOpening((o) => ({ base: state.fen ?? '', last: state.last_move, moves: line, ply, asked: (o?.asked ?? 0) + 1 }))
   }
+  // The arrow keys' steps as buttons, for a touch screen: back to the start, and on to the board as it is.
+  const steps = last > 0 && (
+    <span className="row" style={{ gap: 6, marginLeft: 'auto' }}>
+      <button type="button" className="btn icon chess-step" aria-label="Back a move" title="Back a move (←)" aria-disabled={at === 0} onClick={() => at !== 0 && stepTo((at ?? last) - 1)}>
+        <BackIcon width={18} height={18} />
+      </button>
+      <button type="button" className="btn icon chess-step" aria-label="Forward a move" title="Forward a move (→)" aria-disabled={at == null} onClick={() => at != null && stepTo(at + 1)}>
+        <ChevronIcon width={18} height={18} />
+      </button>
+    </span>
+  )
   if (!state.white || !state.black) return null
   // The board where the fan has stepped back to, or as it is.
   const ply = at && sans ? sans[at - 1] : null
@@ -261,7 +275,7 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
           {player(top, topColour, 'chess-top')}
           {board}
           {player(bottom, bottomColour, 'chess-bottom')}
-          {moves?.moves?.length || moves?.more?.length ? <MovesPanel page={moves} sans={sans} at={at} open={openAt} /> : null}
+          {moves?.moves?.length || moves?.more?.length ? <MovesPanel page={moves} sans={sans} at={at} open={openAt} steps={steps} /> : null}
           {(playable || depth) && (
             <div className="chess-under row">
               {playable && <button ref={play} type="button" className="btn small" onClick={(e) => { back.current = play.current; setOpening({ base: state.fen ?? '', last: state.last_move, moves: at == null ? null : sans?.map((m) => m.san), ply: at ?? undefined, asked: 1, focus: true, keyed: e.detail === 0 }) }}>Play from here</button>}
