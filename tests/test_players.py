@@ -25,7 +25,8 @@ from types import SimpleNamespace
 from sports_follow import adapters, bus, photos, players, registry, sports, starters
 from sports_follow.adapters import Adapter, AdapterError, Fixture, PlayerRef, Roster, Rostered, pubg
 from sports_follow.adapters.budget import RateLimited
-from sports_follow.models import Account, Athlete, AthleteOverride, AthleteUnmatch, Follow, Moment, Photo, Player, PlayerAlias, PlayerCard, PlayerIdentity, Starter
+from sports_follow.models import (Account, Athlete, AthleteOverride, AthleteUnmatch, Clip, Event, EventPlayer, EventState, Follow, MatchFollow, Moment, Photo, Player,
+                                  PlayerAlias, PlayerCard, PlayerIdentity, PlayerLine, Question, Starter)
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -37,7 +38,7 @@ LONG_AGO = datetime.now(timezone.utc) - timedelta(days=30)
 def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE athlete, athlete_override, athlete_unmatch, player, follow, moment, starter, photo, account RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE athlete, athlete_override, athlete_unmatch, player, follow, moment, starter, photo, account, event, clip RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -93,6 +94,53 @@ def test_removing_a_page_takes_everything_with_it_and_blocks_the_athlete(db):
     registry.upsert(db, [athlete("Q213854", "cricket", "Virat Kohli", {"espn_cricket": "253802"}), athlete("Q1", "cricket", "Someone Else")])
     db.commit()
     assert [a.qid for a in db.scalars(select(Athlete))] == ["Q1"]
+
+
+def games(db, **players_in: list[int]) -> dict[str, int]:
+    """Finished games, each named for what it is, with the players in it; each with a score and a line of the first's."""
+    now = datetime.now(timezone.utc)
+    made = {name: Event(key=f"espn_cricket:{name}", sport="Cricket", title=name, status="final") for name in players_in}
+    db.add_all(made.values())
+    db.flush()
+    for name, ids in players_in.items():
+        db.add_all([*(EventPlayer(event_id=made[name].id, player_id=pid) for pid in ids), EventState(event_id=made[name].id, as_of=now, status="final", state={}),
+                    PlayerLine(event_id=made[name].id, player_id=ids[0], as_of=now, stats={})])
+    db.flush()
+    return {name: e.id for name, e in made.items()}
+
+
+def test_removing_a_player_takes_the_games_only_they_were_in_with_them(db):
+    # BUG-226: removing a player left the games only they were in, with every score of them, though nothing polls or
+    # shows them any more: they piled up for good. One another page, a followed game or a question still holds stays.
+    kohli(db)
+    db.add(Player(id=2, slug="rohit-sharma", name="Rohit Sharma", sport="Cricket"))
+    made = games(db, alone=[1], shared=[1, 2], followed=[1], asked=[1], **{"clipped:2": [1]})
+    db.add_all([MatchFollow(fan_id="c", event_id=made["followed"], keys=["espn_cricket:followed"]),
+                Question(game="espn_cricket:asked", ask="result", keys=["espn_cricket:asked"], sport="cricket", match="espn_cricket/asked", title="Who wins?"),
+                Clip(slug="c1", match="espn_cricket/clipped:2", source="file", seconds=5.0, width=1, height=1, players=[1])])
+    db.commit()
+    assert players.main(["remove", "1", "--yes"]) == 0
+    db.expire_all()
+    assert sorted(e.title for e in db.scalars(select(Event))) == ["asked", "clipped:2", "followed", "shared"]
+    assert made["alone"] not in {s.event_id for s in db.scalars(select(EventState))} and len(db.scalars(select(EventState)).all()) == 4
+    assert [(e.event_id, e.player_id) for e in db.scalars(select(EventPlayer))] == [(made["shared"], 2)]
+
+
+def test_a_page_folded_into_another_takes_the_games_only_it_was_in_with_it(db):
+    # BUG-226: a typed name's page folded into the player who holds their athlete left the games its research found
+    # for it, which no page is in any more; one the player is in too stays theirs.
+    from sports_follow import pipeline
+
+    db.add_all([Player(id=7, slug="virat-kohli", name="Virat Kohli", sport="Cricket"), Player(id=8, slug="kohli", name="Kohli", sport="Cricket")])
+    db.flush()
+    made = games(db, researched=[8], both=[8, 7])
+    folded, into = db.get(Player, 8), db.get(Player, 7)
+    assert folded is not None and into is not None
+    assert pipeline._fold(db, folded, into) == 8  # pyright: ignore[reportPrivateUsage]
+    db.commit()
+    db.expire_all()
+    assert [e.title for e in db.scalars(select(Event))] == ["both"] and {s.event_id for s in db.scalars(select(EventState))} == {made["both"]}
+    assert [(e.event_id, e.player_id) for e in db.scalars(select(EventPlayer))] == [(made["both"], 7)]
 
 
 def test_removing_a_player_takes_their_photo_off_the_credits_page_at_once(db):

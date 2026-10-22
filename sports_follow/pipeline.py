@@ -22,7 +22,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypeVar, cast
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -37,7 +37,10 @@ from .models import (
     Event,
     EventPlayer,
     EventState,
+    EventTeam,
     Follow,
+    MatchFollow,
+    Moment,
     NewsItem,
     NewsPlayer,
     Player,
@@ -45,6 +48,7 @@ from .models import (
     PlayerCard,
     PlayerIdentity,
     PlayerLine,
+    Question,
     SourceBinding,
 )
 
@@ -325,9 +329,33 @@ def placeholder_card(player: Player) -> dict[str, Any]:
     }
 
 
+def games_of(db: Session, player_ids: Iterable[int]) -> list[int]:
+    """The games these players are in (event_player), as forget_games takes them once the players are gone."""
+    return list(db.scalars(select(EventPlayer.event_id).where(EventPlayer.player_id.in_(list(player_ids))).distinct()))
+
+
+def forget_games(db: Session, events: Iterable[int]) -> int:
+    """Of these games (games_of players since removed or folded away), those nothing holds any more go, with every
+    score and line of them (the database cascades): nothing polls or shows them. A game is held by a player in it,
+    a followed team's (event_team), a fan following the game itself (match_follow), a question asked of it, by its
+    id or one of its keys (predictions.py), a moment of it, or a clip of it (Clip.match, its match page's address:
+    its key with a "/" after the source, where the key has a ":"). Returns how many went."""
+    events = list(events)
+    if not events:
+        return 0
+    held = or_(
+        exists().where(EventPlayer.event_id == Event.id), exists().where(EventTeam.event_id == Event.id), exists().where(MatchFollow.event_id == Event.id),
+        exists().where(or_(Question.event_id == Event.id, Question.keys.contains(func.jsonb_build_array(Event.key)))),
+        exists().where(Moment.event_id == Event.id), exists().where(func.replace(Clip.match, "/", ":") == Event.key),
+    )  # fmt: skip
+    return len(db.scalars(delete(Event).where(Event.id.in_(events), ~held).returning(Event.id)).all())
+
+
 def _fold(db: Session, player: Player, into: Player) -> int:
     """Fold a player into the one who holds their athlete: move the aliases, follows and clips over and delete
-    this row. Returns the id folded away."""
+    this row, and the games only it was in (forget_games: a typed name's research, which the player's own games
+    stand for). Returns the id folded away."""
+    games = games_of(db, [player.id])
     for alias in db.scalars(select(PlayerAlias).where(PlayerAlias.player_id == player.id)):
         alias.player_id = into.id
     for follow in db.scalars(select(Follow).where(Follow.player_id == player.id)):
@@ -342,6 +370,7 @@ def _fold(db: Session, player: Player, into: Player) -> int:
     moved_from = player.id
     db.delete(player)
     db.flush()
+    forget_games(db, games)
     return moved_from
 
 
