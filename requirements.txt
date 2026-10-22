@@ -22,6 +22,9 @@ opencv-python-headless==5.0.0.93
 numpy==2.5.4
 # tools.py gives httpx's connection pool its own network backend: check it when either moves.
 httpcore==1.0.9
+# Every zone by every name, for zoneinfo to fall back on: the image's Debian keeps the old names ("Asia/Calcutta",
+# which Chrome sends from India) in tzdata-legacy, which it doesn't install, so they didn't load (BUG-267).
+tzdata==2026.5
 # Client for the llm-providers gateway, at a commit. From a checkout: pip install -e ~/repos/llm-providers/python
 llm-providers @ git+https://github.com/Codewiz2898/llm-providers.git@7f0f3bc75d55b0b8d72538548467f94c47b70fb4#subdirectory=python
 # Traces and shipped logs (tracing.py, logs.ship): off unless an OpenTelemetry exporter is set.

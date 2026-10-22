@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # From any machine that can log in as deploy: bring a database dump back from the off-site storage onto the
-# server, opened, into /var/backups/sports-follow/fetched/, ready for pg_restore (README.md, "Off-site
+# server, opened, into /var/backups/sports-follow/fetched/, ready for restore-backup.sh (README.md, "Off-site
 # backups"). The age secret key is read from stdin (piped from a password manager's command line) or asked
 # for; it goes over SSH into the server's memory and is never written to a disk. Only ssh is needed here.
 #   deploy/fetch-backup.sh deploy@<server-ip> [<dump>]   (default: the newest; offsite-backup.sh list shows them)
@@ -22,4 +22,4 @@ fi
 case "$key" in AGE-SECRET-KEY-1*) ;; *) echo "fetch-backup: that isn't an age secret key (AGE-SECRET-KEY-1…)" >&2; exit 1 ;; esac
 
 printf '%s\n' "$key" | ssh "$TARGET" "sudo /opt/sports-follow/deploy/offsite-backup.sh fetch $WANT"
-echo "fetch-backup: to load it, see deploy/README.md, \"Off-site backups\" (it replaces the database)."
+echo "fetch-backup: to load it, on the server: deploy/restore-backup.sh /var/backups/sports-follow/fetched/<file>.dump (it replaces the database; deploy/README.md, \"Off-site backups\")."

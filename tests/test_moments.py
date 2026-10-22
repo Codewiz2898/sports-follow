@@ -7,11 +7,15 @@ import base64
 import json
 import logging
 import os
+import sys
 import threading
 import time
+import zoneinfo
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from importlib import resources
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -19,7 +23,7 @@ import pywebpush
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from sports_follow import moments, notify
+from sports_follow import moments, notify, server
 from sports_follow.sports import chess
 from sports_follow.moments import Seen, detect
 
@@ -354,6 +358,62 @@ def test_quiet_hours_in_the_devices_timezone():
     assert notify.quiet("UTC", "13:00", "15:00", at(14)) is True
     assert notify.quiet("UTC", None, None, at(3)) is False
     assert notify.quiet("Not/AZone", "22:00", "07:00", at(23)) is False
+
+
+def _zone_file(key: str) -> bytes:
+    """A zone's TZif file as this machine has it: from the system's zone database, or the tzdata package's."""
+    for root in zoneinfo.TZPATH:
+        if Path(root, key).is_file():
+            return Path(root, key).read_bytes()
+    package, _, name = f"tzdata.zoneinfo.{key}".replace("/", ".").rpartition(".")
+    return resources.files(package).joinpath(name).read_bytes()
+
+
+@pytest.fixture
+def current_zone_names_only(tmp_path, monkeypatch):
+    """A zone database with only the current names (the production image's: Debian 13's tzdata, its old names
+    split off into tzdata-legacy), as PYTHONTZPATH would point at it, and no tzdata package to fall back to.
+    Call it with the zones it should have."""
+    for name in [m for m in sys.modules if m == "tzdata" or m.startswith("tzdata.")] + ["tzdata"]:
+        monkeypatch.setitem(sys.modules, name, None)  # importing it fails, as where it isn't installed
+
+    def install(*keys: str) -> None:
+        for key in keys:
+            (tmp_path / key).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / key).write_bytes(_zone_file(key))
+        zoneinfo.reset_tzpath([str(tmp_path)])
+        zoneinfo.ZoneInfo.clear_cache()
+
+    yield install
+    zoneinfo.reset_tzpath()
+    zoneinfo.ZoneInfo.clear_cache()
+
+
+@pytest.mark.parametrize("sent, stored", [
+    ("Asia/Calcutta", "Asia/Kolkata"),
+    ("Asia/Katmandu", "Asia/Kathmandu"),
+    ("Asia/Saigon", "Asia/Ho_Chi_Minh"),
+    ("Europe/Kiev", "Europe/Kyiv"),
+    ("America/Buenos_Aires", "America/Argentina/Buenos_Aires"),
+])
+def test_a_browsers_old_zone_name_keeps_its_quiet_hours_without_old_names_installed(current_zone_names_only, sent, stored):
+    # Chrome gives its zone's old name (in India "Asia/Calcutta"), which the image's zone database doesn't have:
+    # the device's 22:00-07:00 ran in UTC, loud at night in India and silent in the morning (BUG-267).
+    current_zone_names_only(stored, "UTC")
+    with pytest.raises(zoneinfo.ZoneInfoNotFoundError):
+        zoneinfo.ZoneInfo(sent)
+    tz, start, end = server._device_settings({"timezone": sent, "quiet_start": "22:00", "quiet_end": "07:00"})
+    assert (tz, start, end) == (stored, "22:00", "07:00")
+    night = datetime(2026, 11, 14, 0, 0, tzinfo=zoneinfo.ZoneInfo(stored))
+    assert notify.quiet(tz, start, end, night + timedelta(hours=1)) is True  # 01:00 there
+    assert notify.quiet(tz, start, end, night + timedelta(hours=9)) is False  # 09:00 there
+    assert notify.quiet(tz, start, end, night + timedelta(hours=23)) is True  # 23:00 there
+
+
+def test_each_old_zone_name_stands_for_a_current_one():
+    for old, current in server.OLD_ZONE_NAMES.items():
+        assert current not in server.OLD_ZONE_NAMES and current != old
+        assert zoneinfo.ZoneInfo(current).utcoffset(datetime(2026, 11, 14)) == zoneinfo.ZoneInfo(old).utcoffset(datetime(2026, 11, 14)), old
 
 
 def test_a_batchs_line_has_its_numbers_for_the_notifications_dashboard(monkeypatch, caplog):
