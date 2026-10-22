@@ -82,7 +82,8 @@ export function endpoints(request: Request) {
     feed: (playerId: number) => request<Feed>(`/api/players/${playerId}/feed`),
     feedFeedback: (playerId: number, itemId: string, verdict: FeedVerdict) =>
       request<{ item_id: string; hidden: boolean }>(`/api/players/${playerId}/feed/${encodeURIComponent(itemId)}/feedback`, json('POST', { verdict })),
-    // A video whose player refused to play it here (feed.refusedHere): it leaves every fan's Feed (feed.unplayable).
+    // A video whose player refused to play it here (feed.refusedHere): it leaves this fan's Feed, and every fan's once
+    // enough networks have said so (feed.said_unplayable, feed.unplayable).
     feedUnplayable: (playerId: number, itemId: string) =>
       request<{ item_id: string; unplayable: boolean; marked: boolean }>(`/api/players/${playerId}/feed/${encodeURIComponent(itemId)}/unplayable`, { method: 'POST' }),
     // The fan's own Feed, a page at a time (feed.page): the next after `cursor`, one player's with `player`; days are

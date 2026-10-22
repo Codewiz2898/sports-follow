@@ -455,8 +455,8 @@ class FeedCandidate(Base):
     moment_id: Mapped[int | None] = mapped_column(ForeignKey("moment.id", ondelete="SET NULL"))
     # An admin's word on it (rank.REVIEWS: approved, hidden, pinned), which stands over the judge's.
     review: Mapped[str | None] = mapped_column(String(10))
-    # When a fan's app said its source's player won't play it inside the app (feed.unplayable): its owner keeps it
-    # off other sites, which the source's facts didn't say. Never served after, whatever the judge or an admin said.
+    # When enough fans' apps said its source's player won't play it inside the app (feed.unplayable): its owner keeps
+    # it off other sites, which the source's facts didn't say. Never served after, whatever the judge or an admin said.
     unplayable_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     @classmethod

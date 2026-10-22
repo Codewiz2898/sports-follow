@@ -2199,35 +2199,59 @@ def feed_feedback(player_id: RowId, item_id: str, body: dict = Body(...), fan: s
     return {"item_id": item_id, "hidden": True}
 
 
+def _voter(address: str | None, fan: str) -> str:
+    """Whose vote a "won't play" report is (feed_unplayable): its network's, an IPv6 one's /48 (a home or an office
+    may hold all of it, a /64 a device), else, with no public address to go by, the fan's."""
+    if not address:
+        return f"fan:{fan}"
+    network = ipaddress.ip_network(address, strict=False)
+    return str(network.supernet(new_prefix=48)) if network.version == 6 else address
+
+
 @app.post("/api/players/{player_id}/feed/{item_id}/unplayable")
 async def feed_unplayable(player_id: RowId, item_id: str, request: Request, fan: str = Depends(fan_id)) -> dict[str, Any]:
-    """The fan's app says this video of the player's feed won't play inside it: the video's own player refused it
-    (feed.unplayable). It leaves every fan's Feed; the app opens it on its site instead, and an admin approving or
-    pinning it brings it back. Saying it again changes nothing. A fan says so only so many times an hour, and an
-    address and everyone together mark only so many videos: past either, a 429. Only a mark counts against the
-    address's and everyone's, so junk ids and a video said of again don't use up what a real one needs."""
+    """The fan's app says this video of the player's feed won't play inside it: the video's own player refused it.
+    It leaves their Feed at once (feed.said_unplayable), and it's their network's vote on whether it leaves every
+    fan's: once feed.UNPLAYABLE_VOTES networks have said so, it does (feed.unplayable; "marked"), and an admin
+    approving or pinning it brings it back. The app opens it on its site instead. Saying it again changes nothing.
+    A fan says so only so many times an hour, and an address and everyone together vote only so many times: past
+    any, a 429. Each count is taken before the report is acted on, so reports arriving together can't all pass, and
+    given back when it's refused; the address's and everyone's too when it isn't a new vote, so junk ids and a video
+    said of again don't use up what a real one needs."""
     refused = "That's a lot of videos that won't play for one hour. Try again later."
     redis = state["redis"]
-    mine = f"feed:unplayable:fan:{fan}"
-    used = await redis.incr(mine)
-    await redis.expire(mine, 3600, nx=True)  # the hour's end, set once
-    if used > feed.UNPLAYABLE_PER_FAN:
-        raise HTTPException(429, refused)
     address = client_address(request)
-    shared = [("feed:unplayable:all", feed.UNPLAYABLE_PER_HOUR)] + ([(f"feed:unplayable:address:{address}", feed.UNPLAYABLE_PER_ADDRESS)] if address else [])
-    for key, limit in shared:
-        if int(await redis.get(key) or 0) >= limit:
+    limits = [(f"feed:unplayable:fan:{fan}", feed.UNPLAYABLE_PER_FAN), ("feed:unplayable:all", feed.UNPLAYABLE_PER_HOUR)]
+    if address:
+        limits.insert(1, (f"feed:unplayable:address:{address}", feed.UNPLAYABLE_PER_ADDRESS))
+
+    async def give_back(keys: list[str]) -> None:
+        for key in keys:
+            await redis.eval(GIVE_BACK, 1, key)
+
+    taken: list[str] = []
+    for key, limit in limits:
+        used = await redis.incr(key)
+        taken.append(key)
+        await redis.expire(key, 3600, nx=True)  # the hour's end, set once
+        if used > limit:
+            await give_back(taken)
             raise HTTPException(429, refused)
+    shared = taken[1:]  # the address's and everyone's
     try:
-        marked = await in_db(feed.unplayable, player_id, item_id)
+        video = await in_db(feed.said_unplayable, fan, player_id, item_id)
     except ValueError as exc:
+        await give_back(shared)
         raise HTTPException(422, str(exc)) from exc
     except LookupError as exc:
+        await give_back(shared)
         raise HTTPException(404, str(exc)) from exc
-    if marked:
-        for key, _ in shared:
-            await redis.incr(key)
-            await redis.expire(key, 3600, nx=True)
+    votes = f"feed:unplayable:votes:{video}"
+    if video is None or not await redis.sadd(votes, _voter(address, fan)):  # an admin vouched for it, or this network said so before
+        await give_back(shared)
+        return {"item_id": item_id, "unplayable": True, "marked": False}
+    await redis.expire(votes, feed.UNPLAYABLE_VOTES_FOR)
+    marked = await redis.scard(votes) >= feed.UNPLAYABLE_VOTES and await in_db(feed.unplayable, player_id, item_id)
     return {"item_id": item_id, "unplayable": True, "marked": marked}
 
 

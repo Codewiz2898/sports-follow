@@ -8,6 +8,7 @@ database at alembic head (tests/test_corrections_db.py says how to make one)."""
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -16,7 +17,7 @@ import pytest
 from sqlalchemy import create_engine, literal_column, select, text, update
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import admin, candidates, config, controls, curate, curator, db as db_module, feed, rank
+from sports_follow import admin, candidates, config, controls, curate, curator, db as db_module, feed, rank, server
 from sports_follow.adapters import youtube
 from sports_follow.models import FeedCandidate, FeedFeedback, Follow, Moment, Player, PlayerAlias, PlayerCard
 from tests.test_feed_fetch import Fake, listing, video as yt_video
@@ -438,6 +439,43 @@ def test_a_video_a_fans_app_says_wont_play_inside_it_leaves_every_feed_and_sayin
     finally:
         s.close()
     assert all(r.unplayable_at is None for r in all_rows())
+
+
+def test_one_fans_app_saying_a_video_wont_play_takes_it_from_their_feed_alone_until_enough_networks_say_so(made, monkeypatch):
+    """BHA-422: one fan's word, or one network's with any number of new cookies, takes the video out of that fan's Feed
+    only; feed.UNPLAYABLE_VOTES networks saying so take it out of every fan's. An IPv6 home's /48 is one network."""
+    from tests.test_api import KEY, Redis
+
+    monkeypatch.setattr(feed, "UNPLAYABLE_VOTES", 3, raising=False)
+    pid = asha()
+    stored(pid, "blocked0001", "Verma's hundred, every boundary", EDITS, 5, verdict=said())
+    stored(pid, "plays000001", "Verma talks through the hundred", TALKS, 4, verdict=said())
+    rank.rescore()
+    monkeypatch.setitem(server.state, "redis", Redis())
+    monkeypatch.setattr(server, "cookie_key", lambda: KEY)
+    item = feed.item_id("https://www.youtube.com/watch?v=blocked0001")
+
+    def say(fan: str, address: str) -> dict:
+        async def go() -> httpx.Response:
+            transport = httpx.ASGITransport(app=server.app, client=(address, 50000))
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                return await client.post(f"/api/players/{pid}/feed/{item}/unplayable", headers={"Cookie": f"{config.FAN_COOKIE}={server.sign_fan(fan)}"})
+
+        answer = asyncio.run(go())
+        assert answer.status_code == 200, answer.text
+        return answer.json()
+
+    videos = lambda fan: {i.title for g in page(made, fan, pid).groups for i in g.items if i.kind == "video"}  # noqa: E731
+    both = {"Verma's hundred, every boundary", "Verma talks through the hundred"}
+    assert say("anon-1", "81.2.69.142") == {"item_id": item, "unplayable": True, "marked": False}
+    assert videos("anon-1") == {"Verma talks through the hundred"} and videos("fan") == both
+    for n in range(5):  # new cookies, the same network: still its one word
+        say(f"anon-new-{n}", "81.2.69.142")
+    say("home-a", "2a02:8010:1234:1::1")
+    say("home-b", "2a02:8010:1234:2::1")  # another /64 of the same home's /48
+    assert videos("fan") == both and all(r.unplayable_at is None for r in rows_of("blocked0001"))
+    assert say("anon-3", "81.2.69.200")["marked"] is True  # a third network
+    assert videos("fan") == {"Verma talks through the hundred"} and all(r.unplayable_at for r in rows_of("blocked0001"))
 
 
 def all_rows() -> list[FeedCandidate]:

@@ -187,7 +187,8 @@ export function shortFrame(width: number, height: number, top: number, foot: num
 }
 
 /** Whether an error of YouTube's IFrame Player API means the video won't play in any player of ours (BHA-380), so the
- * app says so, offers YouTube, and tells the server (feedUnplayable), which stops serving it: 100, gone or private;
+ * app says so, offers YouTube, and tells the server (feedUnplayable), which stops serving it to the fan, and to every
+ * fan once enough networks have said so: 100, gone or private;
  * 101 and 150, its owner keeps it off other sites (a Content ID claim's, which YouTube's Data API doesn't say). */
 export const refusedHere = (code: unknown): boolean => code === 100 || code === 101 || code === 150
 
