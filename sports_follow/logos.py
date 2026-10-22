@@ -235,14 +235,14 @@ def url(logo: TeamLogo | None) -> str | None:
     return f"/api/logos/{logo.digest}.png" if logo is not None and logo.status == "ok" and logo.digest else None
 
 
-def look(team: Team, logo: TeamLogo | None, now: controls.Controls | None = None) -> dict[str, Any]:
+def look(team: Team, logo: TeamLogo | None, now: controls.Controls | None = None, withheld: bool = False) -> dict[str, Any]:
     """How the app draws a team: its logo's address (None: our badge, its short code), its two colours (None: its
     sport's), the logo's own colours (tones, most used first: whether it needs a disc on a colour), and whether an
     operator set the colours."""
     colours = team.colours if isinstance(team.colours, dict) and team.colours.get("fill") else None
     tones = [c["hex"] for c in (logo.palette if logo is not None and logo.status == "ok" else None) or []][:3]
     return {
-        "logo": url(logo) if shown(team, now) else None,
+        "logo": url(logo) if shown(team, now) and not withheld else None,
         "short": team.short or "",
         "colours": colours or (auto(logo.palette) if logo is not None and logo.status == "ok" else None),
         "tones": tones,
@@ -256,8 +256,14 @@ def looks(db: Session, keys: Iterable[str]) -> dict[str, dict[str, Any]]:
     if not pairs:
         return {}
     now = controls.current()
-    rows = db.execute(select(Team, TeamLogo).outerjoin(TeamLogo, TeamLogo.team_id == Team.id).where(tuple_(Team.system, Team.external_id).in_(pairs)))
-    return {key(team): look(team, logo, now) for team, logo in rows}
+    rows = db.execute(select(Team, TeamLogo).outerjoin(TeamLogo, TeamLogo.team_id == Team.id).where(tuple_(Team.system, Team.external_id).in_(pairs))).all()
+    # A picture another team shares, whose logo is taken down, isn't served (serve): these teams show our badge too.
+    digests = {logo.digest for _, logo in rows if logo is not None and logo.digest}
+    down: set[str] = set()
+    if digests and (now.logos_off or now.logos_hidden):
+        found = db.execute(select(Team, TeamLogo.digest).join(TeamLogo, TeamLogo.team_id == Team.id).where(TeamLogo.digest.in_(digests)))
+        down = {digest for team, digest in found if digest and not shown(team, now)}
+    return {key(team): look(team, logo, now, withheld=logo is not None and logo.digest in down) for team, logo in rows}
 
 
 def serve(db: Session, name: str) -> bytes | None:

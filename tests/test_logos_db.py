@@ -225,7 +225,9 @@ def test_a_picture_teams_share_stops_being_served_when_any_of_them_is_taken_down
     assert logos.serve(db, f"{digest}.png") is not None
     controls.hide_logo("sportmonks_football:11", True)
     assert logos.serve(db, f"{digest}.png") is None
-    assert logos.looks(db, ["sportmonks_football:11"])["sportmonks_football:11"]["logo"] is None
+    both = logos.looks(db, ["sportmonks_football:10", "sportmonks_football:11"])
+    assert both["sportmonks_football:11"]["logo"] is None
+    assert both["sportmonks_football:10"]["logo"] is None and both["sportmonks_football:10"]["colours"]  # our badge, not a broken picture
 
 
 def test_no_logo_is_fetched_for_a_source_or_a_sport_turned_off(db, files):
