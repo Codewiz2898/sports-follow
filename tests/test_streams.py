@@ -21,6 +21,7 @@ import httpx
 import pytest
 from fastapi import HTTPException, Response
 from fastapi.routing import APIRoute
+from starlette.requests import ClientDisconnect
 
 from sports_follow import db as db_module, server
 from sports_follow.db import engine, get_db
@@ -66,6 +67,8 @@ class Db:
 
 
 class PubSub:
+    connection = None  # no socket of its own to close
+
     def __init__(self, log: list[str]):
         self.log = log
 
@@ -296,6 +299,28 @@ def test_a_stream_whose_client_went_away_gives_its_redis_connection_back(api, mo
     for _ in range(3):
         dropped(asyncio.run(server.player_stream(1, Request())), api.redis.log)
     assert api.redis.log.count("connection back") == 3 and not server.streaming
+
+
+def test_a_stream_whose_client_went_away_while_a_send_waited_gives_its_connection_back_at_once(api, monkeypatch):
+    """A server on ASGI 2.4 says a client is gone by failing the send, and the stream is left at its yield: its
+    cleanup ran only once Python collected it, and the connection stayed out of the pool until then."""
+    monkeypatch.setattr(api.redis, "pubsub", lambda: OverTheNetwork(api.redis.log))
+
+    async def run():
+        response = await server.player_stream(1, Request())
+
+        async def receive():
+            await asyncio.sleep(3600)
+
+        async def send(message):
+            if message.get("body"):
+                raise OSError("the client is gone")
+
+        with pytest.raises(ClientDisconnect):
+            await response({"type": "http", "asgi": {"spec_version": "2.4"}, "method": "GET", "path": "/api/players/1/stream", "headers": []}, receive, send)
+        return api.redis.log.count("connection back")  # while the response, and its stream, are still about
+
+    assert asyncio.run(run()) == 1 and not server.streaming
 
 
 def test_a_fan_an_address_and_the_process_hold_only_so_many_streams_and_one_that_ends_frees_its_place(api, monkeypatch):
