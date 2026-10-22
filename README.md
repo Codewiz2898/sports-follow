@@ -911,7 +911,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   asks first unless given `--yes`. `restore` takes a decision back, and `list` shows them. Decisions are
   rows in `athlete_override`, which every registry import respects, so they work on a running server and
   survive the weekly import; a removed athlete's ids in the sources are left out of search and refused
-  for following. `unmatch <ref> [Q…]` is for an esports pro matched to the wrong Wikidata person, so
+  for following, in every source of their sport (`remove` asks each it has no id in, by name and birth date),
+  and so is a pick with their name and birth date from a source added since. `unmatch <ref> [Q…]` is for an esports pro matched to the wrong Wikidata person, so
   shown with someone else's face: it takes the match and photo back at once (off every card showing it,
   followed or not, and off the Credits page) and
   no run of `roster_wikidata` matches them again, to that person if one is named, else to anyone;

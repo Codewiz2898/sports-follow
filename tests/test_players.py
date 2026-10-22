@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine, select, text, update
@@ -120,6 +120,65 @@ def test_a_page_no_registry_row_has_is_blocked_by_its_source_ids(db):
     [o] = db.scalars(select(AthleteOverride)).all()
     assert (o.qid, o.sport, o.ids) == ("player:2", "basketball", {"espn_basketball": "99"})
     assert ("espn_basketball", "99") in registry.blocked(db)
+
+
+def shutte(db) -> None:
+    """Ryan Shutte, a Zimbabwe cricketer Wikidata knows by his ESPNcricinfo id alone, followed through it."""
+    db.add(Player(id=5, slug="ryan-shutte", name="Ryan Shutte", sport="Cricket", wikidata_qid="Q101095505"))
+    db.flush()
+    db.add_all([PlayerCard(player_id=5, status="ready", card={}), PlayerIdentity(player_id=5, system="wikidata", external_id="Q101095505", confidence=1.0),
+                PlayerIdentity(player_id=5, system="espn_cricket", external_id="38606", confidence=1.0), Follow(fan_id="a", player_id=5, alert_rules={})])
+    registry.upsert(db, [athlete("Q101095505", "cricket", "Ryan Shutte", {"espn_cricket": "38606"}, birth_date=date(1996, 2, 13), birth_precision=registry.DAY, teams=["Zimbabwe"])])
+    db.commit()
+
+
+def shutte_elsewhere(xid: str, name: str = "Ryan Shutte", born: str | None = "1996-02-13") -> PlayerRef:
+    return PlayerRef("sportmonks_cricket", xid, name, ["1"], ["Zimbabwe"], born=born)
+
+
+def cricket_sources(monkeypatch, search) -> None:
+    """The cricket sources this build can run: ESPNcricinfo, which has Shutte's id (so is never searched), and a
+    second whose own search answers as `search` does."""
+    first = SimpleNamespace(system="espn_cricket", sports=("cricket",), search=lambda name, league=None: pytest.fail("searched a source for an id it was given"))
+    second = SimpleNamespace(system="sportmonks_cricket", sports=("cricket",), search=search)
+    monkeypatch.setattr(registry, "ALL", (first, second))
+
+
+def test_removing_a_player_blocks_them_in_their_sports_other_sources(db, monkeypatch):
+    """Removing Ryan Shutte blocked only his ESPNcricinfo id. The other cricket source lists him under its own, so
+    Live now, a match page or a switch of cricket's source offered him again, and a tap made a new page (BUG-098)."""
+    shutte(db)
+    asked: list[str] = []
+    cricket_sources(monkeypatch, lambda name, league=None: asked.append(name) or [shutte_elsewhere("9990002", born="1980-05-05"), shutte_elsewhere("9990001")])
+    assert players.main(["remove", "5", "--yes"]) == 0
+    blocked = registry.blocked(db)
+    assert ("espn_cricket", "38606") in blocked and ("sportmonks_cricket", "9990001") in blocked
+    assert ("sportmonks_cricket", "9990002") not in blocked  # a namesake, born another day
+    assert asked == ["Ryan Shutte"]
+    [o] = db.scalars(select(AthleteOverride)).all()
+    assert (o.ids, o.birth_date) == ({"espn_cricket": "38606", "sportmonks_cricket": "9990001"}, date(1996, 2, 13))
+
+
+def test_a_pick_with_a_removed_players_name_and_birth_date_is_refused(db, monkeypatch):
+    """A source the removal couldn't ask (down then, or added since) has him under an id nobody blocked: a pick with
+    his name and birth date is him all the same (BUG-098)."""
+    shutte(db)
+
+    def down(name, league=None):
+        raise AdapterError("the second source didn't answer")
+
+    cricket_sources(monkeypatch, down)
+    assert players.main(["remove", "5", "--yes"]) == 0  # removed all the same
+    assert ("sportmonks_cricket", "9990001") not in registry.blocked(db)
+    assert registry.removed(db, "Cricket", shutte_elsewhere("9990001"))
+    assert registry.removed(db, "Cricket", PlayerRef("espn_cricket", "38606", "R Shutte", [], []))  # by the id blocked, as before
+    assert not registry.removed(db, "Cricket", shutte_elsewhere("9990002", born="1980-05-05"))  # a namesake
+    assert not registry.removed(db, "Cricket", shutte_elsewhere("9990003", born=None))  # nothing to tell them apart by
+    assert not registry.removed(db, "Cricket", shutte_elsewhere("9990004", name="Ryan Burl"))  # born the same day
+    assert not registry.removed(db, "Chess", shutte_elsewhere("9990001"))
+    # Restored, he can be followed again.
+    assert players.main(["restore", "Q101095505"]) == 0
+    assert not registry.removed(db, "Cricket", shutte_elsewhere("9990001"))
 
 
 def test_an_added_athlete_is_kept_through_the_weekly_import(db, monkeypatch):

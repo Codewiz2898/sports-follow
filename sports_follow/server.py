@@ -1196,6 +1196,8 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
                 ref = None
             else:
                 adapter, ref = found
+                if await in_db(registry.removed, structured.sport_name(adapter, ref), ref):
+                    raise HTTPException(404, f"That athlete isn't on {APP_NAME}.")  # another registry row of someone removed
                 player_id, created = await asyncio.to_thread(pipeline.start_from_pick, adapter, ref)
     else:
         system = str(body.get("system") or "")
@@ -1214,6 +1216,9 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
             raise HTTPException(502, "Couldn't reach the live source to confirm this athlete. Try again in a moment.")
         if ref is None:
             raise HTTPException(404, "That athlete isn't in the source any more.")
+        if await in_db(registry.removed, structured.sport_name(adapter, ref), ref):
+            # Removed, in a source that had no id for them then: their name and birth date say who they are.
+            raise HTTPException(404, f"That athlete isn't on {APP_NAME}.")
         player_id, created = await asyncio.to_thread(pipeline.start_from_pick, adapter, ref)
 
     def save(db: Session) -> None:
