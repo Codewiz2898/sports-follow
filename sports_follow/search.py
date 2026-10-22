@@ -312,12 +312,19 @@ def run(db: Session, query: str, sport: str | None = None, fan: str | None = Non
         answers, partial = _collect(jobs)
         if live and not jobs:
             partial = [provider.name for provider, _ in live]
-        # A live hit with the name of a registry athlete in the same sport is that athlete: the
-        # registry's row, confirmed by birth date when followed, stands for both.
-        named = {(tuple(_key(r.name)), r.sport) for r in [*mine, *listed, *suggestions]}
+        # A live hit with the name of a player here or a registry athlete in the same sport is that athlete:
+        # the row found here, confirmed by birth date when followed, stands for both, and is listed though it
+        # was only alike to what was typed (the source knows "leo messi" is Lionel Messi).
+        named: dict[tuple[tuple[str, ...], str], list[SearchResult]] = {}
+        for r in [*mine, *listed, *suggestions]:
+            named.setdefault((tuple(_key(r.name)), r.sport), []).append(r)
         for hits in answers:
-            hits = [r for r in hits if (not sport or sports.family(r.sport) in sports.within(sport)) and sports.on(r.sport) and (tuple(_key(r.name)), r.sport) not in named]
-            found += hits[: LIVE_LIMIT + 4]
+            hits = [r for r in hits if (not sport or sports.family(r.sport) in sports.within(sport)) and sports.on(r.sport)]
+            for r in hits:
+                for held in named.get((tuple(_key(r.name)), r.sport), []):
+                    held.matched = True
+            found += [r for r in hits if (tuple(_key(r.name)), r.sport) not in named][: LIVE_LIMIT + 4]
+        matched = [r for r in listed if r.matched]
     sources = [*matched, *found]
     _ours(db, sources, fan)
     results = rank(query, mine, sources)
