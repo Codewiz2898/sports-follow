@@ -91,9 +91,9 @@ def batting_bowling(lines: list[dict[str, Any]]) -> list[dict[str, str]]:
 # ---------------------------------------------------------------- the sport
 
 # A poster's word for a batting milestone (any other mark is its number: "150") and a wicket haul's count.
-_RUNS = {50: "Fifty", 100: "Hundred", 200: "Double hundred"}
+_RUNS = {50: "Fifty", 100: "Hundred", 200: "Double hundred", 300: "Triple hundred"}
 _HAUL = {3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten"}
-MARKS = (50, 100, 150, 200)  # the batting milestones told
+MARKS = (50, 100, 150, 200, 250, 300)  # the batting milestones told
 # Their moments' priorities: a fifty's and a hundred's are their kinds' (moments.PRIORITY), 150 on above both.
 _RUNS_PRIORITY = {50: 70, 100: 90}
 
@@ -497,11 +497,11 @@ a board or outlet is news; "likely to be dropped" from fan pages is rumour."""
         return "cricket"
 
     def search_words(self, fired: Fired) -> str | None:
-        """A hundred (150 and 200 by their own names) or a five-for, and the ground: fans' edits are titled by the
+        """A hundred (150, 200 and 300 by their own names) or a five-for, and the ground: fans' edits are titled by the
         knock and where it was ("Kohli century Lord's")."""
         mark = number(fired.detail.rpartition(":")[2].lstrip("w"))
         if fired.kind == "hundred":
-            what = "double century" if mark >= 200 else "150" if mark >= 150 else "century"
+            what = "triple century" if mark >= 300 else "double century" if mark >= 200 else "150" if mark >= 150 else "century"
         elif fired.kind == "wickets" and mark >= 5:
             what = f"{mark} wickets"
         else:
