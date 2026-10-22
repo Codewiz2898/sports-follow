@@ -4,7 +4,7 @@ import's rows and search results. Against small made-up responses in PandaScore'
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import httpx
@@ -230,6 +230,25 @@ def test_a_series_over_before_its_winner_is_in_waits_for_it_and_never_says_draw(
     [drew] = moments.detect("Valorant", "TenZ", str(TENZ), _seen(_match("running", 1, 0)), _seen(level))
     assert drew.title == "TenZ: Sentinels draw 1–1"
     assert ps.result_label(ps.parse_fixtures([level])[0], [str(SEN)]) == "Drew 1–1"
+
+
+def test_a_series_paused_mid_way_stays_on_and_what_happens_when_it_resumes_is_told():
+    """BUG-207: PandaScore may mark a series postponed mid-way (a technical pause). It was put off: no longer polled, its
+    live card taken down, and a map won after it resumed fell into a quiet first look. Put off after it began, it's
+    still on ("Paused") for PAUSE_FOR from its last map's news; put off longer than that, it's postponed."""
+    paused = _match("postponed", 1, 0, [_game(1, "finished", SEN), _game(2, "not_started"), _game(3, "not_started")])  # began 19:12
+    at = datetime(2026, 10, 11, 20, 30, tzinfo=timezone.utc)
+    snap = ps.parse_match(paused, at)
+    assert (snap.status, snap.clock_label, ps.parse_fixtures([paused], at)[0].status) == ("live", "Paused", "live")
+    resumed = _seen(_match("running", 1, 1, [_game(1, "finished", SEN), _game(2, "finished", NRG), _game(3, "running")]))
+    during = moments.Seen(snap.status, snap.state, None, snap.score_label, snap.clock_label, teams=[str(SEN)])
+    assert [f.title for f in moments.detect("Valorant", "TenZ", str(TENZ), during, resumed)] == ["TenZ: Sentinels lose map 2"]
+    # Hours on, it's put off; counted from its last map's news, not the series' start.
+    assert ps.parse_match(paused, at + ps.PAUSE_FOR).status == "postponed"
+    late_map = _match("postponed", 1, 0, [{**_game(1, "finished", SEN), "end_at": "2026-10-11T22:00:00Z"}, _game(2, "not_started"), _game(3, "not_started")])
+    assert ps.parse_match(late_map, at + ps.PAUSE_FOR).status == "live"
+    # Put off before a map was played, it's postponed as ever.
+    assert (ps.parse_match(_match("postponed"), at).status, ps.parse_match(_match("postponed"), at).clock_label) == ("postponed", "Postponed")
 
 
 def test_a_forfeit_is_a_result():

@@ -46,6 +46,9 @@ GAME_IDS = {"league-of-legends": 1, "cs-go": 3, "dota-2": 4, "ow": 14, "rl": 22,
 IMPORT_GAMES = [g for g in os.environ.get("SPORTS_FOLLOW_ESPORTS_GAMES", ",".join(GAMES)).split(",") if g in GAME_IDS]
 
 _STATUS = {"not_started": "scheduled", "running": "live", "finished": "final", "canceled": "postponed", "postponed": "postponed"}
+# A series put off after it began (a technical pause) is still on, paused, this long from its last map's news: polled
+# as one, so what happens when it resumes is told. Longer than that, it's postponed (to another day, say).
+PAUSE_FOR = timedelta(hours=3)
 
 # The tournament tiers whose series are among the big games on now (live_now), as LiveGame tiers, biggest
 # first. PandaScore rates a tournament S > A > B > C > D, or "unranked", by its organiser, teams and prize
@@ -113,11 +116,23 @@ def _winner(m: dict[str, Any]) -> str | None:
     return str(m["winner_id"]) if m.get("winner_id") is not None and m.get("winner_type") in (None, "Team") else None
 
 
-def _status(m: dict[str, Any]) -> str:
+def _paused(m: dict[str, Any], now: datetime | None = None) -> bool:
+    """A series put off ("postponed") after it began (a map played or under way), within PAUSE_FOR of its last map's
+    news (or its start's)."""
+    games = m.get("games") or []
+    if m.get("status") != "postponed" or not any(g.get("status") in ("running", "finished") for g in games):
+        return False
+    news = [t for t in (_time(x) for x in (m.get("begin_at"), *(g.get(k) for g in games for k in ("begin_at", "end_at")))) if t]
+    return bool(news) and (now or datetime.now(timezone.utc)) < max(news) + PAUSE_FOR
+
+
+def _status(m: dict[str, Any], now: datetime | None = None) -> str:
     """Ours from PandaScore's. A forfeit is "canceled" with the series awarded (forfeit and a winner):
-    a result, not a cancelled series."""
+    a result, not a cancelled series. One put off mid-way is still on a while (_paused)."""
     if m.get("status") == "canceled" and m.get("forfeit") and _winner(m):
         return "final"
+    if _paused(m, now):
+        return "live"
     return _STATUS.get(m.get("status") or "", "scheduled")
 
 
@@ -174,14 +189,14 @@ def _streams(m: dict[str, Any]) -> list[Stream]:
 # ---------------------------------------------------------------- parsers (pure)
 
 
-def parse_fixtures(rows: list[dict[str, Any]]) -> list[Fixture]:
+def parse_fixtures(rows: list[dict[str, Any]], now: datetime | None = None) -> list[Fixture]:
     """Matches (/matches?filter[opponent_id]=…) -> fixtures, with the series result for finished ones."""
     out = []
     for m in rows:
         teams = _teams(m)
         if not teams or not m.get("id"):
             continue  # a 1v1 title's match, or no team decided yet
-        status = _status(m)
+        status = _status(m, now)
         names = [t.get("name") or "" for t in teams]
         result = None
         if status == "final":
@@ -225,9 +240,9 @@ def result_label(fixture: Fixture, team_ids: list[str]) -> str:
     return f"Won {score}" if won else f"Lost {score}" if won is False else f"Drew {score}"
 
 
-def parse_match(m: dict[str, Any]) -> Snapshot:
+def parse_match(m: dict[str, Any], now: datetime | None = None) -> Snapshot:
     """A match -> snapshot: the series score, each map's winner, which map is on."""
-    status = _status(m)
+    status = _status(m, now)
     teams = _teams(m)
     scores, winner = _scores(m), _winner(m)
     sides = [{
@@ -240,7 +255,9 @@ def parse_match(m: dict[str, Any]) -> Snapshot:
     maps = [{"n": g.get("position"), "status": g.get("status"), "winner": str((g.get("winner") or {}).get("id")) if (g.get("winner") or {}).get("id") is not None else None} for g in games]
     running = next((g for g in games if g.get("status") == "running"), None)
     fmt = _format(m)
-    if status == "live":
+    if status == "live" and m.get("status") == "postponed":
+        clock = "Paused"
+    elif status == "live":
         clock = f"Map {running.get('position')}" if running else "Between maps" if any(g.get("status") == "finished" for g in games) else "Starting"
     elif status == "final":
         clock = "Forfeit" if m.get("forfeit") else "Final"
