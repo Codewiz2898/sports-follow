@@ -231,10 +231,12 @@ class Cricket(Sport):
         match is over ("Result")."""
         return not self.verdict(state, score, clock)
 
+    lasts = timedelta(days=6)  # a Test or a first-class match: five days, and one more for its delays
+
     def over_by(self, start: datetime | None, state: dict[str, Any]) -> datetime | None:
         """A limited-overs match, its reserve day too, within two days of its start; a Test or a first-class match (or
-        one no word says the length of) within six, as the tick closes any source's game (pipeline.due_work)."""
-        return start + timedelta(days=2 if overs_a_side(state.get("format")) else 6) if start is not None else None
+        one no word says the length of) within six (lasts), as the tick closes any source's game (pipeline.due_work)."""
+        return start + (timedelta(days=2) if overs_a_side(state.get("format")) else self.lasts) if start is not None else None
 
     def paused(self, state: dict[str, Any], score: str, clock: str) -> bool:
         """Stumps: the day's play is over, and the match goes on tomorrow ("Stump Day 2", "Day 3 · Stumps")."""
