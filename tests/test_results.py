@@ -3,18 +3,23 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 from dataclasses import asdict
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 import pytest
+from alembic.operations import Operations
+from alembic.runtime.migration import MigrationContext
 from sqlalchemy import create_engine, text
 
 from sports_follow import db as db_module
 from sports_follow import form, results, sports, structured
 from sports_follow.adapters import ADAPTERS, sportmonks_cricket
 from sports_follow.adapters.base import PlayerRef
+from sports_follow.sports.base import outcome as said_outcome
 from sports_follow.sports.cricket import winner_outcome
 from sports_follow.structured import merged_result
 
@@ -313,6 +318,74 @@ def test_kohlis_results_and_form_agree_on_who_won(monkeypatch):
             assert results.detail(s, 1, 3)["outcome"] == "W"
             stats = results.player_form(s, 1, 10)["stats"]
             assert stats[0] == {"label": "W–D–L", "value": f"{want.count('W')}–0–{want.count('L')}"}
+    finally:
+        with engine.begin() as c:
+            c.execute(text("TRUNCATE player, event, follow RESTART IDENTITY CASCADE"))
+
+
+CHESS_MIGRATION = Path(__file__).parent.parent / "migrations/versions/c4e5585b1e9e_chess_results_white_first.py"
+
+
+def _chess_migration():
+    spec = importlib.util.spec_from_file_location("chess_results_white_first", CHESS_MIGRATION)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
+
+
+@pytest.mark.skipif(not TEST_DB, reason="SPORTS_FOLLOW_TEST_DATABASE_URL isn't set (an empty database at alembic head)")
+def test_a_chess_games_stored_result_is_rewritten_white_first(monkeypatch):
+    # BUG-144's reopen: a game's result is the board's now, White's points first, but results kept before read from the
+    # player's side: Gukesh's loss with Black still read "Dudin vs Gukesh · Lost 0–1", beside newer ones White-first.
+    # The migration rewrites those whose line says the player had Black; a mini-match's stays the player's.
+    engine = create_engine(TEST_DB)
+    monkeypatch.setattr(db_module, "SessionLocal", db_module.sessionmaker(bind=engine, expire_on_commit=False))
+    games = [  # newest first: (stored result, the player's line's words, their stored line, want)
+        ("Lost 0–1", "Lost with Black vs Gleb Dudin", None, "Lost 1–0"),
+        ("Won 1–0", "Won with Black vs Anton Donchenko", None, "Won 0–1"),
+        ("Won 0–1", "Won with Black vs Vincent Keymer", None, "Won 0–1"),  # kept since: White-first already
+        ("Lost 0–1", "Lost with White vs Fabiano Caruana", None, "Lost 0–1"),  # with White, the same either way
+        ("Drew ½–½", "Drew with Black vs Hikaru Nakamura", None, "Drew ½–½"),
+        ("Won 1–0 on armageddon", "Won with Black vs Wesley So on armageddon", None, "Won 0–1 on armageddon"),
+        ("Won 1½–½", "Won the match 1½–½ vs Alireza Firouzja", line("Black vs Alireza Firouzja", Colour="Black", Match="1½–½"), "Won 1½–½"),
+        ("Lost 0–1", None, line("Black vs Arjun Erigaisi", Colour="Black"), "Lost 1–0"),  # no words kept: its line says
+        ("Lost 0–1", None, None, "Lost 0–1"),  # nothing says its colour: left
+    ]
+    with engine.begin() as c:
+        c.execute(text("TRUNCATE player, event, follow RESTART IDENTITY CASCADE"))
+        x = lambda sql, **p: c.execute(text(sql), p)  # noqa: E731
+        x("INSERT INTO player (id, slug, name, sport, status, teams) VALUES (1, 'gukesh-d', 'Gukesh D', 'Chess', 'active', '[]')")
+        for i, (said, contribution, stored, _) in enumerate(games, start=1):
+            start = datetime(2026, 10, 1, tzinfo=timezone.utc).replace(day=20 - i)
+            x("INSERT INTO event (id, key, sport, competition, title, participants, status, start_utc) VALUES (:e, :k, 'Chess', 'Tata Steel', 'A vs B', '[\"46616543\"]', 'final', :s)",
+              e=i, k=f"lichess_chess:r{i}-46616543", s=start)
+            row = {"title": "A vs B · Round 1", "result": said, "player_contribution": contribution, "scorecard": True, "outcome": said_outcome(said)}
+            x("INSERT INTO event_player (event_id, player_id, result) VALUES (:e, 1, CAST(:r AS jsonb))", e=i, r=json.dumps(row))
+            if stored:
+                x("INSERT INTO player_line (event_id, player_id, as_of, stats) VALUES (:e, 1, :a, CAST(:s AS jsonb))", e=i, a=start, s=json.dumps(stored))
+        # Another sport's result is never a chess game's.
+        x("INSERT INTO player (id, slug, name, sport, status, teams) VALUES (2, 'saka', 'Bukayo Saka', 'Football', 'active', '[]')")
+        x("INSERT INTO event (id, key, sport, competition, title, participants, status) VALUES (99, 'espn_soccer:1', 'Football', 'Premier League', 'Arsenal vs Chelsea', '[]', 'final')")
+        x("INSERT INTO event_player (event_id, player_id, result) VALUES (99, 2, CAST(:r AS jsonb))", r=json.dumps({"title": "Arsenal vs Chelsea", "result": "Lost 0–1", "player_contribution": "Black vs White"}))
+
+    def shown() -> list[str]:
+        with db_module.session() as s:
+            return [r["result"] for r in results.page(s, 1)["results"]]
+
+    def migrate() -> None:
+        with engine.begin() as c, Operations.context(MigrationContext.configure(c)):
+            _chess_migration().upgrade()
+
+    try:
+        assert shown()[0] == "Lost 0–1"  # as kept: Black (Gukesh) won, to a chess fan
+        migrate()
+        assert shown() == [want for *_, want in games]
+        migrate()  # again: nothing more changes
+        assert shown() == [want for *_, want in games]
+        with db_module.session() as s:
+            assert [r["outcome"] for r in results.page(s, 1)["results"]] == [said_outcome(w) for *_, w in games]  # the word stands
+            assert s.execute(text("SELECT result->>'result' FROM event_player WHERE event_id = 99")).scalar() == "Lost 0–1"
     finally:
         with engine.begin() as c:
             c.execute(text("TRUNCATE player, event, follow RESTART IDENTITY CASCADE"))
