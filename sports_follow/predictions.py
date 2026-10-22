@@ -611,6 +611,11 @@ def _name(raw: Any, most: int, what: str) -> str:
     return name
 
 
+def _same(name: str) -> str:
+    """A name as two members' are told apart: "Asha", " asha " and "ASHA" with a joiner in it are one."""
+    return unicodedata.normalize("NFKC", "".join(c for c in name if c not in JOINERS)).casefold()
+
+
 def _room(db: Session, fan: str) -> None:
     if (db.scalar(select(func.count()).select_from(LeagueMember).where(LeagueMember.fan_id == fan)) or 0) >= LEAGUES:
         raise Refused(429, f"You're in {LEAGUES} leagues already: leave one to join another.")
@@ -636,14 +641,17 @@ def find(db: Session, code: str) -> League | None:
 
 
 def join(db: Session, fan: str, code: str, member: Any) -> League:
-    """Join a league by its invite code, by the name given (a member already in it changes their name). Raises
-    Refused for no such league, a full one, or a fan in LEAGUES already."""
+    """Join a league by its invite code, by the name given (a member already in it changes their name), one no other
+    member goes by (_same: its table and its calls tell friends apart by it). Raises Refused for no such league, a
+    full one, a name taken, or a fan in LEAGUES already."""
     me = _name(member, NAME, "your name")
     league = find(db, code)
     if league is None:
         raise Refused(404, "No league has that invite: ask for a new link.")
     db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"leagues:{fan}", 0))))
-    db.execute(select(League.id).where(League.id == league.id).with_for_update())  # one join at a time: the count holds
+    db.execute(select(League.id).where(League.id == league.id).with_for_update())  # one join at a time: the count holds, and the names
+    if any(_same(name) == _same(me) for name in db.scalars(select(LeagueMember.name).where(LeagueMember.league_id == league.id, LeagueMember.fan_id != fan))):
+        raise Refused(409, "Someone in this league goes by that name already: pick another.")
     if db.get(LeagueMember, (league.id, fan)) is not None:
         db.execute(update(LeagueMember).where(LeagueMember.league_id == league.id, LeagueMember.fan_id == fan).values(name=me))
         return league

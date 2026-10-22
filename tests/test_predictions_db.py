@@ -886,6 +886,27 @@ def test_names_keep_only_what_can_be_seen_and_one_with_nothing_to_see_is_refused
         db.rollback()
 
 
+def test_two_members_of_a_league_cant_go_by_one_name(db, redis):
+    """BUG-111: Ravi could join as "Asha", the league's maker, and the table showed two Ashas (the web's rows, keyed by
+    name, mixed up too). A name is one member's in a league now, whatever its case, spaces or what can't be seen in it;
+    a member may keep theirs, or change it to one nobody else has."""
+    gang = predictions.create(db, "acct-asha", "Derby", "Asha")
+    db.commit()
+    for taken in ("Asha", " asha ", "ASHA​"):
+        with pytest.raises(predictions.Refused) as clash:
+            predictions.join(db, "acct-ravi", gang.code, taken)
+        assert clash.value.status == 409
+        db.rollback()
+    predictions.join(db, "acct-ravi", gang.code, "Ravi")
+    predictions.join(db, "acct-ravi", gang.code, "ravi k")  # his own, changed
+    predictions.join(db, "acct-ravi", gang.code, "Ravi K")
+    db.commit()
+    with pytest.raises(predictions.Refused):
+        predictions.join(db, "acct-asha", gang.code, "RAVI K")  # the maker renaming to his
+    db.rollback()
+    assert sorted(db.scalars(select(LeagueMember.name))) == ["Asha", "Ravi K"]
+
+
 def test_signing_in_brings_every_pick_and_those_on_games_under_way_count_in_no_league(db, redis):
     """BUG-091 (BHA-413): signing in (to join a friend's league mid-game, say) brought only the picks on games still to
     start: the rest stayed with the device's anonymous id, which no device holds after, so the fan lost those calls,
