@@ -506,15 +506,10 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
     stored: dict[str, dict[str, Any]] = {}
     have: set[tuple[int, str]] = set()
     with db.session() as session:
-        rows = session.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features,
-                                      FeedCandidate.unplayable_at, FeedCandidate.review)
+        rows = session.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features)
                                .where(FeedCandidate.source == source.system, FeedCandidate.external_id.in_(ids)))  # fmt: skip
-        for pid, vid, url, kept, numbers, unplayable, said in rows:
-            stored.setdefault(vid, {"url": url, "candidate": kept or {}, "features": numbers or {}, "unplayable_at": unplayable, "review": None})
-            if unplayable is not None:  # a fan's app said it won't play inside it (feed.unplayable): every row of it keeps that
-                stored[vid]["unplayable_at"] = unplayable
-            if said == "hidden":  # an admin hid the video (rank.review): so is every row of it
-                stored[vid]["review"] = said
+        for pid, vid, url, kept, numbers in rows:
+            stored.setdefault(vid, {"url": url, "candidate": kept or {}, "features": numbers or {}})
             have.add((pid, vid))
     new = [f for f in found if (f.player_id, f.upload.video_id) not in have]
     if not new:
@@ -528,6 +523,7 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
     counts["refused"] = len(why)
     stored_for: list[str] = []  # a sport for each row stored
     with db.session() as session:
+        _marks(session, source, stored)  # as they are now, not before the source was asked: a hide meanwhile holds
         for f in new:
             vid = f.upload.video_id
             if vid in skip or vid in why:
@@ -555,6 +551,21 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
                 log.info("feed: %s %s for player %s not kept: %s", source.system, vid, f.player_id, type(exc).__name__)
     feedstats.keep_counted(stream, found, have, skip, why, facts, stored_for)
     return counts
+
+
+def _marks(session: Session, source: VideoSource, stored: dict[str, dict[str, Any]]) -> None:
+    """What every row of each stored video keeps, read into stored: whether a fan's app said it won't play inside it
+    (feed.unplayable) and whether an admin hid the video (rank.review), on any row of it."""
+    for vid in stored:
+        stored[vid] |= {"unplayable_at": None, "review": None}
+    if not stored:
+        return
+    for vid, unplayable, said in session.execute(select(FeedCandidate.external_id, FeedCandidate.unplayable_at, FeedCandidate.review)
+                                                 .where(FeedCandidate.source == source.system, FeedCandidate.external_id.in_(sorted(stored)))):  # fmt: skip
+        if unplayable is not None:
+            stored[vid]["unplayable_at"] = unplayable
+        if said == "hidden":
+            stored[vid]["review"] = said
 
 
 def poll(now: datetime | None = None) -> dict[str, int]:

@@ -385,6 +385,31 @@ def test_a_video_an_admin_hid_stays_hidden_when_found_for_another_player(world):
     assert said == {kohli: "hidden", bumrah: "hidden"}
 
 
+def test_a_video_an_admin_hides_while_a_poll_asks_youtube_is_hidden_for_the_player_it_keeps_it_for(world, monkeypatch):
+    """BUG-288: a poll read whether a stored video was hidden, asked YouTube about the new ones, and then kept the stored
+    one for another player as it had read it: an admin's hide (or fans' apps' "won't play") meanwhile missed that row."""
+    from sports_follow import rank
+
+    kohli = player("Virat Kohli")
+    world.uploads[CHANNEL] = uploads(("kohlibumrah", "Kohli and Bumrah on the tour", ""), ("bumrahyork1", "Bumrah's yorker", ""))
+    world.videos["kohlibumrah"], world.videos["bumrahyork1"] = video("kohlibumrah"), video("bumrahyork1")
+    candidates.poll(NOW)
+    bumrah = player("Jasprit Bumrah")
+    asked = SOURCE.facts
+
+    def facts(ids, *args, **kwargs):  # an admin hides the stored one while YouTube is asked about the new one
+        with db_module.session() as s:
+            row = s.scalar(select(FeedCandidate.id).where(FeedCandidate.player_id == kohli))
+            assert row is not None and rank.review(s, row, "hidden")
+        return asked(ids, *args, **kwargs)
+
+    monkeypatch.setattr(SOURCE, "facts", facts)
+    assert candidates.poll(NOW + timedelta(minutes=30))["kept"] == 2
+    with db_module.session() as s:
+        said = {(p, v): r for p, v, r in s.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.review))}
+    assert said == {(kohli, "kohlibumrah"): "hidden", (bumrah, "kohlibumrah"): "hidden", (bumrah, "bumrahyork1"): None}
+
+
 def test_a_poll_keeps_pool_players_videos_and_a_teams_video_for_its_players_as_their_teams(world):
     """BHA-382: the pool's players (feedpool.ids: nobody follows them) are looked for beside followed ones, and a video
     naming a team and none of its players is kept for them as the team's."""

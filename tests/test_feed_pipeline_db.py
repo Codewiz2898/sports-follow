@@ -849,3 +849,23 @@ def test_a_verdict_taken_back_as_none_is_sqls_null_so_the_judge_asks_again(made,
     monkeypatch.setattr(curate, "judge_many", lambda cands: [curate.Verdict.model_validate(said()) for _ in list(cands)])
     assert rank.judge(NOW) == {"judged": 1, "unjudged": 0}
 
+
+def test_the_judge_isnt_asked_about_a_video_an_admin_hid_or_fans_apps_took_out_until_its_back(made, monkeypatch):
+    """BUG-288: a row of a video an admin hid (a new player's row of it is hidden too, candidates.keep) or fans' apps
+    said won't play went to the judge all the same, paid for, though it's never served. It waits now; once it's
+    back (the hide taken back, put back), it's asked about."""
+    pid = asha()
+    hidden = stored(pid, "hidden00001", "Asha Verma's hundred", EDITS, 5)
+    unplayable = stored(pid, "unplayable1", "Asha Verma in the nets", TALKS, 4)
+    stored(pid, "fresh000001", "Asha Verma's fifty", STATS, 3)
+    with db_module.session() as s:
+        s.get_one(FeedCandidate, hidden).review = "hidden"
+        s.get_one(FeedCandidate, unplayable).unplayable_at = NOW
+    asked: list[str] = []
+    monkeypatch.setattr(curate, "judge_many", lambda cands: [asked.append(c.url[-11:]) or curate.Verdict.model_validate(said()) for c in list(cands)])
+    assert rank.judge(NOW) == {"judged": 1, "unjudged": 0} and asked == ["fresh000001"]
+    assert rank.judge(NOW, again=True)["judged"] == 1 and asked[1:] == ["fresh000001"]  # asking everything again, too
+    with db_module.session() as s:
+        s.get_one(FeedCandidate, hidden).review = None  # the hide taken back
+        s.get_one(FeedCandidate, unplayable).unplayable_at = None  # put back
+    assert rank.judge(NOW) == {"judged": 2, "unjudged": 0} and sorted(asked[2:]) == ["hidden00001", "unplayable1"]

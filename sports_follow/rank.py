@@ -390,7 +390,8 @@ def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again:
     time. A row the judge couldn't answer for now is unjudged still: the model declined it or answered off the
     schema, and it waits days before it's asked again, then is held back for good (SPOILT); for any other reason,
     it's asked again at the next run. So are the rows left when the run has taken `within` seconds or the curator
-    is stopping. With again, every row is asked, held back or waiting.
+    is stopping. With again, every row is asked, held back or waiting. Never one of a video an admin hid or fans'
+    apps took out (FeedCandidate.served): it's never served, so not paid for, until it's back.
 
     A video found for several players as their team's (about_team) is one share about the team: the judge reads it
     once, for the first of them, and its verdict is theirs too; one judged so before (not again) is theirs as it is."""
@@ -399,6 +400,7 @@ def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again:
     with db.session() as session:
         query = select(FeedCandidate.id, FeedCandidate.player_id, FeedCandidate.source, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate,
                        FeedCandidate.features, FeedCandidate.judge_tries)  # fmt: skip
+        query = query.where(FeedCandidate.review.is_distinct_from("hidden"), FeedCandidate.unplayable_at.is_(None))  # never served: never paid for
         if not again:
             query = query.where(FeedCandidate.verdict.is_(None), or_(FeedCandidate.judge_after.is_(None), FeedCandidate.judge_after <= now))
         rows = session.execute(query.order_by(FeedCandidate.fetched_at.desc(), FeedCandidate.id).limit(limit)).all()
