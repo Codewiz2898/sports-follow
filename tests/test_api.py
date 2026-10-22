@@ -1735,7 +1735,7 @@ def test_a_video_that_wont_play_inside_the_app_is_said_so_of_so_many_an_hour_and
         return True
 
     def say(item: str, fan: str = "fan", address: str = PUBLIC) -> httpx.Response:
-        return api.call("POST", f"/api/players/7/feed/{item}/unplayable", fan=fan, address=address)
+        return api.call("POST", f"/api/players/7/feed/{item}/unplayable", fan=fan, address=address, body={"timezone": "Asia/Kolkata"})  # an app in India
 
     monkeypatch.setattr(feed, "said_unplayable", said, raising=False)
     monkeypatch.setattr(feed, "unplayable", unplayable)
@@ -1769,7 +1769,8 @@ def test_a_burst_of_wont_play_reports_at_once_cant_pass_an_addresss_limit(api, m
     async def burst() -> list[httpx.Response]:
         transport = httpx.ASGITransport(app=server.app, client=(PUBLIC, 50000))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            return await asyncio.gather(*(client.post(f"/api/players/7/feed/{n:016x}/unplayable", headers={"Cookie": f"sf_fan={server.sign_fan(f'script-{n}')}"})
+            return await asyncio.gather(*(client.post(f"/api/players/7/feed/{n:016x}/unplayable", headers={"Cookie": f"sf_fan={server.sign_fan(f'script-{n}')}"},
+                                                      json={"timezone": "Asia/Kolkata"})
                                           for n in range(20)))  # fmt: skip
 
     answers = asyncio.run(burst())

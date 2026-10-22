@@ -83,9 +83,11 @@ export function endpoints(request: Request) {
     feedFeedback: (playerId: number, itemId: string, verdict: FeedVerdict) =>
       request<{ item_id: string; hidden: boolean }>(`/api/players/${playerId}/feed/${encodeURIComponent(itemId)}/feedback`, json('POST', { verdict })),
     // A video whose player refused to play it here (feed.refusedHere): it leaves this fan's Feed, and every fan's once
-    // enough networks have said so (feed.said_unplayable, feed.unplayable).
+    // enough networks have said so (feed.said_unplayable, feed.unplayable), counting only devices whose time zone is
+    // the feed's country's (feed.counts_everywhere): abroad, a video may be refused that plays for the fans it's for.
     feedUnplayable: (playerId: number, itemId: string) =>
-      request<{ item_id: string; unplayable: boolean; marked: boolean }>(`/api/players/${playerId}/feed/${encodeURIComponent(itemId)}/unplayable`, { method: 'POST' }),
+      request<{ item_id: string; unplayable: boolean; marked: boolean }>(`/api/players/${playerId}/feed/${encodeURIComponent(itemId)}/unplayable`,
+        json('POST', { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone })),
     // The fan's own Feed, a page at a time (feed.page): the next after `cursor`, one player's with `player`; days are
     // the device's. limit 0: the circles, the count and the newest only. tab: for_you mixes in players they don't follow.
     myFeedPage: ({ cursor, player, limit, tab }: { cursor?: string | null; player?: number | null; limit?: number; tab?: FeedTabKey } = {}) => {

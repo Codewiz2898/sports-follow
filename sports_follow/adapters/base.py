@@ -486,6 +486,7 @@ class VideoFacts:
     allowed: tuple[str, ...] | None = None  # the only countries it plays in (ISO 3166-1 alpha-2), where the source limits it
     blocked: tuple[str, ...] = ()  # countries it doesn't play in
     paid: bool = False  # its maker declared paid promotion in it (YouTube's "Includes paid promotion")
+    age_restricted: bool = False  # only a signed-in adult may watch it, on the source's own site: no embedded player plays it
     raw: dict[str, Any] = field(default_factory=dict)  # the parts the source sent, as it sent them
 
     def plays_in(self, country: str) -> bool:
