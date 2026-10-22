@@ -697,19 +697,18 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Some still won't play inside the app: a Content ID owner (LaLiga's, say) keeps them off other sites, which
   the Data API doesn't say (embeddable, no region rule). Only the player knows: YouTube's IFrame Player API
   says so (error 101 or 150, or 100 for one gone), and the apps then show "This one plays only on YouTube"
-  with the way there, and tell the server once (`POST /api/players/<id>/feed/<item>/unplayable`, so many an
-  hour from a fan, an address and everyone, each count taken before the report is acted on). It leaves that fan's
-  Feed at once, and it's their network's vote (an IPv6 one's /48, kept a month in Redis) on whether YouTube is
-  asked about it: once three networks have said so (`feed.UNPLAYABLE_VOTES`), the worker reads the video again as
-  the weekly check does (`worker.check_unplayable`, `feed.check_unplayable`: 1 unit, in the feed lane; one job for
-  reports arriving together, and none again for a day). Only YouTube saying it won't play here (removed, private,
-  no longer embeddable, age-restricted, blocked in India) marks every row of the video (`unplayable_at`): no Feed
-  serves it again, and a fetch that finds it for another player keeps the mark. No number of networks does that by
-  itself; when YouTube says it plays, the votes go. Without a key or with the day's quota spent nothing is marked,
-  and it's asked again an hour on. So a video a Content ID owner keeps
-  off other sites, which the Data API doesn't say, leaves only the Feeds of the fans whose apps said so; the admin
-  panel's Hide takes it from everyone. The Feed tab shows the mark, approving or pinning the video there says it
-  plays after all, which no check overrides, and any word on it there starts its votes again.
+  with the way there, and tell the server once (`POST /api/players/<id>/feed/<item>/unplayable`). It leaves that
+  fan's Feed at once, and it's their network's vote (an IPv6 one's /48, kept a month in Redis) on whether it leaves
+  everyone's: once three networks have said so (`feed.UNPLAYABLE_VOTES`), the server marks every row of the video
+  (`unplayable_at`), no Feed serves it again, and a fetch that finds it for another player keeps the mark. One fan,
+  or a script with new cookies, takes it from their own Feed alone. A fan's votes are counted so many an hour, and
+  an address's (10 and 30, each count taken before the report is acted on); past either, the video still leaves
+  that fan's Feed and only the vote is dropped. Reports never ask YouTube anything. The admin panel's Feed tab lists
+  every video taken out this way under Won't play, newest first, and Put back (approving it; pinning it too) says it
+  plays after all, which no app's word overrides; any word on it there starts its votes again. The weekly check
+  drops one YouTube says is gone, private or no longer embeddable, marked or not, so those leave the list by
+  themselves. (Whether 101/150 can also mean a block in the viewer's country alone isn't known; only apps whose
+  time zone is India's vote, `SPORTS_FOLLOW_FEED_ZONES`.)
   After each poll the judge (below) reads the new rows and `sports_follow/rank.py` scores every judged one:
   the judge's interest, how widely it's watched for its age (log views a day since it was published, as its
   latest read counted them, so the score is age-fair and stays put as days pass) and its like ratio, times its

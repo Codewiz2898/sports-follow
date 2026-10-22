@@ -2193,9 +2193,9 @@ def admin_channel_trust(body: dict = Body(...), db: Session = Depends(get_db)) -
 @app.put("/api/admin/feed/{row_id}", dependencies=AdminOnly)
 async def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[str, Any]:
     """An admin's word on a candidate ({"review": "approved" | "hidden" | "pinned" | null}), over the judge's. Fans'
-    apps' votes that its video won't play start again from none, and its source may be asked about it again
-    (feed.unplayable_votes_key, feed.unplayable_check_key): after an approval taken back, it takes as many networks
-    as ever before the source is asked, not one more."""
+    apps' votes that its video won't play start again from none (feed.unplayable_votes_key): approving or pinning one
+    their reports took from every Feed puts it back (the Feed tab's list of them), and after that's taken back it takes
+    as many networks as ever to take it out again, not one more."""
     said = body.get("review")
     try:
         found = await run_in_threadpool(admin.review_candidate, row_id, said if isinstance(said, str) or said is None else "?")
@@ -2204,7 +2204,7 @@ async def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[
     if found is None:
         raise HTTPException(404, "There's no such candidate.")
     if video := await in_db(feed.video_of_row, row_id):
-        await state["redis"].delete(feed.unplayable_votes_key(video), feed.unplayable_check_key(video))
+        await state["redis"].delete(feed.unplayable_votes_key(video))
     admin_log.info("admin panel: feed candidate %s %s", row_id, said or "review taken back")
     return found
 
@@ -2656,35 +2656,35 @@ def _voter(address: str | None, fan: str) -> str:
 async def feed_unplayable(player_id: RowId, item_id: str, request: Request, body: dict | None = Body(None), fan: str = Depends(fan_id)) -> dict[str, Any]:
     """The fan's app says this video of the player's feed won't play inside it: the video's own player refused it.
     It leaves their Feed at once (feed.said_unplayable), and when the app is in the feed's country ({"timezone": the
-    device's}, feed.counts_everywhere) it's their network's vote on whether the video's source is asked about it:
-    once feed.UNPLAYABLE_VOTES networks have said so, the worker asks (feed.check_unplayable), queued once for reports
-    arriving together and not again for a while, and only the source saying it won't play here takes it from every
-    fan's Feed: no report does that by itself ("marked" stays false). The app opens it on its site instead. Saying it
-    again changes nothing.
-    A fan says so only so many times an hour, and an address and everyone together vote only so many times: past
-    any, a 429. Each count is taken before the report is acted on, so reports arriving together can't all pass, and
-    given back when it's refused; the address's and everyone's too when it isn't a new vote, so junk ids and a video
-    said of again don't use up what a real one needs."""
-    refused = "That's a lot of videos that won't play for one hour. Try again later."
+    device's}, feed.counts_everywhere) it's their network's vote on whether it leaves every fan's: once
+    feed.UNPLAYABLE_VOTES networks have said so, it does (feed.unplayable; "marked"). The admin panel's Feed tab lists
+    it, and an admin approving or pinning it brings it back. The app opens it on its site instead. Saying it again
+    changes nothing.
+    A fan votes only so many times an hour, and so does an address: past either, the video still leaves the fan's
+    Feed, and only their vote is dropped. Each count is taken before the report is acted on, so reports arriving
+    together can't all pass, and given back when it isn't a vote; the address's too when it isn't a new one, so junk
+    ids and a video said of again don't use up what a real one needs."""
     redis = state["redis"]
     address = client_address(request)
-    limits = [(f"feed:unplayable:fan:{fan}", feed.UNPLAYABLE_PER_FAN), ("feed:unplayable:all", feed.UNPLAYABLE_PER_HOUR)]
+    limits = [(f"feed:unplayable:fan:{fan}", feed.UNPLAYABLE_PER_FAN)]
     if address:
-        limits.insert(1, (f"feed:unplayable:address:{address}", feed.UNPLAYABLE_PER_ADDRESS))
+        limits.append((f"feed:unplayable:address:{address}", feed.UNPLAYABLE_PER_ADDRESS))
 
     async def give_back(keys: list[str]) -> None:
         for key in keys:
             await redis.eval(GIVE_BACK, 1, key)
 
     taken: list[str] = []
+    votes_now = True
     for key, limit in limits:
         used = await redis.incr(key)
         taken.append(key)
         await redis.expire(key, 3600, nx=True)  # the hour's end, set once
-        if used > limit:
+        if used > limit:  # their Feed still loses it; only the vote goes
             await give_back(taken)
-            raise HTTPException(429, refused)
-    shared = taken[1:]  # the address's and everyone's
+            taken, votes_now = [], False
+            break
+    shared = taken[1:]  # the address's
     try:
         video = await in_db(feed.said_unplayable, fan, player_id, item_id)
     except ValueError as exc:
@@ -2693,21 +2693,16 @@ async def feed_unplayable(player_id: RowId, item_id: str, request: Request, body
     except LookupError as exc:
         await give_back(shared)
         raise HTTPException(404, str(exc)) from exc
-    answer = {"item_id": item_id, "unplayable": True, "marked": False}
-    # An admin vouched for it, the app is abroad (where it may not play when it does here), or this network said so before.
-    if video is None or not feed.counts_everywhere((body or {}).get("timezone")) or not await redis.sadd(votes := feed.unplayable_votes_key(video), _voter(address, fan)):
+    answer: dict[str, Any] = {"item_id": item_id, "unplayable": True, "marked": False}
+    # Past an hour's votes, an admin vouched for it, the app is abroad (where it may not play when it does here), or
+    # this network said so before.
+    if (not votes_now or video is None or not feed.counts_everywhere((body or {}).get("timezone"))
+            or not await redis.sadd(votes := feed.unplayable_votes_key(video), _voter(address, fan))):  # fmt: skip
         await give_back(shared)
         return answer
     await redis.expire(votes, feed.UNPLAYABLE_VOTES_FOR)
-    # One check for the reports that pass the count together, and none again while its mark lasts (feed.check_unplayable).
-    # Held here only as long as a check that can't say holds it, so a job that never ran doesn't hold it for a day.
-    check = feed.unplayable_check_key(video)
-    if await redis.scard(votes) >= feed.UNPLAYABLE_VOTES and await redis.set(check, "1", nx=True, ex=feed.UNPLAYABLE_UNCHECKED_AGAIN):
-        try:
-            await enqueue("check_unplayable", video, _job_id=f"check-unplayable:{video}")
-        except Exception:
-            await redis.delete(check)
-            raise
+    if await redis.scard(votes) >= feed.UNPLAYABLE_VOTES:
+        answer["marked"] = await in_db(feed.unplayable, video)
     return answer
 
 

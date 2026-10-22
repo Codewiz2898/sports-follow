@@ -2021,52 +2021,60 @@ def test_league_invites_are_looked_up_so_many_times_an_address_and_opened_only_b
     assert opened[-2:] == [("38KWAS", False), ("38KWAS", True)]  # opened: by the fan who came with their cookie only
 
 
-def test_a_video_that_wont_play_inside_the_app_is_said_so_of_so_many_an_hour_and_odd_ones_are_refused_plainly(api, monkeypatch):
+def test_a_video_that_wont_play_inside_the_app_is_voted_on_so_many_times_an_hour_and_odd_ones_are_refused_plainly(api, monkeypatch):
     """A fan's app says a Feed video's player refused it (BHA-380): it leaves their Feed (feed.said_unplayable), and
-    it's their network's vote (BHA-422): once feed.UNPLAYABLE_VOTES networks have said so, the worker asks the video's
-    source about it (feed.check_unplayable, BUG-100), and no report takes it from anyone else's Feed by itself. A fan
-    says so only so many times an hour, and an address and everyone together vote only so many times. Junk ids, a
-    video an admin vouched for and a network's word again count against the fan alone."""
-    marked: list[tuple] = []
+    it's their network's vote on whether it leaves everyone's (BHA-422): feed.UNPLAYABLE_VOTES networks saying so take
+    it out of every fan's at once (feed.unplayable), and nothing is queued: a report never asks the video's source
+    (BUG-100). A fan votes only so many times an hour, and an address too: past either, the video still leaves their
+    Feed, and only the vote is dropped. Junk ids, a video an admin vouched for and a network's word again count
+    against the fan alone."""
+    said_of: list[str] = []
+    marked: list[str] = []
 
     def said(db, fan, player_id, item):
         if item == "not-an-item":
             raise ValueError("No such item.")
         if item == "0" * 16:
             raise LookupError("That video isn't in this player's feed.")
+        said_of.append(item)
         return None if item == "f" * 16 else f"youtube:{item}"  # f…f: an admin vouched for it
 
     def say(item: str, fan: str = "fan", address: str = PUBLIC) -> httpx.Response:
         return api.call("POST", f"/api/players/7/feed/{item}/unplayable", fan=fan, address=address, body={"timezone": "Asia/Kolkata"})  # an app in India
 
     monkeypatch.setattr(feed, "said_unplayable", said, raising=False)
-    monkeypatch.setattr(feed, "unplayable", lambda *args: marked.append(args) or True)
+    monkeypatch.setattr(feed, "unplayable", lambda db, video: marked.append(video) or True)
     first = say("0123456789abcdef")
     assert first.status_code == 200 and first.json() == {"item_id": "0123456789abcdef", "unplayable": True, "marked": False}  # their Feed's alone
     assert say("0123456789abcdef", fan="new-cookie").json()["marked"] is False  # the same network again
     assert say("not-an-item").status_code == 422 and say("0" * 16).status_code == 404 and say("f" * 16).json()["marked"] is False
     for _ in range(feed.UNPLAYABLE_PER_FAN - 4):
         assert say("0123456789abcdef").status_code == 200
-    assert say("0123456789abcdef").status_code == 429  # the fan's hour
-    assert api.redis.data[f"feed:unplayable:address:{PUBLIC}"] == api.redis.data["feed:unplayable:all"] == 1  # one vote
-    assert api.queue.jobs == []
-    # Other networks: with enough of them, the worker asks the video's source; nobody else's Feed loses it meanwhile.
+    past = say("1" * 16)  # past the fan's hour: it still leaves their Feed, and isn't a vote
+    assert past.status_code == 200 and past.json()["marked"] is False and said_of[-1] == "1" * 16
+    assert "feed:unplayable:votes:youtube:1111111111111111" not in api.redis.data
+    assert api.redis.data["feed:unplayable:fan:fan"] == feed.UNPLAYABLE_PER_FAN  # the dropped vote given back
+    assert api.redis.data[f"feed:unplayable:address:{PUBLIC}"] == 1  # one vote
+    # Other networks: with enough of them, it leaves every fan's Feed at once.
     for n in range(feed.UNPLAYABLE_VOTES - 1):
-        assert say("0123456789abcdef", fan=f"elsewhere-{n}", address=f"81.2.70.{n + 1}").json()["marked"] is False
-    assert api.queue.jobs == [("check_unplayable", "youtube:0123456789abcdef")] and marked == []
-    assert api.queue.options["_job_id"] == "check-unplayable:youtube:0123456789abcdef"
+        assert say("0123456789abcdef", fan=f"elsewhere-{n}", address=f"81.2.70.{n + 1}").json()["marked"] is (n == feed.UNPLAYABLE_VOTES - 2)
+    assert marked == ["youtube:0123456789abcdef"] and api.queue.jobs == []
     # Other fans on the same network, until the address has voted as many times as an address may.
     for n in range(feed.UNPLAYABLE_PER_ADDRESS - 1):
         assert say(f"{n + 1:016x}", fan=f"fan-{n}").status_code == 200
-    assert say(f"{999:016x}", fan="new-fan").status_code == 429
-    assert api.redis.data[f"feed:unplayable:address:{PUBLIC}"] == feed.UNPLAYABLE_PER_ADDRESS  # the refused one given back
+    past = say(f"{999:016x}", fan="new-fan")  # past the address's hour: likewise
+    assert past.status_code == 200 and past.json()["marked"] is False and said_of[-1] == f"{999:016x}"
+    assert f"feed:unplayable:votes:youtube:{999:016x}" not in api.redis.data
+    assert api.redis.data[f"feed:unplayable:address:{PUBLIC}"] == feed.UNPLAYABLE_PER_ADDRESS  # the dropped one given back
 
 
 def test_a_burst_of_wont_play_reports_at_once_cant_pass_an_addresss_limit(api, monkeypatch):
-    """BHA-422: each count is taken before a report is acted on, and given back when it's refused, so reports that
-    arrive together can't all find the count under the limit and all pass."""
-    monkeypatch.setattr(feed, "said_unplayable", lambda db, fan, player_id, item: f"youtube:{item}", raising=False)
-    monkeypatch.setattr(feed, "unplayable", lambda db, player_id, item: True)
+    """BHA-422: each count is taken before a report is acted on, and given back when it isn't a vote, so reports that
+    arrive together can't all find the count under the limit and all vote. Each still takes its video out of its own
+    fan's Feed (BUG-100)."""
+    said_of: list[str] = []
+    monkeypatch.setattr(feed, "said_unplayable", lambda db, fan, player_id, item: said_of.append(item) or f"youtube:{item}", raising=False)
+    monkeypatch.setattr(feed, "unplayable", lambda db, video: True)
     key = f"feed:unplayable:address:{PUBLIC}"
     api.redis.data[key] = feed.UNPLAYABLE_PER_ADDRESS - 1  # one short of the hour's limit
 
@@ -2078,63 +2086,19 @@ def test_a_burst_of_wont_play_reports_at_once_cant_pass_an_addresss_limit(api, m
                                           for n in range(20)))  # fmt: skip
 
     answers = asyncio.run(burst())
-    assert sorted(r.status_code for r in answers) == [200] + [429] * 19
+    assert [r.status_code for r in answers] == [200] * 20 and len(said_of) == 20
     assert api.redis.data[key] == feed.UNPLAYABLE_PER_ADDRESS
+    assert len([k for k in api.redis.data if k.startswith("feed:unplayable:votes:")]) == 1  # one vote
 
 
-def test_queueing_a_videos_check_holds_it_only_an_hour_and_a_check_that_couldnt_be_queued_holds_nothing(api, monkeypatch):
-    """BUG-100's check: queued, it holds the video from another check only as long as a check that can't say would
-    (feed.UNPLAYABLE_UNCHECKED_AGAIN): the check, once it has asked, holds it the day (feed.UNPLAYABLE_CHECK_EVERY).
-    A job lost before it ran would otherwise keep the video from being asked about for a day. And a check the queue
-    refused holds nothing: the next network's report queues it."""
-    monkeypatch.setattr(feed, "said_unplayable", lambda db, fan, player_id, item: "youtube:abcdefghijk", raising=False)
-    check = "feed:unplayable:check:youtube:abcdefghijk"
-    held: list[object] = []
-    keep = api.redis.set
-
-    async def set(key, value, nx=False, ex=None):
-        if key == check:
-            held.append(ex)
-        return await keep(key, value, nx=nx, ex=ex)
-
-    monkeypatch.setattr(api.redis, "set", set)
-    queue = api.queue.enqueue_job
-
-    async def down(name, *args, **options):
-        raise ConnectionError("the queue didn't answer")
-
-    def say(n: int) -> httpx.Response:
-        return api.call("POST", "/api/players/7/feed/0123456789abcdef/unplayable", fan=f"net-{n}", address=f"81.2.70.{n + 1}", body={"timezone": "Asia/Kolkata"})
-
-    for n in range(feed.UNPLAYABLE_VOTES - 1):
-        say(n)
-    monkeypatch.setattr(api.queue, "enqueue_job", down)
-    assert say(feed.UNPLAYABLE_VOTES - 1).status_code == 500
-    assert check not in api.redis.data and api.queue.jobs == []  # nothing held
-    monkeypatch.setattr(api.queue, "enqueue_job", queue)
-    assert say(feed.UNPLAYABLE_VOTES).status_code == 200  # the next network's report queues it
-    assert api.queue.jobs == [("check_unplayable", "youtube:abcdefghijk")]
-    assert held == [feed.UNPLAYABLE_UNCHECKED_AGAIN, feed.UNPLAYABLE_UNCHECKED_AGAIN]
-
-
-def test_reports_from_many_networks_at_once_that_a_video_wont_play_queue_one_check_of_it_and_take_it_from_nobody(api, monkeypatch):
-    """BUG-100: no number of networks saying a video won't play takes it from anyone else's Feed: once
-    feed.UNPLAYABLE_VOTES have, the worker asks its source (feed.check_unplayable). Reports arriving together queue
-    that check once."""
-    marked: list[tuple] = []
-    monkeypatch.setattr(feed, "said_unplayable", lambda db, fan, player_id, item: "youtube:abcdefghijk", raising=False)
-    monkeypatch.setattr(feed, "unplayable", lambda *args: marked.append(args) or True)
-
-    async def one(n: int) -> httpx.Response:
-        transport = httpx.ASGITransport(app=server.app, client=(f"81.2.70.{n + 1}", 50000))  # a network of its own
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            return await client.post("/api/players/7/feed/0123456789abcdef/unplayable", headers={"Cookie": f"sf_fan={server.sign_fan(f'exit-{n}')}"},
-                                     json={"timezone": "Asia/Kolkata"})  # fmt: skip
-
-    async def burst() -> list[httpx.Response]:
-        return await asyncio.gather(*(one(n) for n in range(20)))
-
-    answers = asyncio.run(burst())
-    assert [(r.status_code, r.json()["marked"]) for r in answers] == [(200, False)] * 20 and marked == []
-    assert api.queue.jobs == [("check_unplayable", "youtube:abcdefghijk")]
-    assert api.queue.options["_job_id"] == "check-unplayable:youtube:abcdefghijk"  # and arq queues an id once
+def test_wont_play_votes_have_no_hourly_cap_for_all_fans_together(api, monkeypatch):
+    """BUG-100: a cap on every fan's votes together, once used up, refused real fans' reports for the rest of the hour.
+    Only a fan's hour and an address's are counted."""
+    monkeypatch.setattr(feed, "said_unplayable", lambda db, fan, player_id, item: f"youtube:{item}", raising=False)
+    monkeypatch.setattr(feed, "unplayable", lambda db, video: True)
+    for n in range(250):
+        answer = api.call("POST", f"/api/players/7/feed/{n:016x}/unplayable", fan=f"fan-{n}", address=f"81.2.{70 + n // 200}.{n % 200 + 1}",
+                          body={"timezone": "Asia/Kolkata"})  # fmt: skip
+        assert answer.status_code == 200, n
+    assert len([k for k in api.redis.data if k.startswith("feed:unplayable:votes:")]) == 250  # every one a vote
+    assert "feed:unplayable:all" not in api.redis.data

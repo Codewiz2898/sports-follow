@@ -121,7 +121,7 @@ export interface FeedCandidateRow {
   score: number | null
   review: Review | null
   moment_id: number | null
-  unplayable_at: string | null // when a fan's app said it won't play inside it (approving or pinning it says it does)
+  unplayable_at: string | null // when fans' apps on enough networks said it won't play inside them (approving or pinning it says it does)
   served: boolean
 }
 /** A channel's last 30 days: uploads read, those naming a followed player, kept and served, and when it last posted (null: never seen). */
@@ -145,7 +145,7 @@ export interface FeedChannel {
   feedback: number
   yield: ChannelYield
 }
-export type FeedShow = 'all' | 'unjudged' | 'served' | 'held' | 'reviewed'
+export type FeedShow = 'all' | 'unjudged' | 'served' | 'held' | 'reviewed' | 'unplayable'
 export interface FeedPage {
   candidates: FeedCandidateRow[]
   next: number | null

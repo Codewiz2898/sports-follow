@@ -487,7 +487,7 @@ def match(uploads: list[Upload], players: list[Followed], names: dict[int, set[t
 def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "channels") -> dict[str, int]:
     """Store what's new of what was found from a channel the player's sport lists (on_list; the rest are counted
     off_list and dropped): a video already kept for someone else is kept for this player too, as it is (hidden,
-    if an admin hid it, and unplayable, if it was found not to play inside the app); the rest
+    if an admin hid it, and unplayable, if fans' apps said so); the rest
     are asked about (a request per 50, with no transaction open meanwhile) and kept if no hard filter refuses them.
     stream: where it was found, for the funnel's counts (feedstats.keep_counted)."""
     counts = {"kept": 0, "refused": 0, "off_list": 0}
@@ -509,7 +509,7 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
                                .where(FeedCandidate.source == source.system, FeedCandidate.external_id.in_(ids)))  # fmt: skip
         for pid, vid, url, kept, numbers, unplayable, said in rows:
             stored.setdefault(vid, {"url": url, "candidate": kept or {}, "features": numbers or {}, "unplayable_at": unplayable, "review": None})
-            if unplayable is not None:  # it won't play inside the app (feed.unplayable): every row of it keeps that
+            if unplayable is not None:  # a fan's app said it won't play inside it (feed.unplayable): every row of it keeps that
                 stored[vid]["unplayable_at"] = unplayable
             if said == "hidden":  # an admin hid the video (rank.review): so is every row of it
                 stored[vid]["review"] = said
@@ -704,18 +704,6 @@ def check(now: datetime | None = None) -> dict[str, int]:
         totals["dropped"] += counts["dropped"]
     metrics.feed("dropped", totals["dropped"])
     return totals
-
-
-def recheck(system: str, video_id: str) -> str | None:
-    """Why one stored video can no longer be shown (gone: removed, private, no longer embeddable, age-restricted, or
-    blocked in FEED_COUNTRY), asked of its source now as the weekly check asks (check), or None while it can: for a
-    video fans' apps said won't play inside them (feed.check_unplayable). One request, counted against the source's
-    allowance (adapters/budget.py) in the lane of the work that asks. AdapterError when the source can't say: it isn't
-    running (no key, or the admin panel turned it off), its allowance is spent (budget.RateLimited), or it didn't answer."""
-    source = next((v for v in videos() if v.system == system), None)
-    if source is None:
-        raise AdapterError(f"{system} isn't running")
-    return gone(source.facts([video_id], max_age=0).get(video_id))
 
 
 def _stale(session: Session, source: VideoSource, now: datetime) -> list[str]:
