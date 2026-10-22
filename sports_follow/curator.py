@@ -44,7 +44,7 @@ from arq.worker import run_worker  # noqa: E402
 
 from . import bus, candidates, db, feedpool, feedstats, metrics, news, rank, searches, sweeps  # noqa: E402
 from .config import REDIS_URL  # noqa: E402
-from .worker import _logged, _missed, in_lane, wind_down  # noqa: E402
+from .worker import SETTINGS, _logged, _missed, in_lane, wind_down  # noqa: E402
 
 log = logging.getLogger("sports_follow.curator")
 
@@ -209,6 +209,9 @@ class CuratorSettings:
     max_jobs = MAX_JOBS
     job_timeout = 3600
     keep_result = 0
+
+
+SETTINGS.append(CuratorSettings)  # its jobs' in-progress marks last as long as it lets them run (worker._timeout)
 
 
 def main(argv: list[str] | None = None) -> int:
