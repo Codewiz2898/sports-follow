@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -62,16 +63,21 @@ def page(monkeypatch):
     return pages
 
 
+def by_link(bucket, url: str, data: bytes) -> None:
+    """The app's PUT to an upload link: the file at the name the link was signed for."""
+    bucket.put(urlsplit(url).path.lstrip("/"), data)
+
+
 def _publish(db, bucket, key_id, *, at=NOW, video=b"v" * 1000, poster=b"p" * 100, **body):
     with db() as s:
         key = s.get(clips.ClipKey, key_id)
         up = clips.create(s, key, {"source": "game_client", "seconds": 44.0, "bytes": len(video), "width": 1386, "height": 900, **body})
         slug = up.clip.slug
-        assert up.video_put.startswith("https://bucket.test/clips/") and up.video_put.endswith(f"signed-for=video/mp4&length={len(video)}")
+        assert up.video_put.startswith("https://bucket.test/uploads/") and up.video_put.endswith(f"signed-for=video/mp4&length={len(video)}")
     if video:
-        bucket.put(clips.video_key(slug), video)
+        by_link(bucket, up.video_put, video)
     if poster:
-        bucket.put(clips.poster_key(slug), poster)
+        by_link(bucket, up.poster_put, poster)
     with db() as s:
         clip = clips.finish(s, s.get(clips.ClipKey, key_id), slug, now=at)
         return slug, clip.status
@@ -219,6 +225,117 @@ def test_a_hidden_clip_comes_back_after_the_buckets_keys_change_and_one_whose_fi
         assert s.query(Clip).filter_by(slug=slug).one().status == "hidden"
 
 
+def test_an_upload_link_used_after_done_changes_nothing_fans_see(db, bucket, page):
+    """BUG-126: an upload's links work for SIGNED_FOR once handed out, and can't be taken back. They put the files at
+    the names fans are served, so a clip checked and live could have its video or poster swapped for a while. They put
+    them at the upload's own names now, which done copies from: a link used after that changes nothing fans see, and
+    what it put is cleared once the links have run out."""
+    key_id, _ = _key(db)
+    body = {"source": "file", "seconds": 10.0, "bytes": 1000, "poster_bytes": 100, "width": 640, "height": 360}
+    with db() as s:
+        up = clips.create(s, s.get(clips.ClipKey, key_id), body, now=NOW - timedelta(minutes=5))
+        slug = up.clip.slug
+    by_link(bucket, up.video_put, b"v" * 1000)
+    by_link(bucket, up.poster_put, b"p" * 100)
+    with db() as s:
+        assert clips.finish(s, s.get(clips.ClipKey, key_id), slug).status == "live"
+    video, poster = clips.video_key(slug), clips.poster_key(slug)
+    assert sorted(bucket.objects) == sorted([video, poster])  # copied to where fans are served it
+    by_link(bucket, up.video_put, b"x" * 1000)  # the same links, after done
+    by_link(bucket, up.poster_put, b"y" * 100)
+    assert (bucket.objects[video], bucket.objects[poster]) == (b"v" * 1000, b"p" * 100)
+    with db() as s:
+        assert clips.one(s, slug)["video"] == bucket.public_url(video)  # pyright: ignore[reportOptionalSubscript]
+        assert clips.sweep(s, NOW) == 0  # the links still work: a file could come yet
+        assert clips.sweep(s, NOW + timedelta(seconds=clipstore.SIGNED_FOR)) == 1
+    assert sorted(bucket.objects) == sorted([video, poster])
+    assert (bucket.objects[video], bucket.objects[poster]) == (b"v" * 1000, b"p" * 100)
+
+
+def test_done_checks_the_copy_fans_are_shown_waits_when_the_bucket_fails_and_takes_an_upload_from_before(db, bucket, page, monkeypatch):
+    """BUG-126: done checks the files once copied, where no upload link reaches, so a poster's link signed for no size
+    (an app from before doesn't say it) can't slip a bigger file in while done looks. The bucket failing on the copy
+    leaves the clip waiting; asked again, it goes live."""
+    key_id, _ = _key(db)
+    body = {"source": "file", "seconds": 10.0, "bytes": 1000, "width": 640, "height": 360}
+    with db() as s:
+        up = clips.create(s, s.get(clips.ClipKey, key_id), body)
+        slug = up.clip.slug
+    by_link(bucket, up.video_put, b"v" * 1000)
+    by_link(bucket, up.poster_put, b"p" * 100)
+    copy = bucket.copy
+
+    def flaky(source, key):
+        monkeypatch.setattr(bucket, "copy", copy)  # once
+        raise OSError("the bucket is down")
+
+    monkeypatch.setattr(bucket, "copy", flaky)
+    with db() as s, pytest.raises(clips.Refused) as refused:
+        clips.finish(s, s.get(clips.ClipKey, key_id), slug)
+    assert refused.value.status == 502
+    with db() as s:
+        assert s.query(Clip).filter_by(slug=slug).one().status == "uploading"  # waiting, its files kept
+        assert clips.finish(s, s.get(clips.ClipKey, key_id), slug).status == "live"  # asked again
+    assert sorted(bucket.objects) == sorted([clips.video_key(slug), clips.poster_key(slug)])
+    # An upload begun before uploads had names of their own put its files where fans are served them.
+    with db() as s:
+        before = clips.create(s, s.get(clips.ClipKey, key_id), body).clip.slug
+    bucket.put(clips.video_key(before), b"v" * 1000)
+    bucket.put(clips.poster_key(before), b"p" * 100)
+    with db() as s:
+        assert clips.finish(s, s.get(clips.ClipKey, key_id), before).status == "live"
+    # The poster's link, signed for no size, used again while done copies.
+    with db() as s:
+        racing = clips.create(s, s.get(clips.ClipKey, key_id), body)
+        slug = racing.clip.slug
+    by_link(bucket, racing.video_put, b"v" * 1000)
+    by_link(bucket, racing.poster_put, b"p" * 100)
+
+    def late(source, key):
+        if key == clips.poster_key(slug):
+            by_link(bucket, racing.poster_put, b"p" * (clips.MAX_POSTER + 1))
+        copy(source, key)
+
+    monkeypatch.setattr(bucket, "copy", late)
+    with db() as s:
+        assert clips.finish(s, s.get(clips.ClipKey, key_id), slug).status == "failed"
+    assert not [f for f in bucket.objects if slug in f]
+
+
+def test_a_first_hide_the_bucket_fails_halfway_through_is_finished_by_asking_again(db, bucket, page, monkeypatch):
+    """BUG-285: a first hide made its token, moved the video, and failed on the poster: the 502 rolled the clip back,
+    token and all, so nothing could find the video again. Asking again made another token, the clip couldn't be put
+    back, and taking it down left the video in the bucket for good. The token is kept before anything moves."""
+    key_id, _ = _key(db)
+    slug, _ = _publish(db, bucket, key_id)
+    video, poster = clips.video_key(slug), clips.poster_key(slug)
+    copy = bucket.copy
+
+    def flaky(source, key):
+        if source == poster:
+            monkeypatch.setattr(bucket, "copy", copy)  # once
+            raise OSError("the bucket is down")
+        copy(source, key)
+
+    monkeypatch.setattr(bucket, "copy", flaky)
+    with db() as s, pytest.raises(clips.Refused) as refused:
+        clips.set_hidden(s, slug, True)
+    assert refused.value.status == 502 and bucket.size(video) is None  # the video had moved
+    with db() as s:
+        assert clips.set_hidden(s, slug, True).status == "hidden"  # asked again: the rest moves, under the same names
+    with db() as s:
+        token = s.query(Clip).filter_by(slug=slug).one().hidden_as or ""
+    assert sorted(bucket.objects) == sorted([clipstore.hidden(token, video), clipstore.hidden(token, poster)])
+    with db() as s:
+        assert clips.set_hidden(s, slug, False).status == "live"
+    assert (bucket.size(video), bucket.size(poster), len(bucket.objects)) == (1000, 100, 2)
+    with db() as s:
+        clips.set_hidden(s, slug, True)
+    with db() as s:
+        assert clips.remove(s, slug)
+    assert bucket.objects == {}  # nothing left behind
+
+
 def test_the_poster_is_signed_for_the_size_the_app_says(db, bucket, page):
     """BUG-126: the poster's upload URL was signed for its type alone, so a file of any size could be put there (its
     2 MB was checked only at done). The app says its size, and the URL is signed for that, as the video's is."""
@@ -314,12 +431,13 @@ def test_revoking_a_key_can_hide_its_clips_and_unfinished_uploads_are_cleared(db
     theirs, _ = _publish(db, bucket, other_key)
     body = {"source": "file", "seconds": 10.0, "bytes": 1000, "width": 640, "height": 360}
     with db() as s:
-        stuck = clips.create(s, s.get(clips.ClipKey, key_id), body, now=NOW - timedelta(minutes=5)).clip.slug
-        gone = clips.create(s, s.get(clips.ClipKey, other_key), body, now=NOW - timedelta(minutes=5)).clip.slug
-    bucket.put(clips.video_key(stuck), b"x" * 1000)  # the app's PUT, never followed by done
+        stuck_up = clips.create(s, s.get(clips.ClipKey, key_id), body, now=NOW - timedelta(minutes=5))
+        gone_up = clips.create(s, s.get(clips.ClipKey, other_key), body, now=NOW - timedelta(minutes=5))
+        stuck, gone = stuck_up.clip.slug, gone_up.clip.slug
+    by_link(bucket, stuck_up.video_put, b"x" * 1000)  # the app's PUT, never followed by done
     with db() as s:
         assert clips.remove(s, gone, s.get(clips.ClipKey, other_key))
-    bucket.put(clips.poster_key(gone), b"y" * 10)  # put by its link after it was taken down
+    by_link(bucket, gone_up.poster_put, b"y" * 10)  # put by its link after it was taken down
     with db() as s:
         assert clips.revoke(s, key_id) and clips.hide_from(s, key_id) == 1
     with db() as s:
@@ -328,12 +446,12 @@ def test_revoking_a_key_can_hide_its_clips_and_unfinished_uploads_are_cleared(db
         assert clips.sweep(s, NOW) == 0  # their links still work: a file could come yet
     later = NOW + timedelta(seconds=clipstore.SIGNED_FOR)
     with db() as s:
-        assert clips.sweep(s, later, count=True) == 2 and bucket.size(clips.video_key(stuck)) == 1000  # counted, nothing changed
+        assert clips.sweep(s, later, count=True) == 2 and bucket.size(clips.upload_key(clips.video_key(stuck))) == 1000  # counted, nothing changed
         assert clips.sweep(s, later) == 2
     with db() as s:
         assert s.query(Clip).filter_by(slug=stuck).one().status == "failed"
         assert clips.sweep(s, later) == 0
-    assert bucket.size(clips.video_key(stuck)) is None and bucket.size(clips.poster_key(gone)) is None
+    assert bucket.size(clips.upload_key(clips.video_key(stuck))) is None and bucket.size(clips.upload_key(clips.poster_key(gone))) is None
     with db() as s:
         token = s.query(Clip).filter_by(slug=live).one().hidden_as or ""
     assert sorted(bucket.objects) == sorted([clips.video_key(theirs), clips.poster_key(theirs), clipstore.hidden(token, clips.video_key(live)), clipstore.hidden(token, clips.poster_key(live))])
@@ -372,8 +490,8 @@ def test_the_routes_publish_list_report_and_moderate(api, db, bucket):
     assert api.post("/api/clips", json={**body, "source": "browser"}, headers=auth).status_code == 403
     up = api.post("/api/clips", json=body, headers=auth).json()
     assert up["video_put"].endswith("signed-for=video/mp4&length=1000") and up["poster_type"] == "image/jpeg"
-    bucket.put(clips.video_key(up["id"]), b"v" * 1000)  # the app's PUTs
-    bucket.put(clips.poster_key(up["id"]), b"p" * 10)
+    by_link(bucket, up["video_put"], b"v" * 1000)  # the app's PUTs
+    by_link(bucket, up["poster_put"], b"p" * 10)
     live = api.post(f"/api/clips/{up['id']}/done", headers=auth).json()
     assert live["line"] == "10–5 · 15:22" and live["competition"] == "PARI Universe 2026"
     assert api.post(f"/api/clips/{up['id']}/done", headers=auth).status_code == 200  # again: still fine
@@ -400,8 +518,8 @@ def test_the_routes_publish_list_report_and_moderate(api, db, bucket):
     # Revoked with its clips hidden (a leaked key's): its live clips go off the app.
     second = api.post("/api/admin/clip-keys", json={"name": "a leaked key"}).json()
     up = api.post("/api/clips", json=body, headers={"Authorization": f"Bearer {second['key']}"}).json()
-    bucket.put(clips.video_key(up["id"]), b"v" * 1000)
-    bucket.put(clips.poster_key(up["id"]), b"p" * 10)
+    by_link(bucket, up["video_put"], b"v" * 1000)
+    by_link(bucket, up["poster_put"], b"p" * 10)
     assert api.post(f"/api/clips/{up['id']}/done", headers={"Authorization": f"Bearer {second['key']}"}).status_code == 200
     assert api.delete(f"/api/admin/clip-keys/{second['id']}", params={"hide": "true"}).status_code == 204
     assert api.get(f"/api/clips/{up['id']}").status_code == 404

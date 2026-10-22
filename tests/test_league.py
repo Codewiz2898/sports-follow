@@ -308,7 +308,16 @@ def test_football_ranks_by_stage_then_the_table_and_a_result_by_what_happened():
     assert rank(football("final", table=[18, 3], score=(2, 1))) == Notable(55, word="2–1", why="Upset")
     assert rank(football("final", table=[2, 6], score=(4, 1))) == Notable(75, word="4–1", why="2nd v 6th")
     assert rank(football("final", table=[9, 14], score=(4, 3))) == Notable(50, word="4–3", why="7 goals")
-    assert rank(football("final", "Final", score=(1, 1), pens=(4, 2))) == Notable(100, word="1–1", why="Final")
+    assert rank(football("final", "Final", score=(1, 1), pens=(4, 2))) == Notable(100, word="1–1", line="Arsenal beat Chelsea 4–2 on penalties", why="Final")
+
+
+def test_a_game_settled_on_penalties_says_who_won_the_shootout():
+    # BUG-321: a cup final settled on penalties showed only "1–1" on Today's Big results, its "Final" in place of
+    # "Penalties": nothing said it went to a shootout, or who won it. Its line says so, the winner's score first.
+    rank = sports.BY_KEY["football"].notable
+    assert rank(football("final", "Final", score=(1, 1), pens=(2, 4))) == Notable(100, word="1–1", line="Chelsea beat Arsenal 4–2 on penalties", why="Final")
+    assert rank(football("final", "Round of 16", score=(0, 0), pens=(5, 3))).line == "Arsenal beat Chelsea 5–3 on penalties"
+    assert rank(football("final", "Final", score=(2, 1))).line == ""  # no shootout: the card shows the game's title
 
 
 def cricket(summary: str, national: bool = True, detail: str = "2nd T20I", competition: str = "West Indies tour of India", winner: int | None = 1, **facts) -> Fixture:

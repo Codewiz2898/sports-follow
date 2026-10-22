@@ -294,7 +294,7 @@ def test_form_counts_series_and_maps():
     items = [({"result": "Won 2–1"}, None), ({"result": "Lost 0–2"}, None), ({"result": "Won by forfeit"}, None)]
     stats, note = form.summarize("Esports", items, ["Sentinels"])
     assert stats == [{"label": "W–L", "value": "1–1"}, {"label": "Maps", "value": "2–3"}]
-    assert note == "Last 3 series"
+    assert note == "Last 3 series (1 not played)"  # BUG-322: the forfeit isn't in the record
 
 
 def test_a_forfeit_isnt_in_the_win_loss():
@@ -307,7 +307,7 @@ def test_a_forfeit_isnt_in_the_win_loss():
     assert (kept["result"], kept["outcome"]) == ("Won by forfeit", None)
     items = [({"result": "Won 2–1", "outcome": "W"}, None), (kept, None), ({"result": "Lost by forfeit"}, None)]
     stats, note = form.summarize("Valorant", items, ["Sentinels"])
-    assert (stats[0], note) == ({"label": "W–L", "value": "1–0"}, "Last 3 series")
+    assert (stats[0], note) == ({"label": "W–L", "value": "1–0"}, "Last 3 series (2 not played)")
     # The team page's Form reads each result's words.
     assert [sports.of("Valorant").outcome(r, ["Sentinels"]) for r in ("Won 2–1", "Won by forfeit", "Lost by forfeit")] == ["W", None, None]
 
