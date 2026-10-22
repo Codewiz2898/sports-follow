@@ -465,8 +465,9 @@ def page(db: Session, fan: str, player: int | None = None, cursor: str | None = 
     the item that moves up into its place with it) in the order as it was at the cursor's time: its days and fading,
     what the fan had hidden by then (an item hidden since keeps its place, unserved), and only the rows that had come
     in by then (a newer one waits for the next first page). The judge's scores aren't kept with it, so a rescore
-    meanwhile (views growing) can still move an item across the page's end, and For you's others are chosen again (a
-    follow meanwhile moves a player across). ValueError for a cursor this never made, or a tab that isn't one."""
+    meanwhile (views growing) can still move an item across the page's end. For you's others are chosen again for
+    each page: one the fan follows meanwhile carries on among their own players from their last one served, and one
+    new among them comes in where the last page ended. ValueError for a cursor this never made, or a tab that isn't one."""
     if tab not in TABS:
         raise ValueError(f"The feed's tabs are {', '.join(TABS)}.")
     real = now or datetime.now(timezone.utc)

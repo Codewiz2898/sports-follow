@@ -359,3 +359,33 @@ def test_a_sport_turned_off_has_none_of_its_players_news_in_the_feed_either(db):
     finally:
         controls.turn_sport("chess", True)
     assert {e.player.id for e in feed.page(db, "fan", now=NOW, limit=50).items} == {gukesh, kohli}  # back on: back
+
+
+@needs_db
+def test_for_you_pages_on_without_repeating_or_skipping_when_the_fan_follows_one_of_its_others_mid_scroll(db, monkeypatch):  # noqa: F811
+    # BUG-121, reopened: a follow between two pages moves that player's videos from the others' turns to the fan's
+    # own, and the next page, read on from where the last ended, served two of theirs again and never two of another's.
+    a = made_player(db, "Shreyas Iyer", served=False)
+    b = made_player(db, "Virat Kohli", served=False)
+    x = made_player(db, "Gukesh D", sport="chess", served=False)
+    y = made_player(db, "Magnus Carlsen", sport="chess", served=False)
+    kept = {
+        a: [Candidate(item(f"a{i}", i + 1), score=0.9 - i / 10, channel=f"a{i}") for i in range(4)],
+        b: [Candidate(item(f"b{i}", i + 1), score=0.8 - i / 10, channel=f"b{i}") for i in range(2)],
+        x: [Candidate(item(f"x{i}", 24 * (i + 1)), score=0.7 - i / 10, channel=f"x{i}") for i in range(5)],
+        y: [Candidate(item(f"y{i}", 30 * i + 2), score=0.6 - i / 20, channel=f"y{i}") for i in range(5)],
+    }  # fmt: skip
+    monkeypatch.setattr(feed, "judged", lambda db, ids, now=None: {i: kept[i] for i in ids if i in kept})
+    monkeypatch.setattr(feed, "others", lambda db, followed, now: {p: t for p, t in ((y, 0), (x, 1)) if p not in followed})
+    follow(db, "fan", a, b)
+    everything = {e.item.title for e in feed.page(db, "fan", now=NOW, limit=50, tab=feed.FOR_YOU).items}
+    served: list[str] = []
+    cursor = None
+    for n in range(10):
+        if n == 2:
+            follow(db, "fan", y)  # from its card's Follow, two pages in
+        got = feed.page(db, "fan", now=NOW + timedelta(minutes=n), limit=3, tab=feed.FOR_YOU, cursor=cursor)
+        served += [e.item.title for e in got.items]
+        if not (cursor := got.cursor):
+            break
+    assert sorted(served) == sorted(everything)  # each once
