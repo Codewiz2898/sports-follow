@@ -21,7 +21,8 @@ C1, C2, C3, C4 = MAIN[1:]
 ME = 500  # this run: for C3, started at 16:59:00
 
 # gh api, as the script calls it. A run's state at each look (the last one holds): "first" (its first job runs),
-# "pending" (its deploy job queued for the production group), "gate" (waiting for approval), "deploying" or "done".
+# "blocked" (its first job runs, and its deploy job is listed as pending), "pending" (its deploy job queued for the
+# production group), "gate" (waiting for approval), "deploying" or "done".
 GH = r"""#!{python}
 import json, os, subprocess, sys
 fake = os.environ["FAKE"]
@@ -49,8 +50,10 @@ elif parts[:2] == ["actions", "runs"] and len(parts) == 3:
     out = {"id": int(parts[2]), "run_started_at": runs[parts[2]]["started"]}
 elif parts[:2] == ["actions", "runs"] and parts[3] == "jobs":
     s = state(runs[parts[2]])
-    deploy = {"pending": "pending", "gate": "waiting", "deploying": "in_progress", "done": "completed"}.get(s)
-    out = {"jobs": [{"name": "The newest commit CI passed", "status": "in_progress" if s == "first" else "completed"}]
+    deploy = {"blocked": "pending", "pending": "pending", "gate": "waiting", "deploying": "in_progress",
+              "done": "completed"}.get(s)
+    first = "in_progress" if s in ("first", "blocked") else "completed"
+    out = {"jobs": [{"name": "The newest commit CI passed", "status": first}]
                    + ([{"name": "deploy", "status": deploy}] if deploy else [])}
 elif parts[:2] == ["actions", "runs"] and parts[3] == "pending_deployments":
     out = [{"environment": {"name": "production"}}] if state(runs[parts[2]]) == "gate" else []
@@ -170,6 +173,21 @@ def test_a_run_queued_behind_a_deploy_that_runs_isnt_waited_for(tmp_path):
     assert cancels(calls) == [] and sleeps(calls) == 0
 
 
+def test_a_run_whose_deploy_job_is_listed_before_its_first_job_ends_is_watched(tmp_path):
+    # Its deploy job, waiting on the first, could join the production group after this run's and take its place.
+    done, calls, count = cancel_replaced(tmp_path, deploy_run(101, C1, "deploying", started="16:18:21"),
+                                         deploy_run(102, C2, "blocked", "gate"))
+    assert done.returncode == 0, done.stderr
+    assert cancels(calls) == [102] and sleeps(calls) == 1
+
+
+def test_a_run_queued_behind_one_waiting_that_was_started_by_hand_isnt_waited_for(tmp_path):
+    done, calls, count = cancel_replaced(tmp_path, deploy_run(101, None, "gate", started="16:18:21", event="workflow_dispatch"),
+                                         deploy_run(102, C2, "pending", "pending", "gate"))
+    assert done.returncode == 0, done.stderr
+    assert cancels(calls) == [] and sleeps(calls) == 0 and "::warning::" not in done.stdout
+
+
 def test_a_cancel_that_fails_only_warns_and_the_run_is_read_again(tmp_path):
     # Approved in the second between its read and its cancel: the cancel fails, and the next look finds it deploying.
     done, calls, count = cancel_replaced(tmp_path, deploy_run(101, C2, "gate", "deploying", cancel_fails=True))
@@ -186,7 +204,7 @@ def test_a_run_that_doesnt_reach_the_gate_is_watched_for_two_minutes_then_left_w
     assert "::warning::A Deploy run this one replaces hadn't reached the approval gate after 2 minutes" in done.stdout
 
 
-def guard(tmp_path: Path, ci_newest: str, **scenario) -> subprocess.CompletedProcess:
+def guard(tmp_path: Path, ci_newest: str, *runs: dict, **scenario) -> subprocess.CompletedProcess:
     """deploy.yml's deploy job's first step, as GitHub runs it, for an approved run of C3."""
     workflow = (ROOT / ".github" / "workflows" / "deploy.yml").read_text()
     step = re.search(r"- name: Still the newest commit CI passed\n(?:.*\n)*?        run: \|\n((?:          .*\n|\n)+)", workflow)
@@ -195,9 +213,9 @@ def guard(tmp_path: Path, ci_newest: str, **scenario) -> subprocess.CompletedPro
     (fake / "bin").mkdir(parents=True)
     (fake / "bin" / "gh").write_text(GH.replace("{python}", sys.executable))
     (fake / "bin" / "gh").chmod(0o755)
-    (fake / "scenario.json").write_text(json.dumps({"main": MAIN, "runs": [], "ci_newest": ci_newest, **scenario}))
+    (fake / "scenario.json").write_text(json.dumps({"main": MAIN, "runs": list(runs), "ci_newest": ci_newest, **scenario}))
     env = {**os.environ, "PATH": f"{fake / 'bin'}:{os.environ['PATH']}", "FAKE": str(fake), "GITHUB_REPOSITORY": "o/r",
-           "SHA": C3}
+           "GITHUB_SERVER_URL": "https://github.com", "SHA": C3}
     script = "".join(line[10:] + "\n" for line in step.group(1).splitlines())
     return subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script], env=env,
                           capture_output=True, text=True, timeout=30)
@@ -206,13 +224,22 @@ def guard(tmp_path: Path, ci_newest: str, **scenario) -> subprocess.CompletedPro
 def test_a_run_approved_after_a_newer_commit_passed_ci_stops_without_deploying(tmp_path):
     # BHA-663: approving 270710d's run, which 259d302's had missed, would have put the older commit live and kept
     # 259d302's queued behind it for a second approval.
-    done = guard(tmp_path, C4)
-    assert done.returncode == 1 and f"::error::{C4[:7]} passed CI after {C3[:7]}, so this run deployed nothing" in done.stdout
+    done = guard(tmp_path, C4, deploy_run(104, C4, "pending", started="16:59:30"))
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert f"::error::{C4[:7]} passed CI after {C3[:7]}, so this run deployed nothing" in done.stdout
+    assert "https://github.com/o/r/actions/runs/104" in done.stdout
+
+
+def test_a_run_approved_after_a_newer_commit_passed_ci_deploys_if_the_newer_run_has_ended(tmp_path):
+    # The newer commit's run failed, or was cancelled: stopping would leave nothing to approve.
+    done = guard(tmp_path, C4, deploy_run(104, C4, "done", started="16:59:30"))
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert f"::warning::{C4[:7]} passed CI after {C3[:7]}, but no Deploy run of its own is still going" in done.stdout
 
 
 @pytest.mark.parametrize("ci_newest, scenario", [(C3, {}), (C2, {}), (C4, {"ci_fails": True})])
 def test_the_newest_commits_run_deploys_and_a_read_that_fails_doesnt_stop_it(tmp_path, ci_newest, scenario):
-    done = guard(tmp_path, ci_newest, **scenario)
+    done = guard(tmp_path, ci_newest, deploy_run(104, C4, "pending", started="16:59:30"), **scenario)
     assert done.returncode == 0, done.stdout + done.stderr
 
 

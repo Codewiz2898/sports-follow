@@ -8,7 +8,7 @@
 #
 # A run this one replaces: one after CI (a run started by hand is left alone), started before this one, for
 # <commit> or a commit before it on main. Each unfinished run is read on its own, and waits for approval when
-# its pending deployments name production. Not only from GitHub's list of waiting runs (status=waiting), which
+# its pending deployments name production. Not from GitHub's list of waiting runs (status=waiting), which
 # on 22 Oct 2026 twice listed nothing while a run had waited 17 and 49 minutes, nor from a run's own status,
 # which lags its jobs (BHA-663).
 # A run still on its way to the approval gate (its first job running, its deploy job about to wait) is looked
@@ -75,35 +75,36 @@ cancel() {
   fi
 }
 
-RUNS='.workflow_runs[] | select(.status != "completed") | [.id, .event, .run_started_at, .display_title] | @tsv'
-
 # One look at the unfinished Deploy runs: cancels the replaced ones waiting for approval, and counts those still
-# on their way to the gate (coming), those queued for the production group (queued), and whether a deploy runs.
+# on their way to the gate (coming) and those queued for the production group (queued), and says whether a run
+# it leaves alone holds the group (held: deploying, or waiting for approval but started by hand).
 look() {
-  local rows id event started title deploy
-  coming=0 queued=0 deploying=0
+  local rows id event started title first deploy
+  coming=0 queued=0 held=0
   [ -n "$mine" ] || mine=$(api "actions/runs/$ME" --jq .run_started_at) || mine=""
-  if [ -z "$mine" ] || ! rows=$(api "actions/workflows/deploy.yml/runs?per_page=50" --jq "$RUNS"); then
+  if [ -z "$mine" ] || ! rows=$(api "actions/workflows/deploy.yml/runs?per_page=50" \
+      --jq '.workflow_runs[] | select(.status != "completed") | [.id, .event, .run_started_at, .display_title] | @tsv'); then
     echo "::warning::Couldn't read the Deploy runs"
     coming=1
     return
   fi
-  # GitHub's list of waiting runs too, in case the other one lags: it costs a call.
-  rows=$(printf '%s\n%s\n' "$rows" "$(api "actions/workflows/deploy.yml/runs?status=waiting&per_page=50" --jq "$RUNS")" | sort -u)
   while IFS=$'\t' read -r id event started title; do
     [ -n "$id" ] && [ "$id" != "$ME" ] || continue
     case "$cancelled" in *" $id "*) continue ;; esac
-    # Its deploy job (deploy.yml's job of that name): queued, pending (queued for the production group), waiting,
-    # in_progress (deploying) or completed; none while its first job runs.
-    deploy=$(api "actions/runs/$id/jobs" --jq '[.jobs[] | select(.name == "deploy") | .status][0] // "none"') || deploy=unknown
+    # Its first job's status, and its deploy job's (deploy.yml's job of that name): queued, pending (queued for
+    # the production group), waiting, in_progress (deploying) or completed; none before its first job ends.
+    read -r first deploy < <(api "actions/runs/$id/jobs" --jq '[([.jobs[] | select(.name != "deploy") | .status][0] // "none"),
+      ([.jobs[] | select(.name == "deploy") | .status][0] // "none")] | join(" ")' || echo unknown unknown)
     if [ "$deploy" = in_progress ]; then
-      deploying=1
+      held=1
       say_once "$id:deploying" "\"$title\" (run $id) is deploying: left alone"
       continue
     fi
     replaces "$id" "$event" "$started" "$title"
     case $answer in
-      no) continue ;;
+      no)
+        if [ "$deploy" = waiting ]; then waiting "$id"; [ "$answer" != yes ] || held=1; fi
+        continue ;;
       unknown) coming=$((coming + 1)); continue ;;
     esac
     waiting "$id"
@@ -111,21 +112,21 @@ look() {
       yes) cancel "$id" "$title" || coming=$((coming + 1)); continue ;;   # a failed one is read again
       unknown) coming=$((coming + 1)); continue ;;
     esac
-    case $deploy in
-      completed) ;;
-      pending) queued=$((queued + 1)) ;;
-      *) coming=$((coming + 1))
-         say_once "$id:coming" "\"$title\" (run $id) is on its way to the approval gate: looking again every $EVERY seconds" ;;
-    esac
+    if [ "$deploy" = completed ]; then continue
+    elif [ "$deploy" = pending ] && [ "$first" = completed ]; then queued=$((queued + 1))
+    else
+      coming=$((coming + 1))
+      say_once "$id:coming" "\"$title\" (run $id) is on its way to the approval gate: looking again every $EVERY seconds"
+    fi
   done <<<"$rows"
 }
 
 settled=0
 for n in $(seq "$LOOKS"); do
   look
-  # Settled once nothing it replaces is on its way to the gate. A run queued behind a deploy that's running
+  # Settled once nothing it replaces is on its way to the gate. A run queued behind one this run leaves alone
   # stays queued until this run's deploy job takes its place (GitHub keeps one run queued per group).
-  if [ "$coming" -eq 0 ] && { [ "$queued" -eq 0 ] || [ "$deploying" -eq 1 ]; }; then settled=1; break; fi
+  if [ "$coming" -eq 0 ] && { [ "$queued" -eq 0 ] || [ "$held" -eq 1 ]; }; then settled=1; break; fi
   [ "$n" -eq "$LOOKS" ] || sleep "$EVERY"
 done
 if [ "$settled" -eq 0 ]; then

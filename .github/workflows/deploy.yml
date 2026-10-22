@@ -131,7 +131,8 @@ jobs:
       # Approving deploys the newest commit CI passed, and everything before it. A run approved after a newer
       # commit passed CI (the newer run's cancel missed it) would put the older commit live and hold the newer
       # run queued behind it; stopping here lets that run, which brings this one's changes too, wait for
-      # approval next.
+      # approval next. If the newer commit has no Deploy run still going (it failed, or was cancelled), this
+      # one deploys what you approved.
       - name: Still the newest commit CI passed
         if: github.event_name == 'workflow_run'
         env:
@@ -142,8 +143,13 @@ jobs:
             --jq '.workflow_runs[0].head_sha // empty') || newest=""
           if [ -n "$newest" ] && [ "$newest" != "$SHA" ] &&
               [ "$(gh api "repos/$GITHUB_REPOSITORY/compare/$SHA...$newest" --jq .status)" = ahead ]; then
-            echo "::error::${newest:0:7} passed CI after ${SHA:0:7}, so this run deployed nothing. ${newest:0:7}'s own Deploy run brings both: approve that one, which waits next (or run Deploy by hand)."
-            exit 1
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/deploy.yml/runs?per_page=50" --jq "[.workflow_runs[] |
+              select(.status != \"completed\" and .event == \"workflow_run\" and (.display_title | contains(\"$newest\")))][0].id // empty") || run=""
+            if [ -n "$run" ]; then
+              echo "::error::${newest:0:7} passed CI after ${SHA:0:7}, so this run deployed nothing. ${newest:0:7}'s own Deploy run brings both: approve that one, which waits next ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run)."
+              exit 1
+            fi
+            echo "::warning::${newest:0:7} passed CI after ${SHA:0:7}, but no Deploy run of its own is still going, so this one deploys ${SHA:0:7} as approved."
           fi
       - name: CI passed for this commit
         if: env.ACTION == 'deploy'
