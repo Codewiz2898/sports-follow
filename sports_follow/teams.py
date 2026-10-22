@@ -15,7 +15,7 @@ follows goes.
     .venv/bin/python -m sports_follow.teams restore <system> <team id>
 
 **A follow** (TeamFollow) is a fan, a team and their level. A followed team's games are read from its source
-(refresh: Adapter.team_fixtures, as often as a followed player's near a game, every QUIET otherwise: stale) and
+(refresh: Adapter.team_fixtures, as often as a followed player's near a game or just after one, every QUIET otherwise: stale) and
 linked to it (EventTeam), and from then on each is followed as a game followed by itself is (matches.py): armed
 by its sport's lead, polled in the live lane by the same allowances, its own moments from both sides
 (Sport.game_moments) reaching the team's fans by their level, and its result told from the team's side
@@ -58,6 +58,7 @@ NAMESAKES = 20  # and teams with exactly the name typed, however many past LIMIT
 REFRESH_LOCK = 20 * 60  # as a player's refresh (structured.REFRESH_LOCK)
 LOOK_AGAIN = 10 * 60  # a page nobody follows the team of asks its source again at most this often
 SOON = timedelta(hours=48)  # a team with a game on or this soon has its games read as often as a followed player's
+AFTER = timedelta(hours=6)  # and one whose game ended this lately too: its next may be set the same day (a Swiss round)
 QUIET = timedelta(hours=6)  # and one without, this often: a schedule days off doesn't change by the half hour
 READS = 6  # and pages ask at most this many reads a minute of one source's allowance, whichever teams (as match.READS)
 STREAM_AHEAD = timedelta(hours=36)  # a fan's teams' games this soon are on their stream (event_ids)
@@ -330,15 +331,16 @@ def set_level(db: Session, fan: str, team_id: int, level: str) -> bool:
 
 def stale(team: Team, now: datetime | None = None) -> bool:
     """Whether a team's games are due to be read again: as often as a followed player's (FIXTURES_MAX_AGE) while
-    it has a game on or within SOON, as its last read had them, else every QUIET. A game of it that ends has them
-    read at the next tick (ended)."""
+    it has a game on or within SOON, as its last read had them, or had one end within AFTER (ended), else every
+    QUIET. A game of it that ends has them read at the next tick (ended)."""
     from .config import FIXTURES_MAX_AGE
 
     now = now or _now()
     if team.fetched_at is None:
         return True
+    card = team.card or {}
     soon = any(g.get("status") in ("armed", "live") or (g.get("start_utc") and datetime.fromisoformat(g["start_utc"]) <= now + SOON)
-               for g in (team.card or {}).get("upcoming") or [])
+               for g in card.get("upcoming") or []) or bool(card.get("ended_at") and datetime.fromisoformat(card["ended_at"]) > now - AFTER)  # fmt: skip
     return team.fetched_at < now - (timedelta(seconds=FIXTURES_MAX_AGE) if soon else QUIET)
 
 
@@ -463,6 +465,7 @@ def _refresh(team_id: int, adapter: Adapter, external: str, card: dict[str, Any]
         upcoming = [_upcoming(f, events[f.source_id], external) for f in ahead[:UPCOMING]]
         if not fixtures:
             upcoming = [g for g in card.get("upcoming") or [] if g.get("start_utc") and datetime.fromisoformat(g["start_utc"]) > now]
+        ended_at = (team.card or {}).get("ended_at")  # as the row has it now: a game of it may have ended during the read (ended)
         team.card = {
             "upcoming": upcoming,
             "recent": list(kept),
@@ -470,6 +473,7 @@ def _refresh(team_id: int, adapter: Adapter, external: str, card: dict[str, Any]
             "squad_at": squad_at,
             "source": source_name(adapter.system),
             "fetched_at": now.isoformat(),
+            **({"ended_at": ended_at} if ended_at and datetime.fromisoformat(ended_at) > now - AFTER else {}),
         }
         team.fetched_at = now
         _health(team.id, ok=True, db=db)
@@ -738,8 +742,11 @@ def in_game(db: Session, fan: str | None, system: str, state: dict[str, Any], ev
 
 def ended(db: Session, event_id: int) -> None:
     """A game of followed teams just ended (its last poll, structured._game_moments): their games are read again at
-    the next tick, not a half hour on, so the result reaches Following and Today's Results from their side soon."""
-    db.execute(update(Team).where(Team.id.in_(select(EventTeam.team_id).where(EventTeam.event_id == event_id)), Team.id.in_(select(TeamFollow.team_id))).values(fetched_at=None))
+    the next tick, not a half hour on, so the result reaches Following and Today's Results from their side soon;
+    and as often as a team's with a game soon for AFTER on (stale), since that read may have the schedule as the
+    source kept it from before the result, and the next game may be set and played the same day (a Swiss round)."""
+    db.execute(update(Team).where(Team.id.in_(select(EventTeam.team_id).where(EventTeam.event_id == event_id)), Team.id.in_(select(TeamFollow.team_id)))
+               .values(fetched_at=None, card=func.coalesce(Team.card, func.jsonb_build_object()).op("||")(func.jsonb_build_object("ended_at", _now().isoformat()))))  # fmt: skip
 
 
 def look_again(team: Team) -> bool:

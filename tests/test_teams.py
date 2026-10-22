@@ -550,6 +550,45 @@ def test_a_followed_teams_game_ending_has_its_games_read_again_at_the_next_tick(
 
 
 @needs_db
+def test_a_followed_teams_next_game_set_the_day_its_last_one_ended_is_found_before_it_starts(db, redis, source, monkeypatch):
+    # BUG-290: the read after a game of it ended had the source's schedule as kept from before the result, with no
+    # next game yet, so the team looked quiet and was read again only QUIET on: a next round set and played within
+    # those hours (a Swiss round, a bracket's) was never linked, so never armed, told or on Coming up. For AFTER
+    # once a game of it ends, it's read as often as a team with a game soon.
+    from sports_follow.config import FIXTURES_MAX_AGE
+
+    clock = [NOW]
+    monkeypatch.setattr(teams, "_now", lambda: clock[0])
+    monkeypatch.setattr(structured, "_now", lambda: clock[0])
+    teams.import_teams(source.fake, NOW)
+    arsenal = team(db, ARS)
+    teams.follow(db, "gooner", arsenal.id)
+    db.commit()
+    source.fixtures[ARS] = [fixture("100", NOW - timedelta(minutes=100), "live")]
+    teams.refresh(arsenal.id)
+    event_id = db.scalar(select(Event.id).where(Event.key == "pitch:100"))
+    db.execute(update(Event).where(Event.id == event_id).values(status="final"))
+    teams.ended(db, event_id)
+    db.commit()
+    clock[0] = NOW + timedelta(minutes=1)
+    assert pipeline.due_work(clock[0]).teams == [arsenal.id]
+    teams.refresh(arsenal.id)  # the kept schedule: the game on still, nothing after it
+    db.expire_all()
+    assert team(db, ARS).card["upcoming"] == []
+    # Its next game is set meanwhile, for three hours on: the next read, a half hour on, has it.
+    source.fixtures[ARS] = [fixture("100", NOW - timedelta(minutes=100), "final"), fixture("101", NOW + timedelta(hours=3), home=TOT, away=ARS)]
+    clock[0] += timedelta(seconds=FIXTURES_MAX_AGE + 60)
+    assert pipeline.due_work(clock[0]).teams == [arsenal.id]
+    teams.refresh(arsenal.id)
+    db.expire_all()
+    assert [g["title"] for g in team(db, ARS).card["upcoming"]] == ["Tottenham Hotspur vs Arsenal"]
+    assert db.scalar(select(func.count()).select_from(EventTeam).join(Event, Event.id == EventTeam.event_id).where(Event.key == "pitch:101", EventTeam.team_id == arsenal.id)) == 1
+    # Once AFTER has passed with nothing set, it's read every QUIET again.
+    quiet = Team(name="Arsenal", sport="football", system="pitch", external_id=ARS, fetched_at=NOW, card={"upcoming": [], "ended_at": (NOW - teams.AFTER).isoformat()})
+    assert not teams.stale(quiet, NOW + timedelta(seconds=FIXTURES_MAX_AGE + 60)) and teams.stale(quiet, NOW + teams.QUIET + timedelta(minutes=1))
+
+
+@needs_db
 def test_a_fans_team_follows_move_with_their_account_and_go_with_it(db, redis, source, monkeypatch):
     teams.import_teams(source.fake, NOW)
     monkeypatch.setattr(teams, "MAX", 2)
