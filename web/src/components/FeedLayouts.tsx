@@ -3,11 +3,12 @@ import { Link } from 'react-router-dom'
 import type { FeedEntry, FeedTabKey } from '../api'
 import { useAutoplay } from '../autoplay'
 import { channelOf, duration, isShort, statsLine, upright } from '../feed'
+import { feedKeyOf } from '../feedKeys'
 import { safeHref, shortName } from '../format'
 import { shareFeedItem } from '../share'
 import { setSound, useSound } from '../sound'
 import { sportKey } from '../sports'
-import { FeedPlayer } from './FeedPlayer'
+import { FeedPlayer, fullScreenAsItStarts } from './FeedPlayer'
 import { Face } from './FeedPost'
 import { BackIcon, MutedIcon, SoundIcon } from './Icons'
 import { ShareButton } from './Share'
@@ -25,7 +26,8 @@ import { SourceMark } from './SourceMark'
  * layout its frame as wide as the phone allows under the tabs, who and what in the strip below it (ShortReel); from
  * edge to edge in a viewer of the Feed's Shorts over the page (ShortsViewer). Nothing of the page goes over its player
  * (YouTube's rules). Each card names its channel under whose it is (BHA-358). Items of players the fan doesn't follow
- * (For you's) offer Follow, which works where it is. "…" (More) opens "Why this is here".
+ * (For you's) offer Follow, which works where it is. "…" (More) opens "Why this is here". On a computer, Space, F and M
+ * work the video on screen (BHA-660, feedKeys.ts).
  */
 
 const dots = (
@@ -65,7 +67,7 @@ function SoundButton({ className }: { className: string }) {
   const sound = useSound()
   const on = sound.on && !sound.held
   return (
-    <button type="button" className={className} data-sound aria-label={on ? 'Mute the videos' : 'Turn the videos’ sound on'} onClick={() => setSound(!on)}>
+    <button type="button" className={className} data-sound aria-label={on ? 'Mute the videos' : 'Turn the videos’ sound on'} aria-keyshortcuts="M" onClick={() => setSound(!on)}>
       {on ? <SoundIcon width={20} height={20} /> : <MutedIcon width={20} height={20} />}
     </button>
   )
@@ -93,7 +95,9 @@ function useInFront(): boolean {
  * 250ms, unless one the fan started or touched is still playing. A video goes once none of its frame is on screen,
  * and one that started by itself and nobody touched as soon as autoplay isn't allowed (the tab behind another, say). A
  * click into the playing player (its frame takes the focus from the page) keeps it as the fan scrolls on. While not
- * `active` (the Shorts viewer over the list), nothing of it plays. */
+ * `active` (the Shorts viewer over the list), nothing of it plays. One full screen (F) plays on till the fan's back. With
+ * nothing playing, Space or F on a computer starts the one that would start by itself, as a tap on it does (feedKeys.ts;
+ * once one plays, its keys are its player's). */
 export function usePlaying(box: HTMLElement | null, root: HTMLElement | null, entries: FeedEntry[], active = true): { playing: Playing | null; play: (id: string) => void } {
   const [playing, setPlaying] = useState<Playing | null>(null)
   const allowed = useAutoplay()
@@ -105,6 +109,7 @@ export function usePlaying(box: HTMLElement | null, root: HTMLElement | null, en
   const shown = useRef(new Map<HTMLElement, number>())  // each video's frame, in the list's order: how much is on screen
   const settle = useCallback((start: boolean) => setPlaying((was) => {
     if (!live.current) return null
+    if (was && document.fullscreenElement?.closest<HTMLElement>('[data-video]')?.dataset.video === was.id) return was
     const frames = [...shown.current]
     const on = (id: string) => frames.some(([el, ratio]) => ratio > 0 && el.dataset.video === id)
     const now = was && on(was.id) && (starts.current || !was.auto || was.kept) ? was : null
@@ -114,6 +119,8 @@ export function usePlaying(box: HTMLElement | null, root: HTMLElement | null, en
     return now
   }), [])
   const play = useCallback((id: string) => { setPlaying({ id }); setSound(true) }, [])
+  const now = useRef(playing)
+  now.current = playing
 
   const ids = entries.map((e) => e.item.id).join(' ')
   useEffect(() => {
@@ -159,6 +166,23 @@ export function usePlaying(box: HTMLElement | null, root: HTMLElement | null, en
     window.addEventListener('blur', touched)
     return () => { window.removeEventListener('blur', touched); window.clearTimeout(wait) }
   }, [auto])
+
+  // Space or F with nothing playing: the topmost video more than half on screen starts, full screen for F.
+  useEffect(() => {
+    if (!box || !active) return
+    const pressed = (e: KeyboardEvent) => {
+      if (now.current) return
+      const does = feedKeyOf(e)
+      if (does !== 'pause' && does !== 'full') return
+      const id = [...shown.current].find(([, ratio]) => ratio > 0.5)?.[0].dataset.video
+      if (!id) return
+      e.preventDefault()
+      if (does === 'full') fullScreenAsItStarts(id)
+      play(id)
+    }
+    window.addEventListener('keydown', pressed)
+    return () => window.removeEventListener('keydown', pressed)
+  }, [box, active, play])
   return { playing, play }
 }
 
@@ -432,7 +456,8 @@ export function ShortsViewer({ entries, start, now, follows, onMore, onNear, onC
   }, [box]) // once, as it opens
   useEffect(() => {
     document.documentElement.dataset.shorts = ''
-    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape' && !document.querySelector('dialog[open]')) onClose() } // the "…" sheet's own first
+    // The "…" sheet's own first, and full screen's (F): the browser's.
+    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape' && !document.querySelector('dialog[open]') && !document.fullscreenElement) onClose() }
     window.addEventListener('keydown', escape)
     return () => { delete document.documentElement.dataset.shorts; window.removeEventListener('keydown', escape) }
   }, [onClose])

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type FeedItem } from '../api'
 import { openLabel, refusedHere, youtubeEmbed } from '../feed'
+import { feedKeyOf } from '../feedKeys'
 import { safeHref } from '../format'
-import { holdSound, mayPlayAloud, setSound, useSound } from '../sound'
+import { holdSound, mayPlayAloud, setSound, soundIsOn, useSound } from '../sound'
 
 /**
  * YouTube's no-cookie player for a Feed video, playing in the picture's place, with YouTube's IFrame Player API
@@ -13,12 +14,14 @@ import { holdSound, mayPlayAloud, setSound, useSound } from '../sound'
  * turned on and off where it plays, through the API, and YouTube's own sound button turns it on or off for the videos
  * after it too. One that should have its sound but may not yet (the page not tapped: the browser's rule) starts muted
  * with its sound held back, as does one the browser won't start aloud, and the fan's next tap on the page lets it
- * out. `bare`: without YouTube's controls, a Short's (BHA-384). The Android app's InlineVideo does the same.
+ * out. `bare`: without YouTube's controls, a Short's (BHA-384). The Android app's InlineVideo does the same. On a
+ * computer the Feed's keys work it (BHA-660, feedKeys.ts): Space pauses it or plays it on, F takes it full screen and
+ * back, M turns its sound off or on.
  */
 
 interface YTPlayer {
   mute: () => void; unMute: () => void; isMuted: () => boolean; getVolume: () => number; setVolume: (to: number) => void
-  getPlayerState: () => number; playVideo: () => void
+  getPlayerState: () => number; playVideo: () => void; pauseVideo: () => void
 }
 interface YTNamespace {
   Player: new (frame: HTMLIFrameElement, options: { events: { onReady?: () => void; onError: (e: { data: unknown }) => void } }) => YTPlayer
@@ -50,6 +53,48 @@ const ENDED = 0
 const PLAYING = 1
 const BUFFERING = 3
 
+/** The Feed's players on this page, the latest started last: its frame, and YouTube's API to it once that's ready. */
+const players: { frame: HTMLIFrameElement; yt: () => YTPlayer | null }[] = []
+let fullOnce: { id: string; until: number } | null = null // F with nothing playing: the video it started
+
+function onScreen(el: Element): boolean {
+  const r = el.getBoundingClientRect()
+  return r.width > 0 && r.bottom > 0 && r.top < window.innerHeight && r.right > 0 && r.left < window.innerWidth
+}
+
+const refusedFull = () => { /* the browser said no (no full screen here, or the key was too long ago): as it was */ }
+
+/** Full screen, or back from it. */
+function full(frame: HTMLIFrameElement) {
+  if (document.fullscreenElement) document.exitFullscreen().catch(refusedFull)
+  else frame.requestFullscreen?.().catch(refusedFull)
+}
+
+/** A key pressed on the page, for the latest of the Feed's players on screen (feedKeys.ts). Escape, the browser's,
+ * takes it out of full screen too. */
+function pressed(e: KeyboardEvent) {
+  const does = feedKeyOf(e)
+  if (!does) return
+  const p = players.findLast((q) => onScreen(q.frame))
+  if (!p) return
+  e.preventDefault() // Space doesn't scroll the page too
+  if (does === 'sound') setSound(!soundIsOn())
+  else if (does === 'full') full(p.frame)
+  else {
+    const yt = p.yt()
+    if (!yt) return // not ready yet
+    const state = yt.getPlayerState()
+    if (state === PLAYING || state === BUFFERING) yt.pauseVideo()
+    else yt.playVideo()
+  }
+}
+
+/** F with nothing playing yet: the player `id` starts goes full screen as it comes, if it comes at once (the browser
+ * lets a page go full screen only just after a key or a tap). */
+export function fullScreenAsItStarts(id: string) {
+  fullOnce = { id, until: Date.now() + 2000 }
+}
+
 /** Draw it once a video (`key` it by the video): a later change of sound goes through YouTube's API, not a reload. */
 export function FeedPlayer({ item, playerId, bare }: { item: FeedItem; playerId: number; bare?: boolean }) {
   const frame = useRef<HTMLIFrameElement>(null)
@@ -73,6 +118,7 @@ export function FeedPlayer({ item, playerId, bare }: { item: FeedItem; playerId:
     // already, and mute it).
     const tapped = (e: Event) => {
       if ((e.target as Element | null)?.closest?.('[data-sound]')) return
+      if (e instanceof KeyboardEvent && feedKeyOf(e) === 'sound') return // M is the sound button's key
       if (mayPlayAloud()) holdSound(self, false)
     }
     window.addEventListener('pointerup', tapped, true)
@@ -88,6 +134,23 @@ export function FeedPlayer({ item, playerId, bare }: { item: FeedItem; playerId:
     if (muted) p.yt.mute()
     else { p.yt.unMute(); if (p.yt.getVolume() === 0) p.yt.setVolume(100) }
   }, [muted])
+
+  // One of the players the Feed's keys work, from as it comes till it goes; full screen at once if F started it.
+  useEffect(() => {
+    const el = frame.current
+    if (!el || refused) return
+    const me = { frame: el, yt: () => player.current?.yt ?? null }
+    players.push(me)
+    if (players.length === 1) window.addEventListener('keydown', pressed)
+    if (fullOnce?.id === item.id) {
+      if (Date.now() < fullOnce.until) el.requestFullscreen?.().catch(refusedFull)
+      fullOnce = null
+    }
+    return () => {
+      players.splice(players.indexOf(me), 1)
+      if (!players.length) window.removeEventListener('keydown', pressed)
+    }
+  }, [item.id, refused])
 
   useEffect(() => {
     const el = frame.current
