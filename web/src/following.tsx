@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useAccount } from './account'
 import { api, subscribe, type AlertLevel, type Card, type FollowedMatch, type FollowedTeam, type FollowTarget, type PlayerMoment, type StreamEvent } from './api'
 import { wanted } from './notifications'
-import { listed } from './resync'
+import { listed, withFollowed } from './resync'
 
 interface FollowingState {
   cards: Card[]
@@ -314,7 +314,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
 
   const follow = useCallback((target: FollowTarget) => changing(async () => {
     const { card } = await api.follow(target)
-    setCards((prev) => (prev.some((c) => c.player_id === card.player_id) ? prev.map((c) => (c.player_id === card.player_id ? card : c)) : [...prev, card]))
+    setCards((prev) => withFollowed(prev, card))
     return card
   }), [changing])
 

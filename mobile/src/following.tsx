@@ -6,6 +6,7 @@
 
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AppState } from 'react-native'
+import { withFollowed } from '../../web/src/resync'
 import { useAccount } from './account'
 import { api, type AlertLevel, type Card, type FollowedMatch, type FollowedTeam, type FollowTarget } from './api'
 import { useNotificationsArriving } from './push'
@@ -162,7 +163,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const follow = useCallback(async (target: FollowTarget) => {
     writes.current++
     const { card } = await api.follow(target).finally(() => { writes.current++ })
-    setCards((prev) => (prev.some((c) => c.player_id === card.player_id) ? prev.map((c) => (c.player_id === card.player_id ? card : c)) : [...prev, card]))
+    setCards((prev) => withFollowed(prev, card)) // at the level the fan chose, which the answer doesn't say
     return card
   }, [])
 
