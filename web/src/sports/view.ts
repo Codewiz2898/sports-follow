@@ -40,4 +40,7 @@ export interface MatchProps<P = unknown> {
 export interface SportView extends SportFacts {
   Board: (props: BoardProps<never>) => ReactNode
   Match?: (props: MatchProps<never>) => ReactNode
+  // Its board draws the away side on the left (basketball's "away at home"): a match page's two sides face off
+  // in its order. Else home first.
+  awayFirst?: boolean
 }

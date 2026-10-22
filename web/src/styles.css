@@ -627,6 +627,11 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 .faceoff { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; padding-top: 4px; }
 .faceoff-side { display: flex; flex-direction: column; align-items: center; gap: 12px; min-width: 0; text-align: center; }
 .faceoff-name { font-size: 26px; line-height: 0.95; overflow-wrap: anywhere; }
+/* As large as fits its longest word on a line ("Mönchengladbach"), as a player's name is (.player-name). */
+@supports (width: 1cqi) {
+  .faceoff-side { container-type: inline-size; }
+  .faceoff-name { font-size: min(26px, 100cqi / var(--ems, 5)); overflow-wrap: normal; }
+}
 .faceoff-v { position: absolute; left: 50%; top: 34px; width: 46px; height: 46px; margin-left: -23px; }
 .faceoff-v > span { display: inline-flex; align-items: center; justify-content: center; width: 46px; height: 46px; border-radius: 50%; background: #0d0d0d; color: #fff; box-shadow: 0 0 0 3px #fff; font-family: var(--display); font-size: 20px; }
 .faceoff-side.l .crest { animation: crest-in-l 0.8s cubic-bezier(0.2, 1.25, 0.35, 1) 0.32s both; }
@@ -650,12 +655,13 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 .match-band.duo .btn { border-color: #0d0d0d; background: #fff; color: #0d0d0d; }
 .match-band.duo .btn.primary, .match-band.duo .btn[aria-pressed='true'] { background: #0d0d0d; color: #fff; }
 .match-band.duo .btn.icon { background: #fff; color: #0d0d0d; }  /* white, so it shows on any team's colour (New Zealand's black) */
-.match-band.duo .faceoff-side.l { color: var(--l-ink); }
-.match-band.duo .faceoff-side.r { color: var(--r-ink); }
+.match-band.duo .faceoff-side.l { color: var(--l-ink); --focus: var(--l-ink); }
+.match-band.duo .faceoff-side.r { color: var(--r-ink); --focus: var(--r-ink); }
+.match-band.duo .pill.outline { background: #fff; color: #0d0d0d; box-shadow: inset 0 0 0 2px #0d0d0d; }
 .match-meta { align-self: center; display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 30px; padding: 4px 12px; border-radius: 999px; background: var(--sport); color: var(--on-sport); font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; text-align: center; }
 .match-meta .badge-live { height: 22px; }
 .match-time { align-self: center; display: inline-flex; align-items: center; min-height: 56px; padding: 6px 24px; border-radius: 999px; background: #0d0d0d; color: #fff; font-size: 30px; line-height: 1; text-align: center; }
-.match-band.duo .match-board { padding: 14px 16px; border-radius: 20px; background: var(--surface); box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6); }
+.match-band.duo .match-board { padding: 14px 16px; border-radius: 20px; background: var(--surface); color: var(--text); box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6); }
 .match-band.duo .match-board .clock, .match-band.duo .match-board .live-note { color: var(--live-text); }
 .match-band.duo .match-board .linescore.lobby tr.ours td { color: var(--text); }
 .match-band.duo .match-verdict { align-self: center; padding: 8px 20px; border-radius: 999px; background: #fff; color: #0d0d0d; font-size: 30px; text-align: center; }

@@ -31,7 +31,7 @@ function flush() {
     const some = keys.slice(i, i + MOST)
     request<{ looks: Record<string, Look> }>(`/api/looks?teams=${some.map(encodeURIComponent).join(',')}`).then(
       (r) => { for (const k of some) kept.set(k, r.looks[k] ?? null) },
-      () => { /* a failed ask draws badges, and is asked again by the next screen */ },
+      () => { for (const k of some) kept.set(k, null) },  // badges and the sport's band, until the page is opened again
     ).finally(() => {
       for (const k of some) asking.delete(k)
       for (const fn of heard) fn()
@@ -107,9 +107,14 @@ export interface Side { fill: string; accent: string; ink: string; disc: string 
 export function sidesOf(home: Look | null | undefined, away: Look | null | undefined): [Side, Side] | null {
   const h = home?.colours, a0 = away?.colours
   if (!h || !a0) return null
-  const a = apart(h.fill, a0.fill) < CLASH
-    ? (apart(a0.fill, '#ffffff') < CLASH ? { fill: a0.accent, accent: a0.fill } : { fill: '#ffffff', accent: a0.fill })
-    : a0
+  // The away side's second colour: white, with its own as the stripe (Bayern at Freiburg), or its accent where it
+  // plays in white already, or where white is as close to the home side's.
+  const second = (c: string) => apart(h.fill, c) >= CLASH
+  const a = apart(h.fill, a0.fill) >= CLASH ? a0
+    : second('#ffffff') && apart(a0.fill, '#ffffff') >= CLASH ? { fill: '#ffffff', accent: a0.fill }
+    : second(a0.accent) ? { fill: a0.accent, accent: a0.fill }
+    : null
+  if (!a) return null  // nothing tells them apart: the sport's band
   const side = (c: TeamColours, look: Look | null | undefined): Side => ({ fill: c.fill, accent: c.accent, ink: inkOn(c.fill), disc: discFor(look, c.fill) })
   return [side(h, home), side(a, away)]
 }

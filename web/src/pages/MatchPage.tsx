@@ -14,9 +14,9 @@ import { Picks, usePredictions } from '../components/Picks'
 import { InSide } from '../components/Side'
 import { useFollowToggle } from '../components/Starters'
 import { Watch } from '../components/Watch'
-import { dateTime, relative } from '../format'
+import { dateTime, longestWordEms, relative } from '../format'
 import { useFollowing } from '../following'
-import { sidesOf, useLooks, type Look, type Side } from '../look'
+import { discFor, sidesOf, useLooks, type Look, type Side } from '../look'
 import { boardOf, EVERY, followedOf, followHead, keyEvents, nextLook, ownResult, pageResult, startsIn, watchable } from '../match'
 import { AlertLevels, gameLevelText } from '../notifications'
 import { sportDrawn, sportKey, sportName, viewOf } from '../sports'
@@ -150,11 +150,13 @@ function GameTeams({ teams }: { teams: GameTeam[] }) {
   )
 }
 
-/** A game's two sides, as the team registry has them, home first: none for a game of more or fewer (a lobby, a chess
- * board's players), or of a side the registry hasn't. */
+/** A game's two sides, as the team registry has them, in its board's order (home first, or away first where the
+ * sport's board draws it so): none for a game of more or fewer (a lobby, a chess board's players), or of a side the
+ * registry hasn't. */
 function facing(match: Match | null): [GameTeam, GameTeam] | null {
   const teams = match?.teams ?? []
-  return teams.length === 2 && teams.every((t) => t.key) ? [teams[0], teams[1]] : null
+  if (!match || teams.length !== 2 || !teams.every((t) => t.key)) return null
+  return viewOf(sportDrawn(match.sport))?.awayFirst ? [teams[1], teams[0]] : [teams[0], teams[1]]
 }
 
 /**
@@ -167,8 +169,8 @@ function FaceOff({ teams, looks, sides, v }: { teams: [GameTeam, GameTeam]; look
     <div className="faceoff">
       {teams.map((t, n) => (
         <Link key={t.team_id} to={`/team/${t.team_id}`} className={`faceoff-side ${n ? 'r' : 'l'}`}>
-          <Crest look={looks[t.key]} name={t.name} size={104} disc={sides ? sides[n].disc : '#ffffff'} />
-          <span className="dsp faceoff-name">{t.name}</span>
+          <Crest look={looks[t.key]} name={t.name} size={104} disc={sides ? sides[n].disc : (discFor(looks[t.key], '#ffffff') ?? '#ffffff')} eager />
+          <span className="dsp faceoff-name" style={{ '--ems': longestWordEms(t.name) } as CSSProperties}>{t.name}</span>
         </Link>
       ))}
       {v && <span className="faceoff-v" aria-hidden="true"><span>V</span></span>}
@@ -272,7 +274,7 @@ export function MatchPage() {
             </span>
             <h1 className="sr-only">{match.title}</h1>
             {faced && <FaceOff teams={faced} looks={looks} sides={sides} v={!board} />}
-            {!board && (soon || match.start_utc) && <span className="dsp match-time">{soon ?? dateTime(match.start_utc ?? '')}</span>}
+            {!board && (match.status === 'scheduled' || match.status === 'armed') && (soon || match.start_utc) && <span className="dsp match-time">{soon ?? dateTime(match.start_utc ?? '')}</span>}
           </>
         ) : (
           <div className="stack" style={{ gap: 10 }}>
