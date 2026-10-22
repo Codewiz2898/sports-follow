@@ -1,7 +1,9 @@
 """The API's database use and its streams: async routes never wait for a connection on the event loop,
 a stream holds none for its life (BUG-010), and the fan stream opens with the fan's players, so a
 reconnect catches up (BUG-026). A hundred requests at once all get answers, and health stays quick: no
-request holds a connection while it waits for a thread (BUG-264; against Postgres, skipped without one)."""
+request holds a connection while it waits for a thread (BUG-264; against Postgres, skipped without one).
+A fan, an address and a process hold only so many streams, whose Redis connections come from a pool of
+their own, and the API's other Redis connections have a ceiling (BUG-184)."""
 
 from __future__ import annotations
 
@@ -100,9 +102,17 @@ class Redis:
 
 class Request:
     headers: dict[str, str] = {}
+    client = None  # no public address: only the fan's streams are counted
 
     async def is_disconnected(self):
         return False
+
+
+class From(Request):
+    """A request from a public address."""
+
+    def __init__(self, address: str):
+        self.client = SimpleNamespace(host=address)
 
 
 @pytest.fixture
@@ -125,6 +135,8 @@ def api(monkeypatch):
 
     monkeypatch.setattr(server, "session", session)
     monkeypatch.setitem(server.state, "redis", seen.redis)
+    monkeypatch.setitem(server.state, "streams", seen.redis)
+    monkeypatch.setattr(server, "streaming", Counter(), raising=False)  # no stream open from another test
     return seen
 
 
@@ -169,6 +181,72 @@ def test_the_player_stream_rebuilds_a_lost_hot_copy_without_holding_a_session(ap
     with pytest.raises(HTTPException) as missing:
         asyncio.run(server.player_stream(99, Request()))
     assert missing.value.status_code == 404 and api.open == 0
+
+
+def ended(response) -> None:
+    """A stream's answer run as the server runs it, until its client goes away."""
+
+    async def run():
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            pass
+
+        await response({"type": "http", "method": "GET", "path": "/api/me/stream", "headers": []}, receive, send)
+
+    asyncio.run(run())
+
+
+def test_a_fan_an_address_and_the_process_hold_only_so_many_streams_and_one_that_ends_frees_its_place(api, monkeypatch):
+    """BUG-184: each stream holds a Redis connection, and one client could open as many as it liked (200 took
+    Redis from 25 connections to 227), connections the worker's polling, locks and limits need too. Past a
+    fan's or an address's share the next is refused (429), past the process's too (503), and a stream that
+    ends gives its place back."""
+    monkeypatch.setattr(server, "STREAMS_PER_FAN", 2, raising=False)
+    monkeypatch.setattr(server, "STREAMS_PER_ADDRESS", 3, raising=False)
+    monkeypatch.setattr(server, "STREAMS_PER_PROCESS", 5, raising=False)
+
+    def refused(stream) -> int:
+        with pytest.raises(HTTPException) as refusal:
+            asyncio.run(stream)
+        return refusal.value.status_code
+
+    first = asyncio.run(server.my_stream(From("81.2.69.142"), fan="fan"))
+    asyncio.run(server.my_stream(From("81.2.69.143"), fan="fan"))
+    assert refused(server.my_stream(From("81.2.69.144"), fan="fan")) == 429  # the fan's third, from anywhere
+    ended(first)
+    asyncio.run(server.my_stream(From("81.2.69.142"), fan="fan"))  # its place is free again
+    # A player's stream needs no cookie: its address's share holds it.
+    for _ in range(2):
+        asyncio.run(server.player_stream(1, From("81.2.69.142")))
+    assert refused(server.player_stream(1, From("81.2.69.142"))) == 429
+    asyncio.run(server.player_stream(1, From("81.2.69.143")))
+    assert refused(server.player_stream(1, From("81.2.69.145"))) == 503  # the process holds five
+    assert server.streaming["all"] == 5  # a refused stream holds nothing
+
+
+def test_the_apis_redis_connections_have_a_ceiling_and_streams_a_pool_of_their_own(monkeypatch):
+    """BUG-184: the API's Redis client had no ceiling, and every stream's pubsub came from it. Now its pool has
+    one, at which a burst waits its turn, and streams' connections come from a pool of their own, no bigger
+    than the streams a process holds: streams never take the connections sessions, limits and locks need."""
+    from redis import asyncio as aredis
+
+    async def arq(settings):
+        return SimpleNamespace(aclose=lambda: asyncio.sleep(0))
+
+    monkeypatch.setattr(server, "create_pool", arq)
+    monkeypatch.setattr(server, "cookie_key", lambda: b"a test key for fan cookies, 32+ bytes")
+    monkeypatch.setattr(server, "state", {})
+    pools = {}
+
+    async def run():
+        async with server.lifespan(server.app):
+            pools.update({name: server.state[name].connection_pool for name in ("redis", "streams")})
+
+    asyncio.run(run())
+    assert isinstance(pools["redis"], aredis.BlockingConnectionPool) and pools["redis"].max_connections == server.REDIS_CONNECTIONS
+    assert pools["streams"] is not pools["redis"] and pools["streams"].max_connections == server.STREAMS_PER_PROCESS
 
 
 def test_async_routes_use_the_database_off_the_event_loop(api):
