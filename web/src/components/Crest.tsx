@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from 'react'
-import type { Look } from '../look'
+import { useLooks, type Look } from '../look'
 import { initials } from '../format'
 
 /**
@@ -20,4 +20,23 @@ export function Crest({ look, name, size = 40, disc = null, label, eager }: { lo
   }
   const short = (look?.short || initials(name)).slice(0, 4)
   return <span className={`crest badge${short.length > 3 ? ' long' : ''}`} style={style} {...named}>{short}</span>
+}
+
+/** A game's two crests, overlapping, at a card's corner: each logo in a white disc (it sits on the sport's colour, or a
+ * white card), or our badge. Nothing while they're asked for, or for a game with a side the registry hasn't. */
+export function CrestPair({ keys, size = 30 }: { keys?: (string | null | undefined)[] | null; size?: number }) {
+  const looks = useLooks(keys ?? [])
+  const found = (keys ?? []).map((k) => (k ? looks[k] : null)).filter((l): l is Look => !!l)
+  if (found.length !== 2) return null
+  return (
+    <span className="crest-pair" aria-hidden="true">
+      {found.map((l, n) => <Crest key={n} look={l} name="" size={size} disc="#ffffff" />)}
+    </span>
+  )
+}
+
+/** One team's crest by its key (a team's page, a row): nothing while it's asked for, or for a team the registry hasn't. */
+export function TeamCrest({ teamKey, name, size, disc }: { teamKey: string | null | undefined; name: string; size?: number; disc?: string | null }) {
+  const look = useLooks([teamKey])[teamKey ?? '']
+  return look ? <Crest look={look} name={name} size={size} disc={look.logo ? disc : null} /> : null
 }

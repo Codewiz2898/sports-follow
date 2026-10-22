@@ -6,7 +6,9 @@ import { followTarget } from '../follow'
 import { allowance, exactName as namesakesName, highlightParts, liveNote as sportsNote, nextLine, OTHER_SCRIPT, sections as sectionsOf, teamNext, teamsFirst, type Section } from '../search'
 import { runningSports, sportInfo, sportName } from '../sports'
 import { useFollowing } from '../following'
+import { useLooks } from '../look'
 import { Avatar } from './Blocks'
+import { Crest } from './Crest'
 import { CheckIcon, PlusIcon, SparkIcon } from './Icons'
 
 /**
@@ -173,10 +175,11 @@ export function TeamResultRow({ t, query, actions, active, id }: { t: TeamSummar
   const following = t.following || actions.isFollowingTeam(t.team_id)
   const busy = actions.pending === `team:${t.team_id}`
   const next = teamNext(t)
+  const look = useLooks([t.key])[t.key]
   return (
     <li className={`result${active ? ' active' : ''}`} id={id}>
       <button type="button" className="result-main" onClick={() => actions.openTeam(t)}>
-        <Avatar name={t.name} sport={t.sport} />
+        {look ? <Crest look={look} name={t.name} size={44} /> : <Avatar name={t.name} sport={t.sport} />}
         <span className="stack">
           <span className="title"><Highlight name={t.name} query={query} /></span>
           <span className="small muted">{[sportName(t.sport), t.detail, t.followers ? `${t.followers} following` : ''].filter(Boolean).join(' · ')}</span>

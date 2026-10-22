@@ -7,8 +7,10 @@ import { comingCard, highlight as sportHighlight, liveLine, playerLine, resultCa
 import { Backdrop, sportDrawn, sportKey, sportName, viewOfKind } from '../sports'
 import type { LatestMoment } from '../today'
 import { outlets } from '../feed'
+import { useLooks } from '../look'
 import { callNote } from '../predictions'
 import { CallTag } from './Calls'
+import { Crest, CrestPair } from './Crest'
 import { ErrorBoundary } from './ErrorBoundary'
 
 /** The photo to show, if any, and a way to drop it when it doesn't load (one Commons removed, say): then
@@ -104,14 +106,15 @@ export function ResultCard({ game, hero, now, calls = null }: { game: GameResult
   const { r, several, word, wl, when, stats, match, lines, who } = resultCard(game, Boolean(hero), now, sportDrawn(game.players[0].sport))
   const badge = wl && <span className={`wl ${wl}`} role="img" aria-label={WON[wl]}>{wl}</span>
   const page = game.players.find((p) => p.result.match)?.result.match
+  const sides = game.players.find((p) => p.result.team_keys?.length)?.result.team_keys
   const lead = game.players[0]
   return (
     <Link to={page ? `/match/${page}` : lead.team != null ? `/team/${lead.team}` : `/player/${r.player_id}`} className={`result-card${hero ? ' hero' : ''}`} data-sport={key}>
       <Backdrop sport={key} seed={game.key} />
       {hero ? (
-        <span className="row"><span className="pill" style={{ background: 'var(--on-sport)', color: 'var(--sport)' }}>{when}</span>{badge}</span>
+        <span className="row"><span className="pill" style={{ background: 'var(--on-sport)', color: 'var(--sport)' }}>{when}</span><span className="row" style={{ gap: 8 }}><CrestPair keys={sides} />{badge}</span></span>
       ) : (
-        <span className="row"><span className="eyebrow">{when}</span>{badge}</span>
+        <span className="row"><span className="eyebrow">{when}</span><span className="row" style={{ gap: 8 }}><CrestPair keys={sides} />{badge}</span></span>
       )}
       <span className="dsp word" style={{ '--word': `${wordSize(word, hero)}px` } as CSSProperties}>{word}</span>
       <span className="stack" style={{ gap: hero ? 12 : 2 }}>
@@ -154,7 +157,7 @@ export function ComingCard({ event, players, seed, sport, teams = [], calls = nu
   return (
     <Link to={event.match ? `/match/${event.match}` : players[0] ? `/player/${players[0].player_id}` : '/'} className="coming-card" data-sport={key}>
       <Backdrop sport={key} seed={seed} />
-      <span className="eyebrow">{eyebrow}</span>
+      <span className="row"><span className="eyebrow">{eyebrow}</span><CrestPair keys={event.team_keys} size={28} /></span>
       <span className="dsp count">{big}</span>
       <span className="stack" style={{ gap: 6 }}>
         <span className="what">{event.title}</span>
@@ -471,10 +474,11 @@ export function BuildProgress({ card, messages, onRetry, research = true }: { ca
 /** One followed team on the Following page: a block of its sport's colour, as a player's tile (lines.teamLine). */
 export function TeamTile({ team }: { team: FollowedTeam }) {
   const now = useNow()
+  const look = useLooks([team.key])[team.key]
   return (
     <Link to={`/team/${team.team_id}`} className="tile" data-sport={sportKey(team.sport)}>
       <span className="sport">{sportName(team.sport) || 'Team'} · Team</span>
-      <span className="corner">{team.live?.is_live ? <span className="badge-live">Live</span> : null}</span>
+      <span className="corner">{team.live?.is_live ? <span className="badge-live">Live</span> : look ? <Crest look={look} name={team.name} size={40} disc="#ffffff" /> : null}</span>
       {/* A team's whole name, never broken inside a word ("Mönchengladbach"): smaller for a long one. */}
       <span className="dsp name" style={{ overflowWrap: 'normal', fontSize: teamNameSize(team.name) }}>{team.name}</span>
       <span className="status" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{teamLine(team, now)}</span>
@@ -485,11 +489,12 @@ export function TeamTile({ team }: { team: FollowedTeam }) {
 /** A followed team in the desktop sidebar, as a player's row. */
 export function TeamRow({ team }: { team: FollowedTeam }) {
   const now = useNow()
+  const look = useLooks([team.key])[team.key]
   const live = Boolean(team.live?.is_live)
   return (
     <Link to={`/team/${team.team_id}`} className="row" style={{ padding: '8px 10px', minHeight: 44, borderRadius: 12 }}>
       <div className="row" style={{ justifyContent: 'flex-start', minWidth: 0 }}>
-        <Avatar name={team.name} sport={team.sport} size="sm" />
+        {look ? <Crest look={look} name={team.name} size={32} /> : <Avatar name={team.name} sport={team.sport} size="sm" />}
         <div className="stack" style={{ gap: 1 }}>
           <span className="title" style={{ fontSize: 14 }}>{team.name}</span>
           <span className="tiny" style={{ color: live ? 'var(--live-text)' : 'var(--muted)', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{teamLine(team, now)}</span>
@@ -520,7 +525,7 @@ export function PlayerRow({ card, progress }: { card: Card; progress?: string[] 
 
 /** The top of a player's page (and an athlete's preview): a block of their sport's colour, with their
  * photo and its credit when there is one (.with-photo keeps the words off it). */
-export function PlayerBand({ name, sport, meta, photo, back, actions, children }: { name: string; sport?: string | null; meta?: string; photo?: Photo | null; back: ReactNode; actions?: ReactNode; children?: ReactNode }) {
+export function PlayerBand({ name, sport, meta, photo, back, actions, crest, children }: { name: string; sport?: string | null; meta?: string; photo?: Photo | null; back: ReactNode; actions?: ReactNode; crest?: ReactNode; children?: ReactNode }) {
   const [shown, drop] = usePhoto(photo)
   return (
     <header className={`player-band${shown ? ' with-photo' : ''}`} data-sport={sportKey(sport)}>
@@ -530,6 +535,7 @@ export function PlayerBand({ name, sport, meta, photo, back, actions, children }
         <span className="row" style={{ gap: 8 }}>{actions}</span>
       </div>
       <div className="stack" style={{ gap: 10 }}>
+        {crest}
         {sport && <span className="tag soft">{sportName(sport)}</span>}
         <h1 className="dsp player-name" style={{ '--ems': longestWordEms(name) } as CSSProperties}>{name}</h1>
         {meta && <span className="player-meta">{meta}</span>}

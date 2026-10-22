@@ -6,6 +6,8 @@ import {
   towersLeft, whoPlayed, type BattleRoyaleState, type DotaLiveMap, type EsportsPage, type EsportsState, type EsportsTeam, type LaneBuildings, type LiveDetail,
   type MapDetail, type MapMark, type PageTeam, type Reading,
 } from './facts/esports'
+import { TeamCrest } from '../components/Crest'
+import { teamKey } from '../look'
 import { MatchSection } from './section'
 import type { BoardProps, MatchProps, SportView } from './view'
 
@@ -55,10 +57,12 @@ function DotaMapLine({ live, order }: { live: DotaLiveMap; order: string[] }) {
 }
 
 /** A series: the two teams and maps won, the map on now, and one chip a map with who took it. */
-function SeriesBoard({ state, clock, compact }: BoardProps<EsportsState>) {
+function SeriesBoard({ state, clock, compact, live, explore }: BoardProps<EsportsState>) {
   const [a, b] = state.teams
+  // Each team's crest, but on the match page, where its band shows them big.
   const side = (t: EsportsTeam, align: 'left' | 'right') => (
     <div className="stack" style={{ alignItems: align === 'left' ? 'flex-start' : 'flex-end', textAlign: align, minWidth: 0 }}>
+      {!explore && <TeamCrest teamKey={teamKey(live.match, t.id)} name={t.name} size={compact ? 28 : 36} />}
       <span className="title">{t.name}</span>
       {t.abbr && t.abbr !== t.name && <span className="tiny muted">{t.abbr}</span>}
     </div>

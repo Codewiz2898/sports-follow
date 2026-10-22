@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type Prediction } from '../api'
 import { useNow } from '../clock'
+import { teamKey, useLooks } from '../look'
 import { isOpen, outcomeOf, withWhom } from '../predictions'
 import { shareQuestion } from '../share'
 import { sportKey } from '../sports'
 import { callsChanged } from './Calls'
+import { Crest } from './Crest'
 import { CheckIcon } from './Icons'
 import { ShareButton } from './Share'
 
@@ -41,6 +43,7 @@ function SplitBar({ q }: { q: Prediction }) {
 export function PickCard({ q, onChange }: { q: Prediction; onChange: (q: Prediction) => void }) {
   const now = useNow()
   const [busy, setBusy] = useState<string | null>(null)
+  const looks = useLooks(q.options.map((o) => teamKey(q.match, o.key)))  // a side's crest, where an option is a team
   const [error, setError] = useState<string | null>(null)
   const open = isOpen(q, now)
   const outcome = outcomeOf(q)
@@ -86,9 +89,11 @@ export function PickCard({ q, onChange }: { q: Prediction; onChange: (q: Predict
       <div className="pick-options" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }} role="group" aria-label={q.title}>
         {q.options.map((o) => {
           const mine = o.key === q.mine
+          const look = looks[teamKey(q.match, o.key) ?? '']
           return (
             <button key={o.key} type="button" className="pick-option" aria-pressed={mine} disabled={!open || busy !== null} onClick={() => { void choose(o.key) }}>
               {busy === o.key ? <span className="spinner" /> : mine ? <CheckIcon width={14} height={14} /> : null}
+              {look && <Crest look={look} name={o.label} size={30} disc={look.logo ? '#ffffff' : null} />}
               <span className="pick-label">{o.label}</span>
               {o.share != null && <span className="tiny" style={{ fontWeight: 800 }}>{o.share}%</span>}
             </button>
