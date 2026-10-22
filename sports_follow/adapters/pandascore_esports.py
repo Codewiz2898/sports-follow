@@ -638,10 +638,11 @@ class PandascoreEsports(Adapter):
             heroes = opendota.heroes()
             known = self._known_maps(str(m.get("id")), len(finished) + 1, game)
             numbered = sorted((int(n), mid) for n, mid in known.items() if int(n) <= len(finished))
-            if not numbered and finished:
-                # Nothing seen live (the worker started mid-series): OpenDota's last hundred pro matches.
+            if len(numbered) < len(finished):
+                # Maps not seen live (the worker started, or the page was first opened, mid-series): OpenDota's last
+                # hundred pro matches.
                 begin = _time(m.get("begin_at") or m.get("scheduled_at"))
-                numbered = dota.number_maps(dota.find_maps(over, teams, int(begin.timestamp()) if begin else 0), len(finished))
+                numbered = dota.fill_maps(numbered, dota.find_maps(over, teams, int(begin.timestamp()) if begin else 0), len(finished))
             names = {str(p["id"]): p.get("name") or "" for p in roster if p.get("id") is not None}
             items = opendota.items() if detail else {}
             maps, parts, parsed = [], [], 0
