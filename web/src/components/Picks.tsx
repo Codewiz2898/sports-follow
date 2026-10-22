@@ -7,7 +7,7 @@ import { isOpen, outcomeOf, withWhom } from '../predictions'
 import { shareQuestion } from '../share'
 import { sportKey } from '../sports'
 import { callsChanged } from './Calls'
-import { Crest } from './Crest'
+import { Crest, onColour } from './Crest'
 import { CheckIcon } from './Icons'
 import { ShareButton } from './Share'
 
@@ -93,7 +93,7 @@ export function PickCard({ q, onChange }: { q: Prediction; onChange: (q: Predict
           return (
             <button key={o.key} type="button" className="pick-option" aria-pressed={mine} disabled={!open || busy !== null} onClick={() => { void choose(o.key) }}>
               {busy === o.key ? <span className="spinner" /> : mine ? <CheckIcon width={14} height={14} /> : null}
-              {look && <Crest look={look} name={o.label} size={30} disc={look.logo ? '#ffffff' : null} />}
+              {look && <Crest look={look} name={o.label} size={30} disc={onColour(look)} />}
               <span className="pick-label">{o.label}</span>
               {o.share != null && <span className="tiny" style={{ fontWeight: 800 }}>{o.share}%</span>}
             </button>

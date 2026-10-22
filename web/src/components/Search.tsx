@@ -8,7 +8,7 @@ import { runningSports, sportInfo, sportName } from '../sports'
 import { useFollowing } from '../following'
 import { useLooks } from '../look'
 import { Avatar } from './Blocks'
-import { Crest } from './Crest'
+import { Crest, onWhite } from './Crest'
 import { CheckIcon, PlusIcon, SparkIcon } from './Icons'
 
 /**
@@ -179,7 +179,7 @@ export function TeamResultRow({ t, query, actions, active, id }: { t: TeamSummar
   return (
     <li className={`result${active ? ' active' : ''}`} id={id}>
       <button type="button" className="result-main" onClick={() => actions.openTeam(t)}>
-        {look ? <Crest look={look} name={t.name} size={44} /> : <Avatar name={t.name} sport={t.sport} />}
+        {look ? <Crest look={look} name={t.name} size={44} disc={onWhite(look)} /> : <Avatar name={t.name} sport={t.sport} />}
         <span className="stack">
           <span className="title"><Highlight name={t.name} query={query} /></span>
           <span className="small muted">{[sportName(t.sport), t.detail, t.followers ? `${t.followers} following` : ''].filter(Boolean).join(' · ')}</span>

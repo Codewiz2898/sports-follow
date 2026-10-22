@@ -113,7 +113,7 @@ export function TeamPage() {
         sport={team.sport}
         meta={[team.detail, team.followers ? `${team.followers} following` : ''].filter(Boolean).join(' · ')}
         back={back}
-        crest={<TeamCrest teamKey={team.key} name={team.name} size={96} disc="#ffffff" />}
+        crest={<TeamCrest teamKey={team.key} name={team.name} size={96} coloured />}
         actions={
           <>
             <ShareButton {...shareTeam(team.team_id, team.name, APP_NAME)} />

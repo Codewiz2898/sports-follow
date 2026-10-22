@@ -4,7 +4,7 @@ import { shortName } from '../format'
 import { useLooks } from '../look'
 import { sportKey } from '../sports'
 import { liveShort, nextWhen, teamNextWhen, teamOrder, tileOrder } from '../today'
-import { Crest } from './Crest'
+import { Crest, onColour } from './Crest'
 import { ChevronIcon } from './Icons'
 import { Rail } from './Rail'
 
@@ -34,7 +34,7 @@ function TeamPill({ team, now }: { team: FollowedTeam; now: number }) {
   return (
     <Link to={`/team/${team.team_id}`} className={`strip-pill${look ? ' with-crest' : ''}`} data-sport={sportKey(team.sport)}>
       {live && <span className="live-dot" aria-hidden="true" />}
-      {look && <Crest look={look} name={team.name} size={28} disc={look.logo ? '#ffffff' : null} />}
+      {look && <Crest look={look} name={team.name} size={28} disc={onColour(look)} />}
       <span className="dsp">{team.name}</span>
       {live && <span className="sr-only">, live</span>}
       {said && <span className="when">{said}</span>}

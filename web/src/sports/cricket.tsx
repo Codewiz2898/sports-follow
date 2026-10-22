@@ -21,11 +21,11 @@ function CricketBoard({ state, clock, compact, live, explore }: BoardProps<Crick
   return (
     <div className="stack" style={{ gap: 8 }}>
       {state.innings.map((i) => (
-        <div key={`${i.team}-${i.period}`} className="row" style={{ alignItems: 'baseline' }}>
+        <div key={`${i.team}-${i.period}`} className="row" style={{ alignItems: 'center' }}>
           <span className="title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: i.batting ? 'var(--text)' : 'var(--muted)' }}>
             {crest(i.team)}
             {i.abbr || i.team}
-            {i.batting && <span className="tiny live-note" style={{ marginLeft: 8 }}>batting</span>}
+            {i.batting && <span className="tiny live-note">batting</span>}
           </span>
           <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
             <span className={i.batting ? 'num score' : 'num'} style={i.batting ? undefined : { fontSize: 26, color: 'var(--muted)' }}>

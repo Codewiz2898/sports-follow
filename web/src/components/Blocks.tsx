@@ -10,7 +10,7 @@ import { outlets } from '../feed'
 import { useLooks } from '../look'
 import { callNote } from '../predictions'
 import { CallTag } from './Calls'
-import { Crest, CrestPair } from './Crest'
+import { Crest, CrestPair, onColour, onWhite } from './Crest'
 import { ErrorBoundary } from './ErrorBoundary'
 
 /** The photo to show, if any, and a way to drop it when it doesn't load (one Commons removed, say): then
@@ -478,7 +478,7 @@ export function TeamTile({ team }: { team: FollowedTeam }) {
   return (
     <Link to={`/team/${team.team_id}`} className="tile" data-sport={sportKey(team.sport)}>
       <span className="sport">{sportName(team.sport) || 'Team'} · Team</span>
-      <span className="corner">{team.live?.is_live ? <span className="badge-live">Live</span> : look ? <Crest look={look} name={team.name} size={40} disc="#ffffff" /> : null}</span>
+      <span className="corner">{team.live?.is_live ? <span className="badge-live">Live</span> : look ? <Crest look={look} name={team.name} size={40} disc={onColour(look)} /> : null}</span>
       {/* A team's whole name, never broken inside a word ("Mönchengladbach"): smaller for a long one. */}
       <span className="dsp name" style={{ overflowWrap: 'normal', fontSize: teamNameSize(team.name) }}>{team.name}</span>
       <span className="status" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{teamLine(team, now)}</span>
@@ -494,7 +494,7 @@ export function TeamRow({ team }: { team: FollowedTeam }) {
   return (
     <Link to={`/team/${team.team_id}`} className="row" style={{ padding: '8px 10px', minHeight: 44, borderRadius: 12 }}>
       <div className="row" style={{ justifyContent: 'flex-start', minWidth: 0 }}>
-        {look ? <Crest look={look} name={team.name} size={32} /> : <Avatar name={team.name} sport={team.sport} size="sm" />}
+        {look ? <Crest look={look} name={team.name} size={32} disc={onWhite(look)} /> : <Avatar name={team.name} sport={team.sport} size="sm" />}
         <div className="stack" style={{ gap: 1 }}>
           <span className="title" style={{ fontSize: 14 }}>{team.name}</span>
           <span className="tiny" style={{ color: live ? 'var(--live-text)' : 'var(--muted)', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{teamLine(team, now)}</span>

@@ -1,10 +1,14 @@
 import { basketball as facts, periodName, type BasketballSide, type BasketballState } from './facts/basketball'
+import { TeamCrest } from '../components/Crest'
+import { teamKey } from '../look'
 import type { BoardProps, SportView } from './view'
 
 /** Away at home, as US leagues write it, with the quarter-by-quarter line under it. */
-function BasketballBoard({ state, clock, compact }: BoardProps<BasketballState>) {
+function BasketballBoard({ state, clock, compact, live, explore }: BoardProps<BasketballState>) {
+  // Each side's crest, but on the match page, where its band shows them big.
   const side = (s: BasketballSide, align: 'left' | 'right') => (
     <div className="stack" style={{ alignItems: align === 'left' ? 'flex-start' : 'flex-end', textAlign: align, minWidth: 0 }}>
+      {!explore && <TeamCrest teamKey={teamKey(live.match, s.id)} name={s.name} size={compact ? 28 : 36} />}
       <span className="title">{s.name}</span>
       <span className="tiny muted">{align === 'left' ? 'Away' : 'Home'}</span>
     </div>

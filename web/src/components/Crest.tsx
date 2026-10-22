@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from 'react'
-import { useLooks, type Look } from '../look'
+import { discFor, useLooks, type Look } from '../look'
 import { initials } from '../format'
 
 /**
@@ -30,13 +30,24 @@ export function CrestPair({ keys, size = 30 }: { keys?: (string | null | undefin
   if (found.length !== 2) return null
   return (
     <span className="crest-pair" aria-hidden="true">
-      {found.map((l, n) => <Crest key={n} look={l} name="" size={size} disc="#ffffff" />)}
+      {found.map((l, n) => <Crest key={n} look={l} name="" size={size} disc={onColour(l)} />)}
     </span>
   )
 }
 
-/** One team's crest by its key (a team's page, a row): nothing while it's asked for, or for a team the registry hasn't. */
-export function TeamCrest({ teamKey, name, size, disc }: { teamKey: string | null | undefined; name: string; size?: number; disc?: string | null }) {
+/** The disc a logo sits in on a colour (a card's, a pill's): white, or ink for a light logo. */
+export function onColour(look: Look | null | undefined): string {
+  return discFor(look, '#ffffff') ?? '#ffffff'
+}
+
+/** The disc a logo needs on white (a list, a board, a white card): none, or ink for a light logo. */
+export function onWhite(look: Look | null | undefined): string | null {
+  return discFor(look, '#ffffff')
+}
+
+/** One team's crest by its key (a team's page, a board's side): nothing while it's asked for, or for a team the
+ * registry hasn't. On a colour (coloured), a logo sits in a disc; on white, only one that would vanish. */
+export function TeamCrest({ teamKey, name, size, coloured }: { teamKey: string | null | undefined; name: string; size?: number; coloured?: boolean }) {
   const look = useLooks([teamKey])[teamKey ?? '']
-  return look ? <Crest look={look} name={name} size={size} disc={look.logo ? disc : null} /> : null
+  return look ? <Crest look={look} name={name} size={size} disc={coloured ? onColour(look) : onWhite(look)} /> : null
 }
