@@ -329,9 +329,8 @@ class EspnSoccer(espn.EspnAdapter, Adapter):
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         league, event = locator.get("league") or "all", locator["event"]
-        # A 5 s cache lets every player in one match share a single fetch per poll.
-        data = espn.get_json(f"{espn.SITE}/soccer/{league}/summary?event={event}", ttl=24 * 3600 if final else 5)
-        return parse_summary(data, league)
+        url = f"{espn.SITE}/soccer/{league}/summary?event={event}"
+        return self.read_snapshot(lambda ttl: parse_summary(espn.get_json(url, ttl=ttl), league), final, 5)
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         return football.result_label(fixture, team_ids)

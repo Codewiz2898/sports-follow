@@ -473,10 +473,14 @@ class LiquipediaEsports(Adapter):
         wiki, match = locator["wiki"], str(locator["match"])
         if final and f"{wiki}:{match}" in self._seen:
             return parse_match(self._seen[f"{wiki}:{match}"], wiki)
-        rows = liquipedia.get("match", 24 * 3600 if final else 240, wiki=wiki, conditions=f"[[match2id::{match}]]", limit=1)
-        if not rows:
-            raise AdapterError(f"Liquipedia has no match {match} on {wiki}")
-        return parse_match(self._keep(rows, wiki)[0], wiki)
+
+        def read(ttl: float) -> Snapshot:
+            rows = liquipedia.get("match", ttl, wiki=wiki, conditions=f"[[match2id::{match}]]", limit=1)
+            if not rows:
+                raise AdapterError(f"Liquipedia has no match {match} on {wiki}")
+            return parse_match(self._keep(rows, wiki)[0], wiki)
+
+        return self.read_snapshot(read, final, 240)
 
     def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]:
         """Every running lobby at once: one request a wiki a round, keyed as given."""

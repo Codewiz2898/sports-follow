@@ -582,11 +582,13 @@ class SportmonksFootball(Adapter):
         return {"fixture": source_id} if self.fixture_pattern.fullmatch(source_id) else None
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
-        # A short cache lets every followed player in one match share each poll's fetch.
-        data = sportmonks.get_json(f"/football/fixtures/{locator['fixture']}", ttl=24 * 3600 if final else 5, include=MATCH_INCLUDE)
-        if not data.get("data"):
-            raise AdapterError(f"Sportmonks has no fixture {locator['fixture']}")
-        return parse_match(data["data"])
+        def read(ttl: float) -> Snapshot:  # the request match() makes for its page, too
+            data = sportmonks.get_json(f"/football/fixtures/{locator['fixture']}", ttl=ttl, include=MATCH_INCLUDE)
+            if not data.get("data"):
+                raise AdapterError(f"Sportmonks has no fixture {locator['fixture']}")
+            return parse_match(data["data"])
+
+        return self.read_snapshot(read, final, 5)
 
     def schedule(self, start: date, end: date) -> list[Fixture]:
         """Every match of the plan's leagues between two days, whoever plays it (fixtures/between with no

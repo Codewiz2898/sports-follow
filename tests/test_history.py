@@ -224,3 +224,30 @@ def test_a_run_reads_nothing_more_once_the_worker_stops(monkeypatch, lane, stopp
     history.run()
     assert source.scorecards_read == [0] and source.pages_read == []
     assert not bus.is_locked(history.LOCK)
+
+
+def test_a_scorecard_cached_while_the_game_was_on_is_read_again(monkeypatch, lane):
+    # BHA-450: a fan watched the game live, and its poll's copy is kept a day; the lane's scorecard, read after
+    # full time, is the result, not the board as it stood in play.
+    from sports_follow.adapters import espn, espn_soccer
+
+    from .test_final_reads import in_play, load
+
+    final = load("espn/soccer-summary-final")
+    now = {"doc": in_play(final), "t": 1_800_000_000.0}
+    monkeypatch.setattr(time, "time", lambda: now["t"])
+    monkeypatch.setattr(espn, "_fetch", lambda url: now["doc"])
+    soccer, locator = espn_soccer.EspnSoccer(), {"league": "eng.1", "event": "1"}
+    monkeypatch.setitem(ADAPTERS, soccer.system, soccer)
+    assert soccer.snapshot(locator).status == "live"
+    now["doc"], now["t"] = final, now["t"] + 1800
+
+    lane.db.events[0] = Event(id=0, key=f"{soccer.system}:1", sport="Football", title="Norway v Portugal", status="final", start_utc=NOW - timedelta(days=1),
+                              live_binding={"adapter": soccer.system, "locator": locator})
+    lane.db.results[(0, 2)] = EventPlayer(event_id=0, player_id=2, result={"title": "Norway v Portugal", "result": "Lost 1–2", "scorecard": False})
+    for b in lane.db.bindings.values():
+        b.history = {"done": True}
+    stored: list[Snapshot] = []
+    monkeypatch.setattr(structured, "add_scorecard", lambda db_, event, player_id, athlete_id, snap: stored.append(snap))
+    history.run()
+    assert [s.status for s in stored] == ["final"]
