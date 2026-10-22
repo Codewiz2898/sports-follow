@@ -49,6 +49,24 @@ def _tally(side: dict[str, Any]) -> tuple[int, int] | None:
     return (int(score), side.get("pens") or 0) if score.isdigit() else None
 
 
+def _shootout(home: dict[str, Any], away: dict[str, Any], clock: str) -> bool:
+    """Whether a board's game, level on goals, went to penalties: its sides have shootout scores (pens), or its clock
+    or state's words say so ("After penalties", "FT-Pens")."""
+    return any(side.get("pens") is not None for side in (home, away)) or bool(re.search(r"pen", clock, re.I))
+
+
+def _on_penalties(home: dict[str, Any], away: dict[str, Any]) -> dict[str, Any] | None:
+    """The side that won a shootout: the one the board marks the winner, else the one with more penalties; None where
+    the board says neither."""
+    marked = [side for side in (home, away) if side.get("winner") is True]
+    if len(marked) == 1:
+        return marked[0]
+    ours, theirs = home.get("pens"), away.get("pens")
+    if isinstance(ours, int) and isinstance(theirs, int) and ours != theirs:
+        return home if ours > theirs else away
+    return None
+
+
 def result_label(fixture: Fixture, team_ids: list[str]) -> str:
     """ "Won 2–1" / "Lost 0–1" / "Drew 1–1" from the player's team's side, else the plain score; a
     shootout adds its score ("Lost 0–0 (2–4 pens)")."""
@@ -270,24 +288,34 @@ class Football(Sport):
         return seen
 
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
-        """The side with more goals won; level is a draw, but for a game settled on penalties, which the
-        board's goals don't say: then nothing, and the clock line says how it ended."""
+        """The side with more goals won; level is a draw, but for a game settled on penalties, won by the side the
+        board marks the winner, else the one with more penalties ("Arsenal won on penalties"); nothing where the
+        board doesn't say who, and the clock line says how it ended."""
         home, away = state.get("home") or {}, state.get("away") or {}
         goals = [str(side.get("score") or "") for side in (home, away)]
         if not all(g.isdigit() for g in goals):
             return ""
         if goals[0] != goals[1]:
             return f"{(home if int(goals[0]) > int(goals[1]) else away).get('name') or 'They'} won"
-        return "" if re.search(r"pen", f"{state.get('detail') or ''} {clock}", re.I) else "Draw"
+        if not _shootout(home, away, f"{state.get('detail') or ''} {clock}"):
+            return "Draw"
+        won = _on_penalties(home, away)
+        return f"{won.get('name') or 'They'} won on penalties" if won else ""
 
     def side_final(self, state: dict[str, Any], score: str, clock: str, team_id: str) -> str:
-        """As every sport's, but a game level on goals and settled on penalties, which the board's goals don't
-        say, isn't a draw: the game's own result is told instead."""
+        """As every sport's, but a game level on goals and settled on penalties is won and lost on them, with the
+        shootout's score: "Chelsea lost 1–1 (2–4 pens) v Arsenal", by the side the board marks the winner, else the
+        one with more penalties. "" where the board doesn't say who: the game's own result is told instead."""
         home, away = state.get("home") or {}, state.get("away") or {}
-        level = str(home.get("score") or "") == str(away.get("score") or "")
-        if level and not (home.get("winner") or away.get("winner")) and re.search(r"pen", f"{state.get('detail') or ''} {clock}", re.I):
+        goals = [str(side.get("score") or "") for side in (home, away)]
+        if not (goals[0] == goals[1] and goals[0].isdigit() and _shootout(home, away, f"{state.get('detail') or ''} {clock}")):
+            return super().side_final(state, score, clock, team_id)
+        ours = next((side for side in (home, away) if str(side.get("id") or "") == team_id), None)
+        won = _on_penalties(home, away)
+        if ours is None or won is None or not (home.get("name") and away.get("name")):
             return ""
-        return super().side_final(state, score, clock, team_id)
+        theirs = away if ours is home else home
+        return f"{ours['name']} {'won' if ours is won else 'lost'} {ours.get('score')}–{theirs.get('score')}{pens(ours.get('pens'), theirs.get('pens'))} v {theirs['name']}"
 
     def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
         """Every goal and card the source's events add, whoever's: a goal with what it did ("Saka puts Arsenal
