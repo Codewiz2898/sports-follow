@@ -186,7 +186,7 @@ def built(api, monkeypatch, tmp_path):  # noqa: F811
 
 def test_a_crawler_gets_a_players_page_with_its_preview(built, monkeypatch):
     got = built.call("GET", "/player/1?s=share")
-    assert got.status_code == 200 and got.headers["content-type"].startswith("text/html") and got.headers["cache-control"] == "no-cache"
+    assert got.status_code == 200 and got.headers["content-type"].startswith("text/html") and got.headers["cache-control"] == "private, no-cache"  # it can carry the device's fan cookie
     tags = meta(got.text)
     assert tags["og:title"] == "Virat Kohli · Cricket" and tags["og:url"] == "http://test/player/1"  # the share tag isn't the page's
     assert tags["og:image"].startswith("http://test/api/players/1/share.png?v=")
