@@ -7,7 +7,8 @@ import re
 from importlib.metadata import metadata
 from pathlib import Path
 
-from sports_follow import credits
+from sports_follow import controls, credits
+from sports_follow.adapters import ALL, KNOWN
 from sports_follow.sports import chess, football
 
 
@@ -77,6 +78,22 @@ def test_a_build_without_the_agent_credits_no_model_and_no_news():
     # SPORTS_FOLLOW_AGENT=0 (no OpenRouter key): pages come from the sources alone.
     page = credits.credits({"sportmonks_football": 1, "pandascore_esports": 1, "pubg_esports": 1}, stockfish=False, agent=False)
     assert "PandaScore" in _names(page["data"]) and "AI" not in _names(page["also"]) and "News publishers" not in _names(page["also"])
+
+
+def test_a_sport_or_source_turned_off_keeps_its_credit():
+    # Turning chess, or Lichess, off in the admin panel stops it being read, but the players' pages, results and boards
+    # built from Lichess's broadcasts stay up: Lichess's CC BY-SA credit and its licence link stay with them, and so do
+    # FIDE's ratings and the engine under the boards. A source this build can't run (no token) is still never credited.
+    lichess = KNOWN["lichess_chess"].provider
+    for turn in (lambda on: controls.turn_sport("chess", on), lambda on: controls.turn_source("lichess_chess", on)):
+        turn(False)
+        page = credits.credits(stockfish=False, agent=False)
+        entry = next((c for c in page["data"] if c["name"] == lichess.name), None)
+        assert entry and (entry["licence"], entry["licence_url"]) == (lichess.licence, lichess.licence_url)
+        assert {"FIDE", "Stockfish.js"} <= set(_names(page["also"]))
+        turn(True)
+    can = {a.provider.name for a in ALL}
+    assert set(_names(credits.credits(stockfish=False, agent=False)["data"])) <= can
 
 
 ROOT_WEB = ROOT / "web"
