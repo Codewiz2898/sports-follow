@@ -458,6 +458,9 @@ class FinishedSource:
     def __init__(self, scorecard: bool):
         self.scorecard = scorecard
 
+    def player(self, athlete_id, league=None):
+        return None  # asked again who they are (structured.reread): nothing new
+
     def fixtures(self, ref):
         return [Fixture(source_id="1", title="A vs B", competition="L", start_utc=NOW - timedelta(hours=2), venue=None, status="final", team_ids=["T1", "T2"], locator={"id": 1}, team_names=["A", "B"])]
 
@@ -531,6 +534,9 @@ class FiveFinalsSource:
 
     def sport_of(self, ref):
         return self.sport
+
+    def player(self, athlete_id, league=None):
+        return None  # asked again who they are (structured.reread): nothing new
 
     def fixtures(self, ref):
         return [Fixture(source_id=str(n), title=f"A vs B, game {n}", competition="L", start_utc=NOW - timedelta(days=10 - n), venue=None, status="final",
@@ -628,6 +634,48 @@ def test_every_player_bound_to_a_source_that_renamed_them_moves_to_the_new_id(mo
     structured.rekey_bound(RenamingSource())
     assert "merge them" not in caplog.text  # once a day
     assert structured.rekey_bound(SimpleNamespace(system="other_source")) == 0  # a source that never renamed anyone
+
+
+class ReadAgain:
+    """A source asked again who an athlete is: on T2 now, or it can't say (fails)."""
+
+    system = "fake_source"
+
+    def __init__(self, fails: Exception | None = None):
+        self.fails = fails
+        self.asked: list[tuple[str, str | None]] = []
+
+    def player(self, athlete_id, league=None):
+        self.asked.append((athlete_id, league))
+        if self.fails:
+            raise self.fails
+        return PlayerRef("fake_source", athlete_id, "P1", ["T2"], ["B"], league=league)
+
+
+def test_a_bound_player_is_read_again_every_few_hours_and_a_spent_source_at_the_next_refresh(monkeypatch, redis):
+    # BUG-200: a refresh reads its player again every REREAD seconds (one request, which the source's cache keeps as
+    # long) and moves their bindings when the source names other teams (record_move). A source with nothing left for
+    # the refresh lane is asked again at the next refresh, and the refresh doesn't fail for it (BUG-174's rule).
+    moves = []
+    monkeypatch.setattr(structured, "record_move", lambda player_id, adapter, fresh: moves.append((player_id, fresh.team_ids)) or fresh)
+    ref = PlayerRef("fake_source", "A1", "P1", ["T1"], ["A"], league="l1")
+    source = ReadAgain(budget.RateLimited("fake_source: the refresh share of its 10 requests a minute is spent"))
+    assert structured.reread(1, source, ref) is ref
+    assert structured.reread(1, source, ref) is ref
+    assert source.asked == [("A1", "l1"), ("A1", "l1")] and moves == []
+    source.fails = None
+    assert structured.reread(1, source, ref).team_ids == ["T2"]
+    assert moves == [(1, ["T2"])] and redis.ttl["lock:reread:1"] == structured.REREAD
+    assert structured.reread(1, source, ref) is ref and len(source.asked) == 3  # not again for REREAD seconds
+
+    # A source that fails is asked again after REREAD; the refresh goes on with the binding as it is.
+    source = ReadAgain(AdapterError("Fake returned HTTP 502 for /players/A1"))
+    assert structured.reread(2, source, ref) is ref
+    assert structured.reread(2, source, ref) is ref and len(source.asked) == 1
+    # An athlete of an individual sport (their own "team") has no team to change: never read again.
+    source = ReadAgain()
+    alone = PlayerRef("fake_source", "A1", "P1", ["A1"], ["P1"])
+    assert structured.reread(3, source, alone) is alone and source.asked == []
 
 
 def test_a_game_moved_later_is_disarmed_by_its_own_sports_lead(monkeypatch):

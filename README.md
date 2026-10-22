@@ -34,7 +34,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 ├─ fetch_photos, every 15 min: followed and starter players' photos from Wikimedia Commons, for their profiles
                                 ├─ read_sidelined, twice a day: who's out and who's back, league-wide, for the Wire (sidelined.py)
                                 ├─ refresh_campaigns, daily: each campaign page's teams' rosters from their sources (campaigns.py)
-                                └─ tick, every minute: arm events, queue polls, refreshes and rebuilds
+                                └─ tick, every minute, beside the jobs (no slot): arm events, queue polls, refreshes and rebuilds
                                          │                                  │
                               llm-providers gateway ──▶ LLM         adapters/ ──▶ ESPN JSON (football, cricket, basketball, tennis)
                                                                               ├─▶ Lichess API (chess)
@@ -137,12 +137,20 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   The page is live in about a second and its profile follows from Wikidata and Wikipedia. An athlete no
   live source has can't be followed, unless `SPORTS_FOLLOW_RESEARCH=1`: then the agent builds their page
   (counted as an AI research).
-  `GET /api/athletes/{system}/{id}` and `/api/athletes/wikidata/{qid}` preview before following.
+  `GET /api/athletes/{system}/{id}` and `/api/athletes/wikidata/{qid}` preview before following (a preview is
+  kept 10 minutes, by the athlete, whatever `league` the link names). A fan follows at most 100 players
+  (`server.PLAYERS_MAX`). Previews and follows that ask a source for an athlete not on the app yet (a whole
+  team's follow on a campaign page asks once for each such player) are limited to 30 a minute a fan and 120 a
+  client address (`SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_MINUTE`, `SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_ADDRESS`), past
+  which they're a 429; a player already here costs nothing.
 - **AI research is capped** (only with `SPORTS_FOLLOW_RESEARCH=1`). A name no source knows goes to the research agent, 3 per fan per UTC day
   (`search.RESEARCH_PER_DAY`, counted in Redis), 10 per client address per day and 10 an hour across all
   fans (`SPORTS_FOLLOW_RESEARCH_PER_ADDRESS`, `SPORTS_FOLLOW_RESEARCH_PER_HOUR`). Following a player
   already here, or a search result with a live source, doesn't count. The gateway's per-app budget is
-  the hard ceiling behind it.
+  the hard ceiling behind it. The backgrounds the agent writes for players a live source has and Wikipedia
+  doesn't are capped too, whoever made the player: 6 an hour across all players
+  (`SPORTS_FOLLOW_BACKGROUNDS_PER_HOUR`); past it a page is whole from its source without one, and a fan
+  opening it in a later hour sends the agent.
 - **Names converge.** "Kohli" and "Virat Kohli" end up on the same player: every typed name becomes an
   alias, and when a build discovers the athlete already exists, the rows are merged. A player bound to a
   source is never renamed or merged by an agent report, and keeps the source's sections when a typed
@@ -153,7 +161,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   records the identity and bindings. From then on the source owns the fixtures, results, stats and live
   score, the publishers their news (`news.py`), and the agent only writes a background Wikipedia has no
   article for. A player followed before their sport had an adapter is
-  bound by the next scheduled refresh.
+  bound by the next scheduled refresh. A bound player is read again from their source every six hours in a
+  refresh (`structured.reread`), so one who changes teams moves to the new team's games, and their old team's
+  still to come are no longer theirs; a fan picking them again in search moves them at once.
 
   | Sport | Source | Fixtures | Live | Stats |
   |---|---|---|---|---|
@@ -489,7 +499,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Sound is rationed (once every 3 minutes a game, 6 times an hour a phone) except for the biggest
   moments. `sports_follow/notify.py` claims each batch once, logs every
   push (`notification`), sends it to each device at once (by Web Push with VAPID to browsers, by FCM to
-  the Android app, `fcm.py`), and the tick sweeps up any batch a restart dropped. Quiet hours are per device and make notifications arrive without a sound or vibration (on Android still on the lock screen, so a phone set to wake its screen for notifications may light it).
+  the Android app, `fcm.py`), and the tick sweeps up any batch a restart dropped. Devices that took their last
+  push go by threads of their own, apart from new and failing ones, and each push service gets 2 s to connect, so
+  a device that never answers holds up no other fan's alerts; push addresses must be a known service's own, and
+  one network turns notifications on for only so many new devices a day. Quiet hours are per device and make notifications arrive without a sound or vibration (on Android still on the lock screen, so a phone set to wake its screen for notifications may light it).
   With the app open and in front, a moment shows as an in-app toast instead. The Alerts tab's Latest
   list shows every moment of a fan's players, pushed or not, with what's new counted on the tab.
   `python -m sports_follow.notify stats` shows what was sent and how much was opened, by kind.
@@ -564,7 +577,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   that keeps its athlete ids (`wikidata_property`, Liquipedia's P10918), a provider's live search and
   `recognise` for search as you type, a provider's `research` (its public API, which the research agent's
   prompt points to while it runs), `credit` for a live card carrying another's data too (OpenDota's),
-  `snapshots` for batched live polling, `live_now` for "Live now" (every game it has on, league-wide;
+  `snapshots` for batched live polling, `Snapshot.sides` on a scorecard that says which side each player is in
+  (a result is then won or lost by the side they played for, a traded player's old one too), `live_now` for "Live now" (every game it has on, league-wide;
   `sports_follow/live.py`; where a game's id isn't the fixture id a player's card has it under, its
   `LiveGame.fixtures` says those, as chess's boards do, so Today shows a fan's game once, as theirs; where
   the source rates its events, it leaves out the small ones and sets `LiveGame.tier`, the biggest first, as
@@ -613,14 +627,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   its provider's name or an API it reads, or its URL.
 - **One rate-limit layer for every source** (`sports_follow/adapters/budget.py`). Each source's client
   declares a `BUDGET`: requests a window (an hour, a minute, a day, several at once), a margin never
-  spent, a reserve kept for live games, and, for a scarce one, fans' own share. Its provider lists it
+  spent, a reserve kept for live games, and, for one with a reserve or a scarce one, fans' own share (fewer than
+  the reserve: `tests/test_budget.py` holds every source to it). Its provider lists it
   (`Provider.budgets`), so the usage report finds it through `adapters.KNOWN`. Before each request it
   sends it takes one; it reports what the source says is left and its 429s, which pause every process.
   The research agent's `fetch_url` spends the same budget when it reads a source's API (`Budget.urls`).
   Counts are kept in Redis, so the API and the worker spend from one allowance. Every request is in a
   lane, set once where the work starts: `live` (polls), `fan` (every API request: search, previews,
-  following), `refresh`, `history`, `import` and `feed` (the curator's). The background lanes stop at the reserve; a fan loop on
-  Liquipedia or PUBG stops at its share and is logged. `python -m sports_follow.usage` shows each
+  following), `refresh`, `history`, `import` and `feed` (the curator's). The background lanes stop at the reserve; a fan loop
+  stops at its share and is logged, so live games keep the rest of the reserve. `python -m sports_follow.usage` shows each
   source's spend this hour and today, by lane.
 - **One cache for every source** (`sports_follow/adapters/cache.py`). Each client reads through a `Cache`
   named after its budget: this process's copy, then Redis, then the source, and only a request sent is
@@ -642,7 +657,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   costs 1 unit); keeps those whose title or description's opening (up to its first blank line or link, 300
   characters at most: not the related-video or podcast links under it) names a followed player of that sport, or one
   of its pool (below) (their full name or a hashtag of it, a nickname fans typed, or their surname when no other
-  such player of the sport has it); one that names none of them but names a team they play for ("Falcons vs
+  such player of the sport has it: the last word of their name, or of an alias that shares a word with it, and the
+  given name of one written as FIDE does, "Gukesh" for "Gukesh D"; never an initial); one that names none of them but names a team they play for ("Falcons vs
   Vitality", "Liverpool v City": the team as its sport's titles write it, `Sport.team_names`, without the words its
   titles leave off, `team_affixes`; not "India Women" for India, `other_sides`) is kept for the team's followed
   players and 3 of its pool players, marked `about: team`, which the judge reads as a share about the team
@@ -656,10 +672,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   the Data API doesn't say (embeddable, no region rule). Only the player knows: YouTube's IFrame Player API
   says so (error 101 or 150, or 100 for one gone), and the apps then show "This one plays only on YouTube"
   with the way there, and tell the server once (`POST /api/players/<id>/feed/<item>/unplayable`, so many an
-  hour from a fan, an address and everyone). It marks every row of the video (`unplayable_at`), no Feed serves
-  it again, and a fetch that finds it for another player keeps the mark. The admin panel's Feed tab shows the
-  mark, and approving or pinning the video there says it plays after all, which no app's word overrides. (Whether 101/150 can also mean a
-  block in the viewer's country alone isn't known; if it can, one fan abroad hides it from India too.)
+  hour from a fan, an address and everyone, each count taken before the report is acted on). It leaves that fan's
+  Feed at once, and it's their network's vote (an IPv6 one's /48, kept a month in Redis) on whether it leaves
+  everyone's: once three networks have said so (`feed.UNPLAYABLE_VOTES`), the server marks every row of the video
+  (`unplayable_at`), no Feed serves it again, and a fetch that finds it for another player keeps the mark. One fan,
+  or a script with new cookies, takes it from their own Feed alone. The admin panel's Feed tab shows the mark, and
+  approving or pinning the video there says it plays after all, which no app's word overrides. (Whether 101/150 can
+  also mean a block in the viewer's country alone isn't known; if it can, fans abroad on three networks hide it
+  from India too.)
   After each poll the judge (below) reads the new rows and `sports_follow/rank.py` scores every judged one:
   the judge's interest, how widely it's watched for its age (log views a day since it was published, as its
   latest read counted them, so the score is age-fair and stays put as days pass) and its like ratio, times its
@@ -743,8 +763,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   of their own name and the aliases with fewer words than it, the shortest that still names them and no other
   followed player of their sport, sharing a word with their own name (never a namesake's slug, "mohamed salah
   football"): "Jasprit Bumrah" for the registry's "Jasprit Jasbirsingh Bumrah", "MS
-  Dhoni" for "Mahendra Singh Dhoni", never "Bumrah" or "Boom Boom" alone, and their own name when two followed
-  players share the rest. Matching stays as it was: any of their names. And each search lists 50 results (25 before:
+  Dhoni" for "Mahendra Singh Dhoni", never "Bumrah" or "Boom Boom" alone, but "Gukesh" for FIDE's "Gukesh D" (their
+  own name without the initial it ends in), and their own name when two followed players share the rest. Matching stays as it was: any of their names. And each search lists 50 results (25 before:
   the same one search, and one `videos.list` read either way) and leaves out what's tagged `#shorts` (`q` ends
   `-#shorts`, YouTube's NOT): most watched first, results are mostly Shorts, and those under a minute are refused
   for length. `videoDuration` can't do it: its `short` is anything under 4 minutes, where 1-4 minute highlight
@@ -809,7 +829,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `Fixture.board`: Lichess's once a round is paired; and by `board_players` and `pairing` (which meeting of the
   players it is) alerts take its fixtures for one game, each moment from the side its `voice` names), how an Android
   notification draws a game at a glance (`glance`: its two sides' short names and scores, where it's at, and how far
-  along it is, the match clock or the overs, with the goals marked), its form summary,
+  along it is, the match clock or the overs, with the goals marked), its form summary and a result's win, draw or
+  loss (`outcome`: kept with the result, from the side the player played for and the one the source marks the winner,
+  where its result is the game's own, as cricket's "India won by 57 runs"),
   how search shows its athletes, its colours (a player's page and link previews are drawn in them), what the Feed's
   content judge reads about it (`content_hints`: a few lines on what a milestone and a big moment are there, and what a
   promo, a rumour or a re-upload looks like to its fans; `restream_after`: how long a video from a channel nobody
@@ -932,7 +954,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   through the gateway (`SPORTS_FOLLOW_CURATE_MODEL`), with the sport's `content_hints`, and what the rules settled
   stands over what it says. The judge is a pure function, with no database and no fetching, and `judge_many`
   runs the model's calls side by side; a candidate the model can't judge now (or with `SPORTS_FOLLOW_CURATE_AI=0`)
-  is left unjudged, to try again. To tune it, label candidates by hand and run
+  is left unjudged, to try again: at the next run when the gateway was down or out of credit, but days later when
+  the model declined it or answered off the schema (2 days, then 4), and after 3 such tries it's held back for good
+  (`rank.JUDGE_TRIES`: a verdict whose stage is `held`, never served unless an admin approves it), so no row is
+  paid for at every run. `feed_candidates` keeps each row's tries, last failure and when it may be asked again
+  (`judge_tries`, `judge_error`, `judge_after`); `curator rescore --rejudge` asks every row again. To tune it, label candidates by hand and run
   `python -m sports_follow.curate candidates.jsonl --labels labels.jsonl`: it prints the verdicts as JSONL and how
   often each field agrees with the labels, then each disagreement (`--rules-only` makes no model calls).
   `tests/fixtures/curate_*.jsonl` are 41 made-up ones across cricket, football, chess and esports, among them a
@@ -1064,6 +1090,9 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_SPORTS` | every sport | the sports that may run, e.g. `football,cricket,chess`: a sport left out isn't searched, imported or polled, its sources don't run (a source of several esports games reads only those left in), and its followed players' pages stay as they are. Each esports game is a sport (`valorant,cs2,lol,dota2,bgmi,freefire,pubgmobile,pubg,mlbb,hok,r6siege,overwatch,apex,rocketleague,cod,wildrift`), and `esports` stands for every game. The admin panel turns these off and on while the app runs |
 | `SPORTS_FOLLOW_SOURCES` | every source | the sources that may run; a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only. The admin panel turns these off and on while the app runs, never one left out here |
 | `SPORTS_FOLLOW_RESEARCH_PER_HOUR` | `10` | AI researches an hour across all fans |
+| `SPORTS_FOLLOW_BACKGROUNDS_PER_HOUR` | `6` | backgrounds the research agent writes an hour across all players (a player a live source has and Wikipedia has no article on, new or a month old); past it a page waits for a fan to open it in a later hour |
+| `SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_MINUTE` | `30` | previews and follows a minute from one fan that ask a live source for an athlete not on the app yet |
+| `SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_ADDRESS` | `120` | the same from one client address (an IPv6 /64), higher since many fans can share one; not counted for private addresses |
 | `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY` | `India` | whose athletes count double among the best-known starters new fans are offered (empty: nobody's) |
 | `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` | `40` | moment searches in any 24 hours (`searches.py`), each run counted (a moment's search runs twice; each 1 of YouTube's 100 searches a day); the biggest moments first; `0` turns them off |
 | `SPORTS_FOLLOW_FEED_GAP_SEARCHES` | `20` | gap searches in any 24 hours (`sweeps.py`): a followed player with nothing to watch this week, the most followed first; each 1 of YouTube's 100 searches a day; `0` turns them off |

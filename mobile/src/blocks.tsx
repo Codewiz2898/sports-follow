@@ -8,7 +8,7 @@ import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type L
 import { Image, type ImageStyle } from 'expo-image'
 import { LinearGradient } from 'expo-linear-gradient'
 import { outlets } from '../../web/src/feed'
-import { clockPieces, countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, outcome, parseDate, playedOn, relative, safeHref, shortName, statFit } from '../../web/src/format'
+import { clockPieces, countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, parseDate, playedOn, relative, resultOutcome, safeHref, shortName, statFit } from '../../web/src/format'
 import { bareScore, comingCard, liveLine, playerLine, resultCard, statusLine, teamLine, teamNameSize, wordSize, type GameResult } from '../../web/src/lines'
 import type { LatestMoment } from '../../web/src/today'
 import { absolute, type Card, type FollowedTeam, type LiveStatus, type NewsItem, type Photo, type Provenance, type RecentResult, type Stat, type UpcomingEvent } from './api'
@@ -420,7 +420,7 @@ export function ResultsList({ items, teams }: { items?: RecentResult[]; teams?: 
   return (
     <Surface style={b.list}>
       {items.map((r, i) => {
-        const wl = outcome(r.result, teams)
+        const wl = resultOutcome(r, teams)
         const score = bareScore(r.result)
         const url = safeHref(r.source_url)
         return (
@@ -442,7 +442,7 @@ export function ResultsList({ items, teams }: { items?: RecentResult[]; teams?: 
 
 /** Won, drew or lost for the last five results whose outcome is known, newest first. */
 export function formMarks(results: RecentResult[], teams?: string[]): ('W' | 'D' | 'L')[] {
-  return results.map((r) => outcome(r.result, teams)).filter((m): m is 'W' | 'D' | 'L' => m != null).slice(0, 5)
+  return results.map((r) => resultOutcome(r, teams)).filter((m): m is 'W' | 'D' | 'L' => m != null).slice(0, 5)
 }
 
 /** The last few results as a row of badges, newest first. */

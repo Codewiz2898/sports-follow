@@ -255,6 +255,12 @@ def test_a_failed_push_names_neither_the_token_nor_the_fan(fake_fcm, caplog):
     assert (line.push_service, line.status) == ("fcm", 404) and TOKEN[10:] not in line.getMessage()
 
 
+def test_fcm_gets_two_seconds_to_connect():
+    # BUG-181: ten, on each of Google's addresses, while a batch's other pushes waited.
+    assert fcm._client.timeout.connect is not None and fcm._client.timeout.connect <= 2
+    assert fcm._client.timeout.read is not None and fcm._client.timeout.read <= 10
+
+
 def test_a_device_gets_its_push_by_its_own_transport(fake_fcm, monkeypatch):
     web = []
     monkeypatch.setattr(notify, "push", lambda endpoint, p256dh, auth, payload, ttl, topic=None: web.append((endpoint, topic)) and None)

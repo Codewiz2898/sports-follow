@@ -12,7 +12,7 @@ import { FeedTab, FromTheFans, useFeed } from '../components/Feed'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../components/Icons'
 import { ResultsHistory, StatsWithForm } from '../components/Results'
 import { ShareButton } from '../components/Share'
-import { day, outcome, playedOn, relative, safeHref, shortName } from '../format'
+import { day, playedOn, relative, resultOutcome, safeHref, shortName } from '../format'
 import { bareScore, lastChecked, liveLag, liveUpdates, newsOf, nextGame, pendingLine, profileFacts } from '../lines'
 import { sharePlayer } from '../share'
 import { sportName } from '../sports'
@@ -217,7 +217,7 @@ function Overview({ card, feed, show, onError }: { card: Card; feed: Feed | null
   const results = card.recent_results ?? []
   const marks = formMarks(results, p.teams)
   const last = results[0]
-  const wl = last && outcome(last.result, p.teams)
+  const wl = last && resultOutcome(last, p.teams)
   const word = last && highlight(p.sport, last.player_contribution)
   const { muted, setMuted } = useActivity()
   // "Won 133–128" is a score once the badge says won; "West Indies won by 5 wkts" stays a sentence.

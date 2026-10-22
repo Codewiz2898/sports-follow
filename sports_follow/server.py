@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Any, TypeVar
+from typing import Annotated, Any, TypeVar, cast
 from urllib.parse import urlparse
 
 import redis.asyncio as aredis
@@ -43,8 +43,8 @@ from starlette.routing import Match
 from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
-from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
-from .db import get_db, session
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_LOOKUPS_PER_ADDRESS, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE
+from .db import get_db, released, session
 from .models import ClipKey, Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription, Question, Team
 
 logs.setup()  # under uvicorn, after its own logging config: ours, with uvicorn's lines through it
@@ -74,6 +74,17 @@ async def lifespan(app: FastAPI):
 # RequestLog's span and metric stand for each request instead (tracing.request_span, metrics.request).
 # Nor does it log validation failures, which carry what a client sent.
 app = FastAPI(title=APP_NAME, lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False, "logs": False, "metrics": False})
+
+
+class Route(APIRoute):
+    """Every route here: a sync one gives its database connection back as it returns (db.released), never
+    holding it while it waits for a thread to check and send its answer."""
+
+    def __init__(self, path: str, endpoint: Callable[..., Any], **kwargs: Any) -> None:
+        super().__init__(path, released(endpoint), **kwargs)
+
+
+app.router.route_class = Route  # before the first route
 
 UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -946,6 +957,7 @@ async def _follow_row(row: dict[str, Any], fan: str, address: str | None, turns:
                 # On Sports Follow with a card that isn't failed (search._ours offers no other): the follow row, and
                 # the build again for a card still building, as /api/follows does, in case its job was lost.
                 def save(db: Session) -> str | None:
+                    _room_to_follow(db, fan, target["player_id"])
                     db.execute(insert(Follow).values(fan_id=fan, player_id=target["player_id"], alert_rules={}).on_conflict_do_nothing())
                     return db.scalar(select(PlayerCard.status).where(PlayerCard.player_id == target["player_id"]))
 
@@ -1077,6 +1089,22 @@ async def research(fan: str = Depends(fan_id)) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- following
 
+# Players a fan follows at once: a few whole squads from campaign pages and their favourites besides, as teams
+# (teams.MAX, 30) and games (matches.MAX, 20) have theirs. Each followed player is read every half hour for good.
+PLAYERS_MAX = 100
+
+
+def _room_to_follow(db: Session, fan: str, player_id: int | None = None) -> None:
+    """Refuse (429) a follow past PLAYERS_MAX. A player the fan follows already is no new follow. With the player,
+    in the follow's transaction: one at a time per fan, so two follows at once can't both pass the count; without,
+    before anything is asked of a source."""
+    if player_id is not None:
+        db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"follow:{fan}", 0))))
+        if db.scalar(select(Follow.id).where(Follow.fan_id == fan, Follow.player_id == player_id)) is not None:
+            return
+    if (db.scalar(select(func.count()).select_from(Follow).where(Follow.fan_id == fan)) or 0) >= PLAYERS_MAX:
+        raise HTTPException(429, f"You follow {PLAYERS_MAX} players already: unfollow one to follow another.")
+
 
 def _registry_athlete(db: Session, body: dict) -> registry.Person | None:
     qid, sport = str(body.get("qid") or ""), str(body.get("sport") or "").lower()
@@ -1112,8 +1140,10 @@ def _holder(db: Session, system: str, external_id: str) -> int | None:
 
 def _same_athlete(person: registry.Person, ref: Any) -> bool:
     """Is the registry athlete sent with a pick the picked source athlete? The registry has this id for
-    them, or has none in this source and they match by birth date (or name and team). The client sends
-    both, so a crafted pair mustn't point the registry athlete at someone else for every fan after."""
+    them, or has none in this source and the source's own record of the athlete (read by id here) matches
+    them by name and birth date, or name and team (registry.same_person). The client sends both, so a
+    crafted pair mustn't point the registry athlete at someone else, a namesake or a stranger born the same
+    day, for every fan after."""
     adapter = ADAPTERS.get(ref.system)
     if adapter is None or person.sport not in adapter.sports:
         return False
@@ -1134,19 +1164,22 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
 
     A registry athlete is found in their sport's live source by the id Wikidata has, or by name and a
     matching birth date; one no source confirms is built by the research agent, which counts as an
-    AI research, and without research (config.RESEARCH) can't be followed.
+    AI research, and without research (config.RESEARCH) can't be followed. Asking a source counts against
+    the fan's and their address's minute (_source_lookup), and a fan follows at most PLAYERS_MAX players.
     """
     from .config import RESEARCH
 
     person = await in_db(_registry_athlete, body) if body.get("qid") else None
     if body.get("qid") and person is None:
         raise HTTPException(404, "That athlete isn't in the player registry.")
+    await in_db(_room_to_follow, fan)
     taken: list[str] = []
     if person and not body.get("system"):
         holder = await in_db(pipeline.registry_holder, person.qid, person.sport if body.get("sport") else None)
         if holder is not None:
             player_id, created, ref = holder, False, None
         else:
+            await _source_lookup(fan, address)
             found = await _resolve(person)
             if found is None and not RESEARCH:
                 raise HTTPException(404, f"No live source has {person.name}'s games, so they can't be followed here yet.")
@@ -1173,6 +1206,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
             raise HTTPException(400, "Pick an athlete from the search results.")
         if (system, athlete_id) in await in_db(registry.blocked):
             raise HTTPException(404, f"That athlete isn't on {APP_NAME}.")  # removed by an operator (players.py)
+        await _source_lookup(fan, address)
         try:
             ref = await asyncio.to_thread(adapter.player, athlete_id, league)
         except AdapterError as exc:
@@ -1183,6 +1217,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
         player_id, created = await asyncio.to_thread(pipeline.start_from_pick, adapter, ref)
 
     def save(db: Session) -> None:
+        _room_to_follow(db, fan, player_id)
         if person and (ref is None or _same_athlete(person, ref)):
             registry.link(db, player_id, person.qid)
         db.execute(insert(Follow).values(fan_id=fan, player_id=player_id, alert_rules={}).on_conflict_do_nothing())
@@ -1247,6 +1282,7 @@ async def follow(request: Request, body: dict = Body(...), fan: str = Depends(fa
             target = pipeline.resolve_or_create(db, query) if query is not None else player
         except ValueError:
             return None
+        _room_to_follow(db, fan, cast(Player, target).id)  # (a player asked for by id was found above)
         db.execute(insert(Follow).values(fan_id=fan, player_id=target.id, alert_rules={}).on_conflict_do_nothing())
         card_row = db.get(PlayerCard, target.id)
         needs_build = card_row is None or card_row.status in ("building", "failed")
@@ -1526,6 +1562,7 @@ def publisher(request: Request, db: Session = Depends(get_db)) -> ClipKey:
     key = clips.key_from(db, token) if token else None
     if key is None:
         raise HTTPException(401, "Send a publishing key: Authorization: Bearer slam_pk_…")
+    db.commit()  # its last use, and the connection back before the route waits for a thread (db.released)
     return key
 
 
@@ -1900,16 +1937,58 @@ async def admin_delete_user(account_id: RowId, body: dict = Body(...)) -> dict[s
 
 # ---------------------------------------------------------------- push notifications
 
-# Browsers hand us the address their push service delivers to. Only real push services are accepted,
-# so a crafted subscription can't make this server post to an arbitrary host.
-PUSH_HOSTS = ("fcm.googleapis.com", "android.googleapis.com", "updates.push.services.mozilla.com", ".push.apple.com", ".notify.windows.com")
+# Browsers hand us the address their push service delivers to. Only real push services are accepted: each one's own
+# host (Windows' has one a region), on the usual port with no user name, under the paths its subscriptions have. So a
+# crafted subscription can't make this server post to an arbitrary host, nor wait on a port of a real one that never
+# answers while other fans' alerts wait behind it (BUG-181), nor name a new push service in the metrics (BUG-089).
+PUSH_SERVICES = (
+    (re.compile(r"fcm\.googleapis\.com"), ("/fcm/send/", "/wp/")),  # Chrome and the browsers built on it
+    (re.compile(r"android\.googleapis\.com"), ("/gcm/send/",)),  # Chrome's older subscriptions
+    (re.compile(r"updates\.push\.services\.mozilla\.com"), ("/wpush/", "/push/")),  # Firefox
+    (re.compile(r"web\.push\.apple\.com"), ("/",)),  # Safari, and home-screen apps on an iPhone
+    (re.compile(r"[a-z0-9-]+\.notify\.windows\.com"), ("/w/",)),  # Edge on Windows
+)
 TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+# New devices (none already stored) one client address turns notifications on for in a UTC day: an IPv4 address is often
+# a carrier's or an office's, shared by many phones; an IPv6 /64 is one home or phone.
+DEVICES_PER_ADDRESS, DEVICES_PER_IPV6 = 50, 20
 
 
 def _push_host_ok(endpoint: str) -> bool:
     url = urlparse(endpoint)
     host = url.hostname or ""
-    return url.scheme == "https" and any(host == h or (h.startswith(".") and host.endswith(h)) for h in PUSH_HOSTS)
+    # The host alone, or with the usual port: no other port, no user name or password.
+    if url.scheme != "https" or url.netloc not in (host, f"{host}:443"):
+        return False
+    return any(service.fullmatch(host) and url.path.startswith(paths) for service, paths in PUSH_SERVICES)
+
+
+async def device_room(request: Request, body: dict = Body(...)) -> None:
+    """Room for one more new device from this client's address: a browser's subscription or the Android app's token
+    that isn't stored already, counted once a UTC day. Past the address's room (DEVICES_PER_ADDRESS, or
+    DEVICES_PER_IPV6), a 429: new cookies are free, so a fan's own cap (notify.MAX_DEVICES) doesn't bound one
+    network's (BUG-181). A device already on is never counted: each start of the app sends it again, and it moves
+    to whoever signs in on it."""
+    address = client_address(request)
+    sub = body.get("subscription")
+    device = _sent_text(sub.get("endpoint"), 999) if isinstance(sub, dict) else body.get("token")
+    if address is None or not isinstance(device, str) or not (_push_host_ok(device) if isinstance(sub, dict) else fcm.valid_token(device)):
+        return  # the route itself refuses what isn't a device
+    if await in_db(_device_stored, device):
+        return
+    redis = state["redis"]
+    key = f"push:devices:{address}:{datetime.now(timezone.utc).date().isoformat()}"
+    seen = hashlib.sha256(device.encode()).hexdigest()[:16]  # never the token itself: only the device has that
+    if await redis.sadd(key, seen):
+        await redis.expire(key, 2 * DAY)
+        if await redis.scard(key) > (DEVICES_PER_IPV6 if ":" in address else DEVICES_PER_ADDRESS):
+            await redis.srem(key, seen)
+            raise HTTPException(429, "Notifications have been turned on for a lot of devices on your network today. Try again tomorrow.")
+
+
+def _device_stored(db: Session, device: str) -> bool:
+    """Is this endpoint or token a device that gets notifications already, whoever's it is?"""
+    return db.scalar(select(PushSubscription.id).where(PushSubscription.endpoint == device)) is not None
 
 
 @app.get("/api/push")
@@ -1924,7 +2003,7 @@ def _sent_text(value: Any, longest: int) -> str | None:
     return value if isinstance(value, str) and 0 < len(value) <= longest and value.isprintable() else None
 
 
-@app.post("/api/push/subscriptions")
+@app.post("/api/push/subscriptions", dependencies=[Depends(device_room)])
 def subscribe(body: dict = Body(...), fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Turn notifications on for this device (or update its quiet hours). Signed in, the device belongs
     to this session: signing out turns it off."""
@@ -1986,7 +2065,7 @@ def _device_settings(body: dict) -> tuple[str, str | None, str | None]:
     return tz, start, end
 
 
-@app.post("/api/push/fcm")
+@app.post("/api/push/fcm", dependencies=[Depends(device_room)])
 def register_fcm(body: dict = Body(...), fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of), db: Session = Depends(get_db)) -> dict[str, Any]:
     """The Android app turns notifications on for this device with its FCM token (or updates its quiet
     hours, or its live cards: `live_cards`, Alerts' Live scores), as a browser does with its subscription.
@@ -2062,11 +2141,26 @@ def unregister_fcm(body: dict = Body(...), fan: str = Depends(fan_id), db: Sessi
     return {"ok": True}
 
 
+PUSH_TESTS_PER_FAN = 5  # an hour
+PUSH_TESTS_PER_ADDRESS = 20  # an hour, from one client address (an IPv6 /64)
+
+
 @app.post("/api/push/test")
-async def push_test(fan: str = Depends(fan_id)) -> dict[str, int]:
+async def push_test(request: Request, fan: str = Depends(fan_id)) -> dict[str, int]:
+    """A test notification to each of this fan's devices. A fan and an address send only so many an hour: past
+    either, a 429. The pushes go on notify's own threads and are waited for on none (notify.send_test), so devices
+    that never answer hold up nothing but other test pushes, never search, following or sign-in (BUG-182)."""
     if notify.public_key() is None and not fcm.enabled():
         raise HTTPException(503, "Notifications aren't set up on this server yet.")
-    return {"sent": await asyncio.to_thread(notify.send_test, fan)}
+    address = client_address(request)
+    limits = [(f"pushtest:fan:{fan}", PUSH_TESTS_PER_FAN)] + ([(f"pushtest:address:{address}", PUSH_TESTS_PER_ADDRESS)] if address else [])
+    for key, limit in limits:
+        used = await state["redis"].incr(key)
+        await state["redis"].expire(key, 3600, nx=True)  # the hour's end, set once: more tries don't push it back
+        if used > limit:
+            raise HTTPException(429, "That's a lot of test notifications for one hour. Try again later.")
+    devices = await in_db(notify.newest_devices, fan)
+    return {"sent": await notify.send_test(devices)}
 
 
 @app.post("/api/notifications/{notification_id}/opened")
@@ -2135,7 +2229,7 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
         .outerjoin(NotificationMute, and_(NotificationMute.fan_id == fan, NotificationMute.event_id == Moment.event_id))
         .outerjoin(taken, taken.id == Moment.corrects)
         .where(Moment.player_id.is_(None), game_level != "off", Moment.created_at >= MatchFollow.created_at, or_(MatchFollow.until.is_(None), Moment.created_at <= MatchFollow.until))
-        .where(teams.for_fan(fan))  # a result told from a side's is for that team's fans
+        .where(teams.for_fan(fan))  # a result told from a side's is for that team's fans, and once
         .where(Moment.created_at >= func.now() - timedelta(days=ACTIVITY_DAYS), or_(Moment.corrects.is_(None), taken.created_at >= MatchFollow.created_at))
         .order_by(Moment.id.desc())
         .limit(limit)
@@ -2145,9 +2239,10 @@ def activity(before: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, limit
         query = query.where(Moment.id < before)
         games = games.where(Moment.id < before)
         sided = sided.where(Moment.id < before)
+    # Each list's newest `limit` moments, each once (a game followed by itself and through a team is in two): the
+    # newest `limit` of them all are the page, and while it's full there may be more after its last.
     found = [(m, None, event, muted, sport) for m, event, muted, sport in [*db.execute(games), *db.execute(sided)]]
-    rows = sorted([(m, name, event, muted, None) for m, name, event, muted in db.execute(query)] + list({r[0].id: r for r in found}.values()), key=lambda r: -r[0].id)
-    rows = teams.listed(rows)[:limit]  # a game's result from their team's side, in place of the game's own
+    rows = sorted([(m, name, event, muted, None) for m, name, event, muted in db.execute(query)] + list({r[0].id: r for r in found}.values()), key=lambda r: -r[0].id)[:limit]
     # A game's moment that one of the fan's players' says too is listed once, as their player's; and so is a chess
     # board's that two of them say, once from each side, as the one's whose side tells it (alerts.voiced_by).
     planned = {i.id: i for i in notify.for_games(db, notify.on_boards(db, [r[0] for r in rows]))}
@@ -2169,8 +2264,8 @@ def this_week(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict
     """Today's "This week" and the Wire (week.py): the big moments of the fan's players over the last seven
     days, as each sport words them for a poster, biggest first; and the Wire: their players' facts (who's out,
     who's back), line-ups and news, newest first, then facts about a few of the best-known players they don't
-    follow, which a fan who follows nobody gets too."""
-    return {"posters": week.posters(db, fan), "wire": week.wire(db, fan)}
+    follow, which a fan who follows nobody gets too. Kept a minute per fan (week.mine)."""
+    return week.mine(db, fan)
 
 
 @app.get("/api/players/{player_id}/feed")
@@ -2199,35 +2294,59 @@ def feed_feedback(player_id: RowId, item_id: str, body: dict = Body(...), fan: s
     return {"item_id": item_id, "hidden": True}
 
 
+def _voter(address: str | None, fan: str) -> str:
+    """Whose vote a "won't play" report is (feed_unplayable): its network's, an IPv6 one's /48 (a home or an office
+    may hold all of it, a /64 a device), else, with no public address to go by, the fan's."""
+    if not address:
+        return f"fan:{fan}"
+    network = ipaddress.ip_network(address, strict=False)
+    return str(network.supernet(new_prefix=48)) if network.version == 6 else address
+
+
 @app.post("/api/players/{player_id}/feed/{item_id}/unplayable")
 async def feed_unplayable(player_id: RowId, item_id: str, request: Request, fan: str = Depends(fan_id)) -> dict[str, Any]:
-    """The fan's app says this video of the player's feed won't play inside it: the video's own player refused it
-    (feed.unplayable). It leaves every fan's Feed; the app opens it on its site instead, and an admin approving or
-    pinning it brings it back. Saying it again changes nothing. A fan says so only so many times an hour, and an
-    address and everyone together mark only so many videos: past either, a 429. Only a mark counts against the
-    address's and everyone's, so junk ids and a video said of again don't use up what a real one needs."""
+    """The fan's app says this video of the player's feed won't play inside it: the video's own player refused it.
+    It leaves their Feed at once (feed.said_unplayable), and it's their network's vote on whether it leaves every
+    fan's: once feed.UNPLAYABLE_VOTES networks have said so, it does (feed.unplayable; "marked"), and an admin
+    approving or pinning it brings it back. The app opens it on its site instead. Saying it again changes nothing.
+    A fan says so only so many times an hour, and an address and everyone together vote only so many times: past
+    any, a 429. Each count is taken before the report is acted on, so reports arriving together can't all pass, and
+    given back when it's refused; the address's and everyone's too when it isn't a new vote, so junk ids and a video
+    said of again don't use up what a real one needs."""
     refused = "That's a lot of videos that won't play for one hour. Try again later."
     redis = state["redis"]
-    mine = f"feed:unplayable:fan:{fan}"
-    used = await redis.incr(mine)
-    await redis.expire(mine, 3600, nx=True)  # the hour's end, set once
-    if used > feed.UNPLAYABLE_PER_FAN:
-        raise HTTPException(429, refused)
     address = client_address(request)
-    shared = [("feed:unplayable:all", feed.UNPLAYABLE_PER_HOUR)] + ([(f"feed:unplayable:address:{address}", feed.UNPLAYABLE_PER_ADDRESS)] if address else [])
-    for key, limit in shared:
-        if int(await redis.get(key) or 0) >= limit:
+    limits = [(f"feed:unplayable:fan:{fan}", feed.UNPLAYABLE_PER_FAN), ("feed:unplayable:all", feed.UNPLAYABLE_PER_HOUR)]
+    if address:
+        limits.insert(1, (f"feed:unplayable:address:{address}", feed.UNPLAYABLE_PER_ADDRESS))
+
+    async def give_back(keys: list[str]) -> None:
+        for key in keys:
+            await redis.eval(GIVE_BACK, 1, key)
+
+    taken: list[str] = []
+    for key, limit in limits:
+        used = await redis.incr(key)
+        taken.append(key)
+        await redis.expire(key, 3600, nx=True)  # the hour's end, set once
+        if used > limit:
+            await give_back(taken)
             raise HTTPException(429, refused)
+    shared = taken[1:]  # the address's and everyone's
     try:
-        marked = await in_db(feed.unplayable, player_id, item_id)
+        video = await in_db(feed.said_unplayable, fan, player_id, item_id)
     except ValueError as exc:
+        await give_back(shared)
         raise HTTPException(422, str(exc)) from exc
     except LookupError as exc:
+        await give_back(shared)
         raise HTTPException(404, str(exc)) from exc
-    if marked:
-        for key, _ in shared:
-            await redis.incr(key)
-            await redis.expire(key, 3600, nx=True)
+    votes = f"feed:unplayable:votes:{video}"
+    if video is None or not await redis.sadd(votes, _voter(address, fan)):  # an admin vouched for it, or this network said so before
+        await give_back(shared)
+        return {"item_id": item_id, "unplayable": True, "marked": False}
+    await redis.expire(votes, feed.UNPLAYABLE_VOTES_FOR)
+    marked = await redis.scard(votes) >= feed.UNPLAYABLE_VOTES and await in_db(feed.unplayable, player_id, item_id)
     return {"item_id": item_id, "unplayable": True, "marked": marked}
 
 
@@ -2378,16 +2497,31 @@ def _search(q: str, sport: str | None, fan: str, may_ask: Callable[[], bool]) ->
         return {**found, "teams": teams.find(db, found.get("query") or q, found.get("sport"), fan)}
 
 
+async def _in_minute(kind: str, fan: str, address: str | None, per_fan: int, per_address: int) -> bool:
+    """Count one of a fan's requests of a kind against their minute and their address's; False when either is
+    over. A minute starts at its first such request."""
+    for key, limit in [(f"{kind}:fan:{fan}", per_fan), *([(f"{kind}:address:{address}", per_address)] if address else [])]:
+        used = await state["redis"].incr(key)
+        await state["redis"].expire(key, 60, nx=True)  # the minute's end, set once (a count without one would never end)
+        if used > limit:
+            return False
+    return True
+
+
 async def _source_search_allowed(fan: str, address: str | None) -> bool:
     """Count a search that goes on to the sources' own against the fan's minute and their address's.
     Over either, it doesn't go: a script sending a new name each time would otherwise keep the sources
-    (and the search's threads) busy for everyone. A minute starts at its first such search."""
-    for key in [f"sourcesearch:fan:{fan}", *([f"sourcesearch:address:{address}"] if address else [])]:
-        used = await state["redis"].incr(key)
-        await state["redis"].expire(key, 60, nx=True)  # the minute's end, set once (a count without one would never end)
-        if used > SOURCE_SEARCHES_PER_MINUTE:
-            return False
-    return True
+    (and the search's threads) busy for everyone."""
+    return await _in_minute("sourcesearch", fan, address, SOURCE_SEARCHES_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE)
+
+
+async def _source_lookup(fan: str, address: str | None) -> None:
+    """Count a preview or follow that asks a live source for an athlete not on the app yet against the fan's
+    minute (SOURCE_LOOKUPS_PER_MINUTE) and their address's (SOURCE_LOOKUPS_PER_ADDRESS); over either, a 429.
+    A script walking a source's ids would otherwise spend fans' share of it for everyone, and make a player
+    for each."""
+    if not await _in_minute("sourcelookup", fan, address, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_LOOKUPS_PER_ADDRESS):
+        raise HTTPException(429, "You've looked up a lot of new athletes this minute. Try again in a minute.")
 
 
 @app.get("/api/search")
@@ -2404,15 +2538,17 @@ async def search(request: Request, q: str, sport: str | None = None, fan: str = 
 
 
 @app.get("/api/athletes/wikidata/{qid}")
-async def registry_preview(qid: str, sport: str | None = None) -> dict[str, Any]:
+async def registry_preview(request: Request, qid: str, sport: str | None = None, fan: str = Depends(fan_id)) -> dict[str, Any]:
     """A registry athlete before following: their live-source preview once the source is found, or
-    what the registry knows when no source has them (following then builds the page with AI)."""
+    what the registry knows when no source has them (following then builds the page with AI). Looking
+    them up in their source counts against the fan's and their address's minute (_source_lookup)."""
     person = await in_db(_registry_athlete, {"qid": qid, "sport": sport})
     if person is None:
         raise HTTPException(404, "No such athlete.")
     holder = await in_db(pipeline.registry_holder, person.qid, person.sport if sport else None)
     if holder is not None:
         return {"player_id": holder}
+    await _source_lookup(fan, client_address(request))
     found = await _resolve(person)
     athlete = await in_db(registry.get, person.qid, person.sport)
     photo = await in_db(photos.of_file, athlete.image) if athlete else None
@@ -2438,14 +2574,17 @@ async def registry_preview(qid: str, sport: str | None = None) -> dict[str, Any]
 
 
 @app.get("/api/athletes/{system}/{athlete_id}")
-async def athlete_preview(system: str, athlete_id: str, league: str | None = None) -> dict[str, Any]:
+async def athlete_preview(request: Request, system: str, athlete_id: str, league: str | None = None, fan: str = Depends(fan_id)) -> dict[str, Any]:
     """What following a search result would show, before following. An athlete already on Sports
-    Follow answers with their player id; the app opens their page instead."""
+    Follow answers with their player id; the app opens their page instead. A preview not kept from a
+    moment ago asks the source, which counts against the fan's and their address's minute (_source_lookup)."""
     if system not in ADAPTERS or not _source_id_ok(system, athlete_id) or not _league_ok(league) or (system, athlete_id) in await in_db(registry.blocked):
         raise HTTPException(404, "No such athlete.")
     holder = await in_db(_holder, system, athlete_id)
     if holder is not None:
         return {"player_id": holder}
+    if not player_search.previewed(system, athlete_id):
+        await _source_lookup(fan, client_address(request))
     try:
         found = await asyncio.to_thread(player_search.preview, system, athlete_id, league)
     except AdapterError as exc:

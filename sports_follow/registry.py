@@ -7,7 +7,7 @@ Transfermarkt (and sometimes ESPN) for footballers. The importer copies every on
 
 An athlete whose live-source id Wikidata lacks (most footballers have only a Transfermarkt id) is
 looked up in the live source by name when someone follows or previews them, and accepted only if the
-birth date agrees (resolve); the id found is kept, so it's a lookup by id from then on.
+names and the birth date agree (resolve); the id found is kept, so it's a lookup by id from then on.
 
     .venv/bin/python -m sports_follow.registry            # import every sport, smallest first
     .venv/bin/python -m sports_follow.registry chess      # one sport
@@ -57,7 +57,12 @@ WDQS = "https://query.wikidata.org/sparql"
 BATCH = 2000
 NAMESAKES = 40  # athletes with exactly the typed name that search lists, all for the picker (the most is 30)
 LABEL_LANGS = ("en", "mul", "es", "pt", "fr", "de", "it", "nl")
-MAX_ALIASES = 8
+# Aliases and the names of teams and other items: English, then "mul", the name every language shares, where
+# Wikidata keeps most people's other names now ("Leo Messi", "MSD") and many clubs' names.
+NAME_LANGS = ("en", "mul")
+# A star has many (MS Dhoni 18, 14 that search tells apart): room for every name fans type ("MSD" is Wikidata's
+# tenth of his). search_text's only index is a trigram one (GIN), with no limit on a row's length.
+MAX_ALIASES = 16
 
 # The sports this build runs that are imported from Wikidata (sports.Sport.wikidata: who counts as one of their athletes, and the
 # ids kept), smallest first, so a first import has most sports searchable long before football is done;
@@ -169,17 +174,18 @@ def fetch(sport: str, qids: list[str]) -> tuple[list[dict], list[dict], list[dic
       OPTIONAL {{ ?p wdt:P27 ?c2 . ?c2 rdfs:label ?citizenship FILTER(LANG(?citizenship) = "en") }}
       {title} {ids} }}""")
     langs = ", ".join(f'"{lang}"' for lang in LABEL_LANGS)
+    named_in = ", ".join(f'"{lang}"' for lang in NAME_LANGS)
     names = sparql(f"""SELECT ?p ?n ?kind (LANG(?n) AS ?lang) WHERE {{
       VALUES ?p {{ {values} }}
       {{ ?p rdfs:label ?n FILTER(LANG(?n) IN ({langs})) BIND("label" AS ?kind) }}
-      UNION {{ ?p skos:altLabel ?n FILTER(LANG(?n) = "en") BIND("alias" AS ?kind) }} }}""")
+      UNION {{ ?p skos:altLabel ?n FILTER(LANG(?n) IN ({named_in})) BIND("alias" AS ?kind) }} }}""")
     teams: list[dict] = []
     if kind.team:
-        teams = sparql(f"""SELECT ?p ?team ?teamLabel ?start WHERE {{
+        teams = sparql(f"""SELECT ?p ?team ?teamLabel ?start (LANG(?teamLabel) AS ?lang) WHERE {{
           VALUES ?p {{ {values} }}
           ?p p:P54 ?st . ?st ps:P54 ?team . FILTER NOT EXISTS {{ ?st pq:P582 [] }}
           OPTIONAL {{ ?st pq:P580 ?start }}
-          ?team rdfs:label ?teamLabel FILTER(LANG(?teamLabel) = "en") }}""")
+          ?team rdfs:label ?teamLabel FILTER(LANG(?teamLabel) IN ({named_in})) }}""")
     return core, names, teams
 
 
@@ -253,20 +259,24 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
             if r.get(f"id_{key}"):
                 p["ids"].setdefault(key, r[f"id_{key}"])
     labels: dict[str, dict[str, str]] = {}
-    aliases: dict[str, list[str]] = {}
+    aliases: dict[str, list[tuple[str, str]]] = {}
     for r in names:
         qid = _qid(r["p"])
         if r["kind"] == "label":
             labels.setdefault(qid, {})[r.get("lang", "")] = r["n"]
         else:
-            aliases.setdefault(qid, []).append(r["n"])
-    current_teams: dict[str, list[tuple[str, str, bool]]] = {}
+            aliases.setdefault(qid, []).append((r.get("lang") or "en", r["n"]))
+    # A team named in English and in "mul" is one team, by its English name.
+    team_labels: dict[tuple[str, str, str], dict[str, str]] = {}
     for r in teams:
-        label = r.get("teamLabel") or ""
+        stint = (_qid(r["p"]), r.get("team") or r.get("teamLabel") or "", r.get("start") or "")
+        team_labels.setdefault(stint, {})[r.get("lang") or "en"] = r.get("teamLabel") or ""
+    current_teams: dict[str, list[tuple[str, str, bool]]] = {}
+    for (qid, _, start), by_lang in team_labels.items():
+        label = next((by_lang[lang] for lang in NAME_LANGS if lang in by_lang), "")
         if not keeps_team(kind, label):
             continue
-        national = is_national(label)
-        current_teams.setdefault(_qid(r["p"]), []).append((r.get("start") or "", team_name(label), national))
+        current_teams.setdefault(qid, []).append((start, team_name(label), is_national(label)))
 
     rows = []
     for qid, p in people.items():
@@ -275,7 +285,12 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
         if not name or p["dead"] or not p["ids"] or not words(name):
             continue
         folded = " ".join(words(name))
-        extra = [a for a in dict.fromkeys(aliases.get(qid, [])) if " ".join(words(a)) not in ("", folded)][:MAX_ALIASES]
+        # English aliases first, then "mul"'s; one that search can't tell from one already kept ("M. S. Dhoni"
+        # after "M.S. Dhoni") takes no place.
+        spelled: dict[str, str] = {}
+        for _, alias in sorted(aliases.get(qid, []), key=lambda la: NAME_LANGS.index(la[0]) if la[0] in NAME_LANGS else len(NAME_LANGS)):
+            spelled.setdefault(" ".join(words(alias)), alias)
+        extra = [a for f, a in spelled.items() if f not in ("", folded)][:MAX_ALIASES]
         stints = sorted(current_teams.get(qid, []), key=lambda t: t[0], reverse=True)
         birth: date | None = p.get("birth")
         age = (today - birth).days // 365 if birth else None
@@ -636,8 +651,8 @@ def date_precision(born: date | None, stored: int | None) -> int:
 
 def same_day(born: date | None, source: str | None, stored: int | None = None) -> bool | None:
     """Whether a Wikidata birth date and a source's agree, as far as Wikidata knows it (stored: its
-    precision); None if either is missing. ESPN writes day/month/year, but a day of 12 or less could be
-    either way round, so both readings count."""
+    precision); None if either is missing. A source's date is ISO, its own order read by its adapter
+    (ESPN's day/month/year: espn.birth_date), so a day and month the other way round is another day."""
     if born is None or not source:
         return None
     try:
@@ -648,17 +663,15 @@ def same_day(born: date | None, source: str | None, stored: int | None = None) -
     if known <= YEAR:
         return y == born.year
     if known == MONTH:
-        return y == born.year and born.month in (m, d)
-    return (y, m, d) == (born.year, born.month, born.day) or (y, d, m) == (born.year, born.month, born.day)
+        return (y, m) == (born.year, born.month)
+    return (y, m, d) == (born.year, born.month, born.day)
 
 
 def same_person(person: Person, ref: PlayerRef) -> bool:
-    """Is this source athlete the registry's person? The birth date decides when both know it to the
-    day; a date Wikidata knows only to the year (or month) must agree and the names match too.
-    Otherwise the whole name must match and, in team sports, a team too."""
+    """Is this source athlete the registry's person? When both know the birth date, it must agree as far as
+    Wikidata knows it, and the names match too: someone else born the same day isn't them. Otherwise the
+    whole name must match and, in team sports, a team too."""
     agree = same_day(person.birth_date, ref.born, person.birth_precision)
-    if agree is not None and date_precision(person.birth_date, person.birth_precision) == DAY:
-        return agree
     names = [person.name, *person.aliases]
     if agree is not None:
         return agree and any(naming.names_match(n, ref.name) for n in names)

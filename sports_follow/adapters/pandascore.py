@@ -36,7 +36,10 @@ HOURLY = 1000
 # Requests kept back for live series: background reads (refreshes, the registry import, history.py) stop
 # when the hour's remaining allowance falls this low, and start again when the hour resets.
 LIVE_RESERVE = int(os.environ.get("SPORTS_FOLLOW_PANDASCORE_RESERVE", 300))
-BUDGET = budget.Budget("pandascore", windows=(budget.Window(3600, HOURLY),), reserve=LIVE_RESERVE, urls=(BASE + "/",))
+# Requests an hour fans' searches, previews and follows may take: one follow is a request or two, but a loop of
+# previews would spend what live series need. Half the reserve, so live series keep the rest whatever fans do.
+FANS = 150
+BUDGET = budget.Budget("pandascore", windows=(budget.Window(3600, HOURLY),), reserve=LIVE_RESERVE, fan=FANS, urls=(BASE + "/",))
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20)
 _cache = cache.Cache(BUDGET.name)

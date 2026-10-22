@@ -288,6 +288,7 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
         # The XI, named at the toss; an impact player waiting to come in is a substitute.
         squad={str(p["id"]): "bench" if (p.get("lineup") or {}).get("substitution") else "starting" for p in x.get("lineup") or [] if p.get("id")},
         names={str(p["id"]): p["fullname"] for p in x.get("lineup") or [] if p.get("id") and p.get("fullname")},
+        sides={str(p["id"]): str(side) for p in x.get("lineup") or [] if p.get("id") and (side := (p.get("lineup") or {}).get("team_id"))},
     )
 
 

@@ -41,6 +41,10 @@ jobs:
           python-version: "3.14"  # as in the Dockerfile
           cache: pip
           cache-dependency-path: requirements*.txt
+      # Node runs a few tests of the apps' shared TypeScript (tests/test_web_refetch.py): 22.6 or later reads .ts.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22  # as in the web and mobile jobs
       - name: Install Stockfish
         run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends stockfish
       - name: Install dependencies

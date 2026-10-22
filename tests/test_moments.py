@@ -7,10 +7,14 @@ import base64
 import json
 import logging
 import os
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
 import pywebpush
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -366,6 +370,7 @@ def test_a_batchs_line_has_its_numbers_for_the_notifications_dashboard(monkeypat
     monkeypatch.setattr(notify, "_plan", lambda db, items, at, taken_back: devices)
     monkeypatch.setattr(notify, "push", lambda endpoint, *rest: None if "fcm" in endpoint else 410)
     monkeypatch.setattr(notify, "_settle", lambda results: None)
+    monkeypatch.setattr(notify, "_proven", lambda device_ids: device_ids)
     monkeypatch.setattr(notify.bus, "publish", lambda *args: None)
     caplog.set_level(logging.INFO, "sports_follow")
     assert notify.send([1], now) == 1
@@ -427,7 +432,129 @@ def test_only_real_push_services_are_accepted():
     assert not _push_host_ok("https://evil.example/fcm.googleapis.com")
 
 
-FOOTBALL = {"kind": "football", "home": {"id": "1", "name": "Egypt", "score": "1"}, "away": {"id": "2", "name": "South Africa", "score": "1"}}
+def test_a_push_address_is_a_real_services_own_on_its_usual_port():
+    # BUG-181: the host alone was checked, so a subscription could name a port of Google's that never answers, and
+    # every push to it waited out its timeout on each of the host's addresses (BUG-089: and any subdomain minted a series).
+    from sports_follow.server import _push_host_ok
+
+    for endpoint in ("https://fcm.googleapis.com/fcm/send/abc", "https://fcm.googleapis.com:443/fcm/send/abc", "https://fcm.googleapis.com/wp/abc",
+                     "https://android.googleapis.com/gcm/send/abc", "https://updates.push.services.mozilla.com/wpush/v2/gAAAAAB",
+                     "https://web.push.apple.com/QGuOc3Z8", "https://wns2-par02p.notify.windows.com/w/?token=BQYAAAB"):
+        assert _push_host_ok(endpoint), endpoint
+    for endpoint in ("https://fcm.googleapis.com:8443/fcm/send/abc", "https://fcm.googleapis.com:80/fcm/send/abc", "https://fcm.googleapis.com:/fcm/send/abc",
+                     "https://user@fcm.googleapis.com/fcm/send/abc", "https://user:secret@fcm.googleapis.com/fcm/send/abc",
+                     "https://fcm.googleapis.com/v1/projects/x/messages:send", "https://fcm.googleapis.com", "https://fcm.googleapis.com./fcm/send/abc",
+                     "https://updates.push.services.mozilla.com/other", "https://anything.push.apple.com/QGx", "https://a.b.notify.windows.com/w/?token=x",
+                     "https://wns2-par02p.notify.windows.com/x"):
+        assert not _push_host_ok(endpoint), endpoint
+
+
+class Wire:
+    """Push services for notify.deliver: a device whose endpoint says "hang" never answers till `release`; every
+    other takes its push at once. `took` is when each took one; `settled` what was written back, batch or late."""
+
+    def __init__(self):
+        self.release, self.reached = threading.Event(), threading.Condition()
+        self.took: dict[int, float] = {}
+        self.settled: list[tuple[int, int, int | str | None]] = []
+        self.proven: set[int] = set()
+        self.senders: list[threading.Thread] = []
+        self.start = time.monotonic()
+
+    def deliver(self, device, payload, ttl, topic=None):
+        if "hang" in device[2]:
+            self.release.wait(30)
+            return "Read timed out."
+        with self.reached:
+            self.took[device[0]] = time.monotonic() - self.start
+            self.reached.notify_all()
+        return None
+
+    def took_by(self, device_id: int, seconds: float) -> bool:
+        with self.reached:
+            return self.reached.wait_for(lambda: device_id in self.took, seconds)
+
+
+@pytest.fixture
+def wire(monkeypatch):
+    """Fresh push threads, sending to Wire's push services; the devices in `wire.proven` took their last push."""
+    fake = Wire()
+    pools = {"_wire": ThreadPoolExecutor(max_workers=16), "_doubt": ThreadPoolExecutor(max_workers=8)}
+    for name, pool in pools.items():
+        monkeypatch.setattr(notify, name, pool, raising=False)
+    monkeypatch.setattr(notify, "deliver", fake.deliver)
+    monkeypatch.setattr(notify, "_settle", fake.settled.extend)
+    monkeypatch.setattr(notify, "_proven", lambda device_ids: fake.proven & set(device_ids), raising=False)
+    monkeypatch.setattr(notify.metrics, "pushes", lambda *args: None)
+    monkeypatch.setattr(notify, "DELIVER_WAIT", 1.0, raising=False)
+    yield fake
+    fake.release.set()
+    for sender in fake.senders:  # done before the fakes go: a batch's sender writes back after its wait
+        sender.join(10)
+    for pool in pools.values():
+        pool.shutdown(wait=True)
+
+
+def _hanging(fans: range, devices: int = notify.MAX_DEVICES) -> list[tuple]:
+    """Each fan's push (notification id = the fan) to that many devices that never answer, newest first, as _plan lists them."""
+    return [(fan, (fan * 100 + d, "webpush", f"https://hang.example/{fan}/{d}", "k", "a"), {}, 60, "e1") for fan in fans for d in range(devices, 0, -1)]
+
+
+def _sending(wire: Wire, jobs: list[tuple], now: datetime) -> tuple[threading.Thread, list[int]]:
+    """_deliver on a thread of its own, as a batch's sender runs it; what it returned, once it has."""
+    returned: list[int] = []
+    item = SimpleNamespace(id=1, created_at=now)
+    sender = threading.Thread(target=lambda: returned.append(notify._deliver(jobs, [item], now)), daemon=True)
+    wire.senders.append(sender)
+    sender.start()
+    return sender, returned
+
+
+def test_devices_that_never_answer_hold_up_no_device_that_takes_pushes(wire):
+    # BUG-181, H3's repro: four anonymous fans with ten devices each that never answer follow Saka, as a real fan
+    # does. Newest first, theirs went ahead of the real fan's, sixteen at a time on the push threads every batch
+    # shares: the real fan's goal started after 160 s, and the next batch's waited too.
+    now = datetime.now(timezone.utc)
+    real = (9, (7, "webpush", "https://fcm.googleapis.com/fcm/send/real", "k", "a"), {}, 60, "e1")
+    wire.proven = {7, 8}
+    sender, returned = _sending(wire, [*_hanging(range(1, 5)), real], now)
+    assert wire.took_by(7, 2.0)
+    # Another player's goal, a batch of its own, while those devices still hang.
+    other = (10, (8, "webpush", "https://web.push.apple.com/other", "k", "a"), {}, 60, "e2")
+    _, also = _sending(wire, [other], now)
+    assert wire.took_by(8, 2.0)
+    # The batch waits only so long for the rest (DELIVER_WAIT): it says what it knows, and its sender goes on.
+    sender.join(3.0)
+    assert not sender.is_alive() and returned == [1] and also == [1]
+    assert sorted((n, d, e) for n, d, e in wire.settled if d in (7, 8)) == [(9, 7, None), (10, 8, None)]
+    # The others are written back as they end, as having failed.
+    wire.release.set()
+    deadline = time.monotonic() + 5
+    while len(wire.settled) < 42 and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert sorted(d for _, d, e in wire.settled if e is not None) == sorted(device[0] for _, device, *_ in _hanging(range(1, 5)))
+
+
+def test_one_fans_many_devices_never_go_ahead_of_another_fans_first(wire):
+    # Two fans' twenty devices that never answer, and a third fan's new phone (none of them has taken a push yet):
+    # every fan's first device goes before any fan's second, so the phone isn't behind the twenty.
+    now = datetime.now(timezone.utc)
+    phone = (3, (5, "webpush", "https://fcm.googleapis.com/fcm/send/phone", "k", "a"), {}, 60, "e1")
+    _sending(wire, [*_hanging(range(1, 3)), phone], now)
+    assert wire.took_by(5, 2.0)
+
+
+def test_a_push_service_gets_two_seconds_to_connect(monkeypatch):
+    # BUG-181: ten seconds a push, on each of a host's addresses: ~80 s for a device that never answers.
+    asked: list = []
+    monkeypatch.setattr(pywebpush, "webpush", lambda **kwargs: asked.append(kwargs["timeout"]))
+    monkeypatch.setattr(notify, "signer", lambda: None)
+    assert notify.push("https://fcm.googleapis.com/fcm/send/abc", "key", "auth", {"title": "Goal"}, 600) is None
+    [(connect, read)] = asked
+    assert connect <= 2 and read <= 10
+
+
+FOOTBALL ={"kind": "football", "home": {"id": "1", "name": "Egypt", "score": "1"}, "away": {"id": "2", "name": "South Africa", "score": "1"}}
 
 
 def test_the_line_up_before_the_start():

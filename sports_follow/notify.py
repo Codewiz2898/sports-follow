@@ -23,6 +23,7 @@ browser's push stays as it was.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -30,10 +31,11 @@ import os
 import sys
 from collections import Counter
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import replace
 from datetime import datetime, time as clock, timedelta, timezone
-from functools import lru_cache
+from functools import lru_cache, partial
+from itertools import zip_longest
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
@@ -84,8 +86,19 @@ WORDS = {"final": "Result", "start": "Live", "lineup": "Line-up", "news": "News"
 WORD_CHARS = 20
 STORY_LINES, STORY_CHARS = 3, 80  # the earlier lines under a scorecard's, each cut to this
 
+# Seconds a push service has to take a Web Push's connection (on each of its host's addresses), then to answer:
+# a device that never answers costs its push thread this long, not minutes (BUG-181). FCM's are fcm.TIMEOUT.
+CONNECT_TIMEOUT, READ_TIMEOUT = 2, 5
+DELIVER_WAIT = 15  # seconds a batch waits for its pushes: one still going then is written back when it ends
+TEST_WAIT = 10  # seconds a test push is waited for (send_test)
+
 _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="notify")  # batches
-_wire = ThreadPoolExecutor(max_workers=16, thread_name_prefix="push")  # one push to one device each
+# One push to one device each. A device that took its last push goes by _wire; a new one, or one failing lately, by
+# _doubt. So devices that never answer (a push service that's down, or subscriptions made to hang) hold up only
+# others like them, never the pushes to devices that work, in their batch or any other (BUG-181).
+_wire = ThreadPoolExecutor(max_workers=16, thread_name_prefix="push")
+_doubt = ThreadPoolExecutor(max_workers=8, thread_name_prefix="push-doubt")
+_tests = ThreadPoolExecutor(max_workers=4, thread_name_prefix="push-test")  # test pushes (send_test), apart from the API's threads
 
 
 # ---------------------------------------------------------------- keys
@@ -285,21 +298,61 @@ def send(moment_ids: list[int], now: datetime | None = None) -> int:
 
 def _deliver(jobs: list[tuple[int, tuple, dict[str, Any], int, str]], items: list[alerts.Item], now: datetime) -> int:
     """Push planned notifications to each of their devices at once, and write back what the push services said.
-    Returns how many devices took one."""
+    Devices that took their last push go by _wire, the rest by _doubt, each in turns (_fair). The batch waits at
+    most DELIVER_WAIT: a push still going then is written back when it ends (_settle_late), so a device that never
+    answers keeps neither the batch nor its sender waiting. Returns how many devices took one in that time."""
     if not jobs:
         return 0
-    futures = [(notification_id, device, _wire.submit(logs.carried(deliver), device, payload, ttl, topic)) for notification_id, device, payload, ttl, topic in jobs]
-    results = [(notification_id, device[0], future.result()) for notification_id, device, future in futures]
-    _settle(results)
+    try:
+        proven = _proven({device[0] for _, device, *_ in jobs})
+    except Exception:
+        log.exception("moments %s: devices' health unread, all sent as ones that work", [i.id for i in items])
+        proven = {device[0] for _, device, *_ in jobs}
+    futures = [(notification_id, device, (_wire if device[0] in proven else _doubt).submit(logs.carried(deliver), device, payload, ttl, topic))
+               for notification_id, device, payload, ttl, topic in _fair(jobs)]
+    done, going = wait([future for *_, future in futures], timeout=DELIVER_WAIT)
+    results = [(notification_id, device, future.result()) for notification_id, device, future in futures if future in done]
+    for notification_id, device, future in futures:
+        if future in going:
+            future.add_done_callback(logs.carried(partial(_settle_late, notification_id, device)))
+    _settle([(notification_id, device[0], error) for notification_id, device, error in results])
     sent = sum(1 for _, _, error in results if error is None)
-    pushes = len({n for n, _, _ in results})
+    pushes = len({n for n, *_ in jobs})
     # The numbers as fields too, for the Notifications dashboard (deploy/grafana/): among them how long
     # the oldest moment waited, from its poll or build finding it to its push.
     waited = max((now - item.created_at).total_seconds() for item in items)
-    metrics.pushes([(_service(device), error) for (_, device, _), (_, _, error) in zip(futures, results)], waited)
-    log.info("moments %s: %d push(es) to %d of %d device(s)", [i.id for i in items], pushes, sent, len(results),
-             extra={"moments": len(items), "pushes": pushes, "devices": len(results), "delivered": sent, "waited_ms": round(waited * 1000)})
+    metrics.pushes([(_service(device), error) for _, device, error in results], waited)
+    log.info("moments %s: %d push(es) to %d of %d device(s)%s", [i.id for i in items], pushes, sent, len(jobs), f", {len(going)} still going" if going else "",
+             extra={"moments": len(items), "pushes": pushes, "devices": len(jobs), "delivered": sent, "going": len(going), "waited_ms": round(waited * 1000)})
     return sent
+
+
+def _proven(device_ids: set[int]) -> set[int]:
+    """Those of these devices whose last push went through (and so go by _wire)."""
+    with session() as db:
+        return set(db.scalars(select(PushSubscription.id).where(PushSubscription.id.in_(device_ids), PushSubscription.failures == 0, PushSubscription.last_ok_at.is_not(None))))
+
+
+def _fair(jobs: list[tuple[int, tuple, dict[str, Any], int, str]]) -> list[tuple[int, tuple, dict[str, Any], int, str]]:
+    """A batch's pushes in turns: each notification's first device, then each one's second, and so on, so one fan's
+    many devices never go ahead of another fan's first."""
+    turns: dict[int, list[tuple[int, tuple, dict[str, Any], int, str]]] = {}
+    for job in jobs:
+        turns.setdefault(job[0], []).append(job)
+    return [job for turn in zip_longest(*turns.values()) for job in turn if job is not None]
+
+
+def _settle_late(notification_id: int, device: tuple, future: Future) -> None:
+    """Write back a push its batch stopped waiting for (_deliver), once it has ended."""
+    try:
+        error = future.result()
+    except Exception as exc:
+        error = str(exc)[:100]
+    try:
+        _settle([(notification_id, device[0], error)])
+        metrics.pushes([(_service(device), error)])
+    except Exception:
+        log.exception("a late push to device %s: what its push service said wasn't written back", device[0])
 
 
 def held_due(now: datetime | None = None) -> list[int]:
@@ -601,7 +654,8 @@ def _settle(results: list[tuple[int, int, int | str | None]]) -> None:
             delivered[notification_id] = delivered.get(notification_id, 0) + (error is None)
             _health(db, device_id, error)
         for notification_id, n in delivered.items():
-            db.execute(update(Notification).where(Notification.id == notification_id).values(delivered=n))
+            # Added to: a push its batch stopped waiting for is written back on its own, later (_settle_late).
+            db.execute(update(Notification).where(Notification.id == notification_id).values(delivered=Notification.delivered + n))
 
 
 def _health(db: Session, device_id: int, error: int | str | None) -> None:
@@ -663,7 +717,7 @@ def push(endpoint: str, p256dh: str, auth: str, payload: dict[str, Any], ttl: in
             vapid_claims={"sub": VAPID_SUBJECT},
             ttl=ttl,
             headers=headers,
-            timeout=10,
+            timeout=cast(float, (CONNECT_TIMEOUT, READ_TIMEOUT)),  # requests takes the two apart, pywebpush passes them on
         )
     except WebPushException as exc:
         status = exc.response.status_code if exc.response is not None else None
@@ -691,16 +745,38 @@ def _fit(payload: dict[str, Any]) -> str:
     return data
 
 
-def send_test(fan_id: str) -> int:
-    """A test notification to each of this fan's devices. Returns how many took it."""
-    with session() as db:
-        newest = select(PushSubscription).where(PushSubscription.fan_id == fan_id, PushSubscription.transport.in_(transports())).order_by(PushSubscription.id.desc()).limit(MAX_DEVICES)
-        devices = [(d.id, d.transport, d.endpoint, d.p256dh, d.auth) for d in db.scalars(newest)]
-    # On Android, a moment of no sport, in the app's blue (fcm.message).
-    payload = {"id": 0, "title": "Notifications are on", "body": "You'll hear about goals, fifties, big games and results for the players you follow.", "url": "/", "tag": "test", "kind": "test", "loud": True, "quiet": False}
-    results = [(device[0], deliver(device, payload, 600)) for device in devices]
-    settle(results)
-    return sum(1 for _, error in results if error is None)
+def newest_devices(db: Session, fan_id: str) -> list[tuple]:
+    """A fan's devices a push goes to, (id, transport, endpoint, p256dh, auth): their newest, of the transports this
+    server sends by, as a moment's push (_plan). A test push goes to these (send_test)."""
+    newest = select(PushSubscription).where(PushSubscription.fan_id == fan_id, PushSubscription.transport.in_(transports())).order_by(PushSubscription.id.desc()).limit(MAX_DEVICES)
+    return [(d.id, d.transport, d.endpoint, d.p256dh, d.auth) for d in db.scalars(newest)]
+
+
+# On Android, a moment of no sport, in the app's blue (fcm.message).
+TEST = {"id": 0, "title": "Notifications are on", "body": "You'll hear about goals, fifties, big games and results for the players you follow.", "url": "/", "tag": "test", "kind": "test", "loud": True, "quiet": False}
+
+
+async def send_test(devices: list[tuple]) -> int:
+    """A test notification to each of these devices (newest_devices) at once, on the test threads (_tests), which write
+    back each device's health as its push ends. Waited for without holding a thread, for at most TEST_WAIT: one not
+    taken by then counts as not taken (and one not yet started isn't sent). Returns how many took it."""
+    if not devices:
+        return 0
+    pushes = [asyncio.wrap_future(_tests.submit(logs.carried(_test_one), device)) for device in devices]
+    done, going = await asyncio.wait(pushes, timeout=TEST_WAIT)
+    for push in going:
+        push.cancel()
+    return sum(1 for push in done if push.exception() is None and push.result() is None)
+
+
+def _test_one(device: tuple) -> int | str | None:
+    """One test push, then its device's health written back."""
+    error = deliver(device, TEST, 600)
+    try:
+        settle([(device[0], error)])
+    except Exception:
+        log.exception("a test push to device %s: what its push service said wasn't written back", device[0])
+    return error
 
 
 def settle(results: list[tuple[int, int | str | None]]) -> None:

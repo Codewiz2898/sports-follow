@@ -467,6 +467,40 @@ def test_the_game_moments_are_kept_apart_from_its_players_on_the_match_page(db, 
 
 
 @needs_db
+def test_a_tests_second_innings_wickets_are_each_players_own_and_their_fans_hear_each_once(db, redis, source):
+    # Day 5 of Bangladesh v Afghanistan as ESPN had it (tests/fixtures/espn/cricket-summary-test-live): Litton Das
+    # reaches his second-innings hundred and is out, and Hasan Mahmud is out, in one poll.
+    named(source)
+    event_id = matches.follow(db, "fan", "pitch", "100")
+    db.add_all([Player(id=9, slug="litton-das", name="Litton Das", sport="Cricket"), PlayerIdentity(player_id=9, system="pitch", external_id="536936", confidence=1.0)])
+    db.commit()
+    rules = sports.get("cricket")
+    names = {"536936": "Litton Das", "926629": "Hasan Mahmud"}
+    batting = lambda head, runs, out=None: {"headline": head, "stats": [{"label": "Runs", "value": runs}, *([{"label": "Out", "value": out}] if out else [])]}  # noqa: E731
+    before = Played("live", {"kind": "cricket"}, lines={"536936": batting("53 (89) & 98* (110)", "98*"), "926629": batting("2 (5) & 1* (4)", "1*")}, names=names)
+    now = Played("live", {"kind": "cricket"}, lines={"536936": batting("53 (89) & 102 (117)", "102", "c †Ikram Alikhil b Mohammad Saleem"),
+                                                     "926629": batting("2 (5) & 1 (6)", "1", "lbw b Zia-ur-Rehman")}, names=names)
+    found = rules.game_moments("Bangladesh v Afghanistan", before, now, [])
+    assert [(f.title, f.about) for f in found] == [("Bangladesh v Afghanistan: Litton Das reaches 100", ("536936",)), ("Bangladesh v Afghanistan: Litton Das out for 102", ("536936",)),
+                                                   ("Bangladesh v Afghanistan: Hasan Mahmud out for 1", ("926629",))]
+    assert len(notify.record_game(db, event_id, found, "/match/pitch/100")) == 3  # each player's wicket its own
+    # Litton Das's own: his first innings' out, and the second's as his fans heard them.
+    notify.record(db, 9, event_id, [sports.Found("out", "key", "Litton Das out for 53", "", "out")])
+    notify.record(db, 9, event_id, rules.during("Litton Das", "536936", before.seen("536936"), now.seen("536936")))
+    db.commit()
+    rows = db.scalars(select(Moment).order_by(Moment.id)).all()
+    hundred, litton_out, mahmud_out, first_out, his_hundred, his_out = notify.for_games(db, notify.as_items(rows))
+    assert [i.title for i in (first_out, his_hundred, his_out)] == ["Litton Das out for 53", "Litton Das reaches 100", "Litton Das out for 102"]
+    # A fan who follows him and the game, told one side of a moment in an earlier push, isn't told the other side of it:
+    # his hundred and second-innings out are his; his first-innings out isn't the game's second, nor his Mahmud's.
+    now_ = datetime.now(timezone.utc)
+    assert plan([his_hundred, his_out], {9: "key"}, set(), [], now_, games={event_id: Watch("key")}, heard=[hundred, litton_out]) == []
+    assert plan([hundred, litton_out], {9: "key"}, set(), [], now_, games={event_id: Watch("key")}, heard=[his_hundred, his_out]) == []
+    [told] = plan([litton_out, mahmud_out], {9: "key"}, set(), [], now_, games={event_id: Watch("key")}, heard=[first_out])
+    assert told.moment_ids == [litton_out.id, mahmud_out.id]
+
+
+@needs_db
 def test_a_game_followed_again_after_a_while_doesnt_tell_what_happened_meanwhile(db, redis, source, monkeypatch):
     # A fan follows the game, and unfollows; Saka's fans keep it polled. The game's own last poll, kept to find
     # its next moments against, is too old by the time another fan follows it: that's a first look.

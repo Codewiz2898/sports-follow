@@ -9,6 +9,7 @@ from __future__ import annotations
 import gzip
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -186,7 +187,7 @@ def test_chess_knockout_round_is_a_match():
     assert snap.status == "final"
     assert snap.score_label == "Magnus Carlsen 6–2 Denis Lazavik"
     assert snap.clock_label == "Magnus Carlsen won the match (8 games)"
-    assert snap.state["match"] == {"games": 8, "score": "6–2"}
+    assert snap.state["match"] == {"games": 8, "score": "6–2", "first": "mJnv1YBU", "ahead": CARLSEN}  # its first game, and who's ahead whoever's board it is
     assert snap.state["fen"]  # the board shown is the last game's
     assert snap.lines[CARLSEN].headline == "Won the match 6–2 vs Denis Lazavik"
     assert snap.lines[LAZAVIK].headline == "Lost the match 2–6 vs Magnus Carlsen"
@@ -215,7 +216,7 @@ def test_chess_match_page_is_one_players_board_with_both_players():
     # Both players, white first in the board shown, each with the fixture their own card has it under.
     assert {(p.athlete_id, p.name) for p in game.players} == {(CARLSEN, "Magnus Carlsen"), (LAZAVIK, "Denis Lazavik")}
     assert sorted(game.fixtures) == sorted(f"{rnd}-{p}" for p in (CARLSEN, LAZAVIK))
-    assert game.snapshot.state["match"] == {"games": 8, "score": "2–6"} and game.snapshot.status == "final"
+    assert game.snapshot.state["match"] == {"games": 8, "score": "2–6", "first": "mJnv1YBU", "ahead": CARLSEN} and game.snapshot.status == "final"
     assert lichess_chess.parse_game(data, "1", "lichess_chess") is None  # not paired in this round
     assert lichess_chess.LichessChess.fixture_pattern.fullmatch(f"{rnd}-{CARLSEN}") and not lichess_chess.LichessChess.fixture_pattern.fullmatch(f"{rnd}:abc")
 
@@ -266,9 +267,14 @@ def test_a_finished_chess_games_match_page_has_its_moves(monkeypatch):
     live = lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}").snapshot.state
     assert "moves" not in live and len(live["page_detail"]["moves"]) == 86 and asked[1].endswith(f"{game_id}.pgn?clocks=false&comments=false&variations=false")
 
-    # A decided game while its round is still on (a mini-match's next game may follow it): partial.
+    # A decided game while its round is still on (a mini-match's next game may follow it, BUG-210): live till GRACE
+    # after it was first seen over; then over, and partial while Lichess doesn't say the round is.
     on = {**single, "round": {**data["round"], "finished": False, "ongoing": True}}
-    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: pgn if url.endswith(".pgn") else on)
+    kept = Kept()
+    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: kept)
+    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: pgn if ".pgn" in url else on)
+    assert lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}").snapshot.status == "live"  # type: ignore[union-attr]
+    kept[f"lichess:over:{game_id}"] = str(time.time() - lichess_chess.GRACE)
     decided = lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}")
     assert decided.snapshot.status == "final" and decided.partial
 
@@ -290,6 +296,87 @@ def test_a_finished_chess_games_match_page_has_its_moves(monkeypatch):
     monkeypatch.setattr(lichess_chess, "get_json", refused)
     with pytest.raises(lichess_chess.RateLimited):
         lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}")
+
+
+def tiebreak(*results: str, to_come: bool = False, finished: bool = False) -> dict:
+    """The recorded grand final's games as a World Championship's tiebreak round shows them (BUG-210): one at a time,
+    each game's chapter made as it starts, with these results ("*" for one being played); the round on till it's
+    finished. Carlsen has White in games 1 and 3, Lazavik in game 2 and 4."""
+    data = load("lichess/round-final")
+    rnd = {**data["round"], "name": "Tiebreaks", "finished": finished, "ongoing": not (to_come or finished),
+           "startsAt": int((time.time() + (86400 if to_come else -3600)) * 1000)}
+    tour = {**data["tour"], "name": "FIDE World Championship 2026", "info": {"players": "Carlsen, Lazavik"}}
+    return {**data, "tour": tour, "round": rnd, "games": [{**g, "status": r} for g, r in zip(data["games"], results, strict=False)]}
+
+
+def test_a_tiebreak_rounds_first_game_over_isnt_the_end_of_its_round(monkeypatch):
+    # Game 1 won by Carlsen with White, game 2's chapter not out yet (BUG-210): the round may hold a mini-match, so
+    # the board stays live (no "Won with White", polling goes on), and a refresh reading the round says so too.
+    round_now: dict = {}
+
+    def get_json(url, ttl, text=False):
+        if ".pgn" in url:
+            return LIVE_PGN  # the moves so far, for the match page
+        return {"tour": round_now["tour"], "rounds": [round_now["round"]]} if url.endswith("broadcast/WorldCh1") else round_now
+
+    monkeypatch.setattr(lichess_chess, "get_json", get_json)
+    kept = Kept()
+    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: kept)
+    chess = lichess_chess.LichessChess()
+    rnd = load("lichess/round-final")["round"]["id"]
+    locator = {"round": rnd, "fide": CARLSEN}
+    round_now.update(tiebreak("1-0"))
+    round_now["tour"]["id"] = "WorldCh1"
+    snap = chess.snapshot(locator)
+    assert snap.status == "live" and snap.lines[CARLSEN].headline == "White vs Denis Lazavik"  # not "Won with White"
+    assert chess.snapshot({"round": rnd, "fide": LAZAVIK}).status == "live"
+    assert chess.match(f"{rnd}-{CARLSEN}").snapshot.status == "live"  # type: ignore[union-attr]
+    monkeypatch.setattr(lichess_chess.LichessChess, "_tours", lambda self, ref, now: [round_now["tour"]])
+    [fixture] = chess.fixtures(PlayerRef("lichess_chess", CARLSEN, "Magnus Carlsen", [CARLSEN], ["Magnus Carlsen"]))
+    assert fixture.status == "live" and fixture.result is None  # a refresh doesn't call it over
+    # Game 2 out and won by Lazavik, game 3 too, and the round's over: the match, 1–2, once.
+    round_now.update(tiebreak("1-0", "1-0", "*"))
+    assert chess.snapshot(locator).status == "live"
+    round_now.update(tiebreak("1-0", "1-0", "0-1", finished=True))
+    done = chess.snapshot(locator)
+    assert (done.status, done.lines[CARLSEN].headline, done.clock_label) == ("final", "Lost the match 1–2 vs Denis Lazavik", "Denis Lazavik won the match (3 games)")
+    assert done.state["match"]["ahead"] == LAZAVIK  # who won it, whichever player's fixture is read
+    # Lichess never saying the round's over and no game 2 coming, game 1 is over GRACE after it was first seen so.
+    round_now.update(tiebreak("1-0"))
+    assert chess.snapshot(locator).status == "live"
+    kept[f"lichess:over:{round_now['games'][0]['id']}"] = str(time.time() - lichess_chess.GRACE)
+    assert chess.snapshot(locator).status == "final"
+
+    # In a round robin's round (other pairings in it, no knockout in its names), a game over is over at once, as before.
+    other = {"id": "otherbrd", "status": "*", "fen": "", "players": [{"name": "Caruana, Fabiano", "fideId": 2020009}, {"name": "So, Wesley", "fideId": 5202213}]}
+    robin = tiebreak("1-0")
+    robin.update(round={**robin["round"], "name": "Round 5"}, tour={**robin["tour"], "name": "Tata Steel Masters 2027", "info": {"format": "14-player round robin"}},
+                 games=[*robin["games"], other])
+    assert lichess_chess.parse_board(robin, CARLSEN).status == "final" and not lichess_chess.may_follow(robin, robin["games"][:1])
+    # A knockout's round, by its event's format or its round's name, or with a mini-match in it already: one may follow.
+    for knockout in ({"tour": {**robin["tour"], "info": {"format": "8-player Knockout"}}}, {"round": {**robin["round"], "name": "Armageddon"}},
+                     {"round": {**robin["round"], "name": "Rapid tiebreakers"}}, {"round": {**robin["round"], "name": "Sudden death"}},
+                     {"games": [*robin["games"], {**other, "id": "otherbr2"}]}):
+        assert lichess_chess.may_follow({**robin, **knockout}, robin["games"][:1]), knockout
+    # Nor in a rapid event's round, though its name says rapid.
+    rapid = {**robin, "tour": {**robin["tour"], "name": "Tata Steel India Rapid 2027", "info": {"format": "10-player round robin"}}, "round": {**robin["round"], "name": "Rapid Round 3"}}
+    assert not lichess_chess.may_follow(rapid, robin["games"][:1])
+    # An open's boards of unrated players, with no FIDE ids, are each their own pairing, by name: not a mini-match.
+    unrated = [{"id": f"open{i}", "status": "*", "fen": "", "players": [{"name": f"Player, A{i}"}, {"name": f"Player, B{i}"}]} for i in range(2)]
+    assert not lichess_chess.may_follow({**robin, "games": [*robin["games"], *unrated]}, robin["games"][:1])
+
+
+def test_a_world_championship_classical_game_is_over_once_decided():
+    # A match's classical game (BUG-210 review): "Game 5", one board, the round its pairing's alone. Decided, it's over at
+    # once, with no wait for a next game (only a tiebreak's or knockout's round has one), though Lichess hasn't said yet
+    # that the round is.
+    game5 = tiebreak("1-0")
+    game5.update(round={**game5["round"], "name": "Game 5"}, tour={**game5["tour"], "info": {"players": "Carlsen, Lazavik", "format": "14-game match"}})
+    assert game5["round"]["ongoing"] and not game5["round"]["finished"]
+    assert not lichess_chess.may_follow(game5, game5["games"])
+    snap = lichess_chess.parse_board(game5, CARLSEN)
+    assert (snap.status, snap.lines[CARLSEN].headline) == ("final", "Won with White vs Denis Lazavik")
+    assert lichess_chess.LichessChess._waited(game5, CARLSEN) is None  # nothing waits: no clock started
 
 
 def test_a_positions_moves_count_from_its_fen_and_a_games_from_its_last_move():
@@ -562,6 +649,79 @@ def test_a_refused_fide_page_gives_what_it_last_listed_and_search_still_finds_ev
     answers["https://lichess.org/api/broadcast/search?q=carlsen"] = httpx.Response(200, json={"currentPageResults": []})
     answers["https://lichess.org/api/broadcast/top"] = httpx.Response(200, json={"active": [], "upcoming": []})
     assert chess.fixtures(ref) == []
+
+
+def test_a_player_fide_names_without_a_comma_is_found_by_their_name_not_its_initial(monkeypatch):
+    # FIDE writes Gukesh "Gukesh D" and Praggnanandhaa "Praggnanandhaa R", with no comma (BUG-209): their events are
+    # searched by "gukesh" and "praggnanandhaa", never "d" or "r" (every "Group D" and "Open R" on Lichess), and an
+    # event's players line names them so ("Carlsen, Gukesh, Praggnanandhaa"). Their FIDE pages refused, as the limit
+    # every datacenter shares does: search and what's on now find the event. Carlsen's "Carlsen, Magnus" as before.
+    now = datetime.now(timezone.utc)
+    ms = lambda d: int(d.timestamp() * 1000)  # noqa: E731
+    gukesh, pragg, carlsen, sindarov = (
+        {"name": name, "fideId": fide, "rating": rating, "title": "GM"}
+        for name, fide, rating in (("Gukesh D", 46616543, 2767), ("Praggnanandhaa R", 25059530, 2758), ("Carlsen, Magnus", 1503014, 2837), ("Sindarov, Javokhir", 14205483, 2726)))
+    tour = {"id": "TataStel", "name": "Tata Steel Masters 2027", "info": {"players": "Carlsen, Gukesh, Praggnanandhaa, Sindarov"},
+            "dates": [ms(now + timedelta(hours=3)), ms(now + timedelta(days=12))]}
+    r1 = {"id": "Round001", "name": "Round 1", "ongoing": False, "finished": False, "startsAt": ms(now + timedelta(hours=3))}
+    r2 = {"id": "Round002", "name": "Round 2", "ongoing": False, "finished": False, "startsAt": ms(now + timedelta(days=1, hours=3))}
+    start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    round1 = {"round": r1, "tour": tour, "games": [{"id": "gameaaaa", "players": [gukesh, sindarov], "fen": start, "status": "*"},
+                                                    {"id": "gamebbbb", "players": [carlsen, pragg], "fen": start, "status": "*"}]}
+    group_d = {"id": "GroupDxx", "name": "Club Championship 2027 | Group D", "info": {"players": "Someone, Else"}, "dates": [ms(now - timedelta(days=1)), ms(now + timedelta(days=2))]}
+    asked: list[str] = []
+
+    def get_json(url, ttl, text=False):
+        asked.append(url.removeprefix("https://lichess.org"))
+        if url.startswith("https://lichess.org/fide/"):
+            raise lichess_chess.RateLimited("Lichess rate limit (429) on /fide/…")
+        if "/broadcast/search?q=" in url:
+            q = url.split("q=")[1]
+            # Lichess's search finds the event by Gukesh's and Carlsen's names, not yet by Praggnanandhaa's: the
+            # broadcasts on now and to come (top) list it.
+            return {"currentPageResults": [{"tour": tour}] if q in ("gukesh", "carlsen") else [{"tour": group_d}] if len(q) == 1 else []}
+        if url.endswith("/broadcast/top"):
+            return {"active": [], "upcoming": [{"tour": tour, "round": r1}]}
+        if url.endswith(f"/broadcast/{tour['id']}"):
+            return {"tour": tour, "rounds": [r1, r2]}
+        if url.endswith(f"/broadcast/-/-/{r1['id']}"):
+            return round1
+        raise AdapterError(f"not faked: {url}")
+
+    monkeypatch.setattr(lichess_chess, "get_json", get_json)
+    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: Kept())  # the FIDE page never read before
+    chess = lichess_chess.LichessChess()
+    for player, query, opponent in ((gukesh, "gukesh", "Javokhir Sindarov"), (pragg, "praggnanandhaa", "Magnus Carlsen"), (carlsen, "carlsen", "Praggnanandhaa R")):
+        asked.clear()
+        ref = lichess_chess.ref_for({"id": player["fideId"], "name": player["name"]})
+        fixtures = chess.fixtures(ref)
+        assert [a for a in asked if "/search?" in a] == [f"/api/broadcast/search?q={query}"], ref.name
+        assert not any(group_d["id"] in a for a in asked), ref.name  # no "Group D" event read
+        # Their game in round 1 (paired), and round 2, not paired yet, as theirs: the event lists them.
+        assert [(f.source_id, f.status) for f in fixtures] == [(f"Round001-{player['fideId']}", "scheduled"), (f"Round002-{player['fideId']}", "scheduled")], ref.name
+        assert opponent in fixtures[0].title and fixtures[1].detail == "Pairings not published yet"
+    # The words each is known by: FIDE's surname for "Surname, Given"; for a name with no comma, each part but an initial.
+    names = ("Gukesh D", "Praggnanandhaa R", "Carlsen, Magnus", "Nihal Sarin", "Van Foreest, Jorden", "So, Wesley")
+    assert [lichess_chess.known_as(lichess_chess.ref_for({"id": 1, "name": n})) for n in names] == [
+        ["gukesh"], ["praggnanandhaa"], ["carlsen"], ["nihal", "sarin"], ["foreest"], ["so"]]
+
+    # Events that only mention him (newer, more of them than MAX_TOURS) don't push out the one his FIDE page lists.
+    own = {"id": "OwnEvent", "name": "Gukesh's event", "dates": [ms(now - timedelta(days=12)), ms(now - timedelta(days=3))]}
+    others = [{"id": f"Mention{i}", "name": f"Open {i}", "info": {"players": "Someone, Else"}, "dates": [ms(now - timedelta(days=1)), ms(now + timedelta(days=2))]}
+              for i in range(lichess_chess.MAX_TOURS)]
+
+    def page_and_search(url, ttl, text=False):
+        if url.startswith("https://lichess.org/fide/"):
+            return '<a href="/broadcast/x/round-9/AAAAAAAA">'
+        if url.endswith("/broadcast/-/-/AAAAAAAA"):
+            return {"tour": own}
+        if "/broadcast/search?q=" in url:
+            return {"currentPageResults": [{"tour": t} for t in others]}
+        return {"active": [], "upcoming": []}
+
+    monkeypatch.setattr(lichess_chess, "get_json", page_and_search)
+    tours = chess._tours(lichess_chess.ref_for({"id": gukesh["fideId"], "name": "Gukesh D"}), now)
+    assert len(tours) == lichess_chess.MAX_TOURS and tours[0]["id"] == "OwnEvent"
 
 
 def test_tournament_pgn_gives_every_round_in_one_read():

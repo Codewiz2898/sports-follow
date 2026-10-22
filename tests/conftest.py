@@ -2,15 +2,36 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 import threading
+from pathlib import Path
 
-import pytest
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+# A run on a developer's machine is the run CI makes: no Redis (CI has none), the test database or none, and
+# none of ~/.config/sports-follow's keys. Else a test that goes further than its fakes reaches the main stack's
+# Redis, the dev database, a paid source or a real phone's notifications. Set before sports_follow is imported:
+# its modules read these once.
+_NONE = str(Path(__file__).with_name("no-such-key"))
+os.environ["REDIS_URL"] = "redis://127.0.0.1:9/0"
+os.environ["DATABASE_URL"] = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL") or "postgresql+psycopg://sports:sports@127.0.0.1:9/none"
+for _key in ("SPORTMONKS_TOKEN", "PANDASCORE_TOKEN", "PUBG_TOKEN", "LIQUIPEDIA_TOKEN", "LICHESS_TOKEN", "YOUTUBE_KEY", "FCM_KEY", "RESEND_KEY", "GOOGLE_CLIENT_SECRET", "LINEAR_KEY", "CLIPS_KEY"):
+    os.environ[f"SPORTS_FOLLOW_{_key}_FILE"] = _NONE
+    os.environ.pop(f"SPORTS_FOLLOW_{_key}", None)
+os.environ["SPORTS_FOLLOW_VAPID_KEY"] = _NONE
+os.environ["SPORTS_FOLLOW_ADMIN_PASSWORD_FILE"] = _NONE
+# The fan cookies' key is made on first use: in a folder of the run's own, never in ~/.config.
+os.environ["SPORTS_FOLLOW_COOKIE_SECRET_FILE"] = str(Path(tempfile.mkdtemp(prefix="sports-follow-tests-")) / "cookie-secret")
+os.environ.pop("SPORTS_FOLLOW_COOKIE_SECRET", None)
+os.environ["LLM_GATEWAY_URL"] = "http://127.0.0.1:9"
+os.environ["LLM_PROVIDERS_KEYS_FILE"] = _NONE
 
-from sports_follow import bus, controls, registry, shutdown, tracing, wiki
-from sports_follow.adapters import budget, cache
+import pytest  # noqa: E402
+from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: E402
+
+from sports_follow import bus, controls, registry, shutdown, tracing, wiki  # noqa: E402
+from sports_follow.adapters import budget, cache  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

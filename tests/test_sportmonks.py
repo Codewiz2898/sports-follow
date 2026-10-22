@@ -239,6 +239,13 @@ def test_who_a_player_is_doesnt_hang_on_their_statistics(monkeypatch):
     assert sm.SportmonksFootball().player(str(STAR)) is None and len(sent) == 1
 
 
+def test_an_id_sportmonks_has_no_player_by_costs_one_request(monkeypatch):
+    """BUG-128: a made-up id was asked again without the statistics, two of the hour's Player requests for each."""
+    sent = _serve(monkeypatch, lambda path, include: 404)
+    assert sm.SportmonksFootball().player("90000001") is None
+    assert sent == [("/football/players/90000001", sm.PLAYER_STATS_INCLUDE)]
+
+
 def test_a_preview_reads_the_player_once_and_club_and_country_side_by_side(monkeypatch):
     """A football preview before following (search.preview) waits on each round of requests, about a second
     each from the server (Grafana, 17 Oct: four in a row, 4.4 s). It's three rounds: the player with their

@@ -68,7 +68,11 @@ OURS = 401
 # mustn't wait behind a sign-in that won't work, and one problem is one error in the log, not one a device.
 PAUSE = 60
 
-_client = httpx.Client(timeout=10)
+# Two seconds to connect to Google (on each of its addresses), five to answer: a push that can't get through costs
+# its thread seconds, not minutes, while the batch's other pushes wait (BUG-181).
+TIMEOUT = httpx.Timeout(5, connect=2)
+
+_client = httpx.Client(timeout=TIMEOUT)
 
 
 @dataclass(frozen=True)

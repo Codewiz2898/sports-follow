@@ -447,22 +447,23 @@ def judge(candidate: Candidate, llm: Client | None = None) -> Verdict:
     return _ask(llm or gateway(), candidate, facts)
 
 
-def judge_many(candidates: Iterable[Candidate], llm: Client | None = None, workers: int = WORKERS) -> list[Verdict | None]:
-    """Verdicts in the candidates' order, the model's calls side by side; None for one that couldn't be judged
-    now (CurateError), to try again later. Each is counted (metrics.feed_verdict, feed_judge_error)."""
+def judge_many(candidates: Iterable[Candidate], llm: Client | None = None, workers: int = WORKERS) -> list[Verdict | CurateError]:
+    """Verdicts in the candidates' order, the model's calls side by side; for one that couldn't be judged now, the
+    CurateError that says why (its kind: the model declined it, or the gateway is down), for the caller to decide
+    when to try again (rank.judge). Each is counted (metrics.feed_verdict, feed_judge_error)."""
     items = list(candidates)
     if not items:
         return []
     client = llm or (gateway() if config.CURATE_AI else None)
 
-    def one(c: Candidate) -> Verdict | None:
+    def one(c: Candidate) -> Verdict | CurateError:
         started = time.monotonic()
         try:
             v = judge(c, client)
         except CurateError as exc:
             log.warning("curate: %s unjudged: %s", c.url, exc)
             metrics.feed_judge_error(exc.kind, time.monotonic() - started)
-            return None
+            return exc
         metrics.feed_verdict(v.about_player, v.sponsored, bool(v.risks), v.stage, time.monotonic() - started)
         return v
 
@@ -513,7 +514,7 @@ def main(argv: list[str]) -> int:
     if args.rules_only:
         verdicts = [rules(c).final for c in candidates]
     else:
-        verdicts = judge_many(candidates)
+        verdicts = [v if isinstance(v, Verdict) else None for v in judge_many(candidates)]
     judged: dict[str, dict[str, Any]] = {}
     for c, v in zip(candidates, verdicts):
         row = {"url": c.url, **v.model_dump(mode="json")} if v else {"url": c.url, "unjudged": True}

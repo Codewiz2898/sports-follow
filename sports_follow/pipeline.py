@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 import re
 import unicodedata
 from datetime import datetime, timedelta, timezone
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from sqlalchemy import delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -261,17 +261,19 @@ def start_from_registry(athlete: Any) -> tuple[int, bool]:
 
 
 def start_from_pick(adapter: Any, ref: Any) -> tuple[int, bool]:
-    """A fan picked this exact athlete in search: their player, created and bound if new.
+    """A fan picked this exact athlete in search: their player, created and bound if new, and if not, bound to the
+    teams the pick names where those have changed (a transfer).
 
     Returns (player_id, created). A new player's card is published at once from the source with its
     profile pending; the caller queues the fixtures refresh and the build, which reads the profile.
     """
     sport = structured.sport_name(adapter, ref)
 
-    def create(db: Session) -> tuple[int, dict[str, Any] | None]:
+    def create(db: Session) -> tuple[int, dict[str, Any] | None, bool]:
         holder = db.scalar(select(PlayerIdentity).where(PlayerIdentity.system == ref.system, PlayerIdentity.external_id == ref.athlete_id))
         if holder is not None:
-            return holder.player_id, None
+            bound = db.scalar(select(SourceBinding.locator).where(SourceBinding.player_id == holder.player_id, SourceBinding.purpose == "fixtures", SourceBinding.adapter == ref.system))
+            return holder.player_id, None, isinstance(bound, dict) and set(bound.get("team_ids") or []) != set(ref.team_ids)
         slug = _free_slug(db, ref.name, sport, ref.athlete_id)
         individual = ref.team_ids == [ref.athlete_id]
         player = Player(slug=slug, name=ref.name, sport=sport, status="active", teams=[] if individual else [t for t in ref.team_names if t])
@@ -282,10 +284,17 @@ def start_from_pick(adapter: Any, ref: Any) -> tuple[int, bool]:
         db.execute(insert(PlayerAlias).values(alias=slug, player_id=player.id).on_conflict_do_nothing())
         card = {**placeholder_card(player), "status": "ready", "version": 1, "pending": ["profile"]}
         db.add(PlayerCard(player_id=player.id, status="ready", card=card, version=1))
-        return player.id, card
+        return player.id, card, False
 
-    player_id, card = _create(create)
+    player_id, card, moved = _create(create)
     if card is None:
+        # Here already. The pick is the source's latest word on them: one bound to other teams (they've moved since)
+        # moves to the new team's games now (structured.record_move), and a move that fails never stops the follow.
+        if moved:
+            try:
+                structured.record_move(player_id, adapter, ref)
+            except Exception:
+                log.exception("pick %s: couldn't move them to the teams %s names", player_id, ref.system)
         return player_id, False
     try:
         structured.record(player_id, ref)  # the identity is this player's already: this writes the bindings
@@ -795,6 +804,25 @@ def needs_agent(db: Session, player_id: int, card: dict[str, Any] | None) -> boo
     return not _has_about(card)
 
 
+def background_hour_key(now: datetime) -> str:
+    """The count of backgrounds the research agent wrote in this UTC hour, across all players."""
+    return f"research-background-hour:{now:%Y-%m-%dT%H}"
+
+
+def take_background(now: datetime | None = None) -> bool:
+    """Count one background against the hour's allowance (config.BACKGROUNDS_PER_HOUR), or, past it, refuse it,
+    counted nowhere. Whoever made the player (a fan's pick, a campaign, a script), it's the same model budget."""
+    from .config import BACKGROUNDS_PER_HOUR
+
+    redis, key = bus.sync_redis(), background_hour_key(now or _now())
+    used = cast(int, redis.incr(key))
+    redis.expire(key, 2 * 3600)
+    if used <= BACKGROUNDS_PER_HOUR:
+        return True
+    redis.decr(key)
+    return False
+
+
 def agent_due(player_id: int, card: dict[str, Any], now: datetime | None = None) -> bool:
     """Whether a fan opening this page should send the research agent: it's on (config.AGENT), the page has a
     part it writes (needs_agent), of a sport this build runs and a player someone follows, ready, with no
@@ -872,6 +900,12 @@ def build_card(player_id: int) -> None:
             return
         with session() as db:
             background_only = structured.binding(db, player_id) is not None  # a live source has the rest
+        if background_only and not take_background():
+            # The hour's backgrounds are written: the page is whole from its source without one, and a fan opening
+            # it in a later hour sends the agent (agent_due).
+            log.info("build %s: the hour's backgrounds are written; this one waits for a fan to open the page", player_id)
+            _without_agent(player_id)
+            return
         for event in follow_player(llm(), name, structured.describe(player_id), background_only=background_only):
             if shutdown.stopping.is_set():
                 return  # the worker is stopping; the build starts over on the next one (arq queues it again)

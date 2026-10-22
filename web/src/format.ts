@@ -221,9 +221,10 @@ function teamKey(name: string): string {
  * Win, draw or loss from the player's side. Structured results say "Won…"/"Lost…"; cricket names
  * the winning side ("India won by 8 wkts", "Match tied (India won the Super Over)"), so the player's
  * teams decide by whole name ("India A" and "Mumbai Indians" aren't India), the same way the server
- * counts form (sports/cricket.py: winner_outcome).
+ * reads them (sports/cricket.py: winner_outcome). Another winner is a loss only where one of the game's
+ * sides (`sides`, where known) is one of the player's teams: an IPL final isn't India's.
  */
-export function outcome(result: string, teams: string[] = []): 'W' | 'D' | 'L' | null {
+export function outcome(result: string, teams: string[] = [], sides?: string[]): 'W' | 'D' | 'L' | null {
   const r = result.trim()
   if (/^won\b/i.test(r)) return 'W'
   if (/^lost\b/i.test(r)) return 'L'
@@ -231,8 +232,26 @@ export function outcome(result: string, teams: string[] = []): 'W' | 'D' | 'L' |
   const winner = r.match(/(?:^|\()([^()]+?) won\b/i)
   if (!winner) return /drawn|tied|no result/i.test(r) ? 'D' : null
   const named = teamKey(winner[1])
-  if (named && teams.some((t) => teamKey(t) === named)) return 'W'
+  const mine = teams.map(teamKey).filter(Boolean)
+  if (named && mine.includes(named)) return 'W'
+  if (sides) return sides.some((s) => mine.includes(teamKey(s))) ? 'L' : null
   return teams.length ? 'L' : null
+}
+
+/** The two sides a result's title names ("India v Australia · 2nd ODI", "Arsenal vs Chelsea"); none where it names no two. */
+export function sidesOf(title?: string | null): string[] {
+  const sides = (title ?? '').split(' · ')[0].split(/\s+(?:v|vs|at)\.?\s+/i).map((s) => s.trim())
+  return sides.length === 2 && sides.every(Boolean) ? sides : []
+}
+
+/**
+ * A result's win, draw or loss from the player's side, as its badge shows it: the server's (`outcome`, told when it
+ * kept the result, from the side the player played for and the side the source marks the winner), else, for a
+ * result it didn't tell (a research agent's, a card from before), read from its words for the player's teams, a loss
+ * only where one of them is a side its title names.
+ */
+export function resultOutcome(r: { result: string; title?: string | null; outcome?: 'W' | 'D' | 'L' | null }, teams: string[] = []): 'W' | 'D' | 'L' | null {
+  return r.outcome !== undefined ? r.outcome : outcome(r.result, teams, sidesOf(r.title))
 }
 
 const STAT_WORDS = 22  // a stat in words, in px (.stat.words .num)

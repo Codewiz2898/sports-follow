@@ -139,16 +139,22 @@ _WON = re.compile(r"(?:^|\()([^()]+?) won\b", re.I)
 _NO_WINNER = re.compile(r"\b(?:tied|no result|drawn|abandoned)\b", re.I)
 
 
-def winner_outcome(summary: str, teams: list[str]) -> str | None:
+def winner_outcome(summary: str, teams: list[str], sides: list[str] | None = None) -> str | None:
     """The winner a result names ("India won by 8 wkts", "Match tied (India won the Super Over)"), as
-    one of the player's teams by whole name: "India A" and "Mumbai Indians" aren't India. The app's
-    outcome() in web/src/format.ts reads results the same way."""
+    one of the player's teams by whole name: "India A" and "Mumbai Indians" aren't India. Another winner
+    is a loss only where one of the game's sides (`sides`, where known) is one of the player's teams: an
+    IPL final isn't India's, nor is a traded player's old franchise his team now. Without the sides, the
+    teams are taken to be in it (a team's own results). The app's outcome() in web/src/format.ts reads
+    results the same way."""
     winner = _WON.search(summary)
     if not winner:
         return "D" if any(w in summary.lower() for w in ("drawn", "tied", "no result")) else None
     named = team_key(winner.group(1))
-    if named and any(team_key(t) == named for t in teams):
+    mine = {team_key(t) for t in teams} - {""}
+    if named and named in mine:
         return "W"
+    if sides is not None:
+        return "L" if mine & {team_key(s) for s in sides} else None
     return "L" if teams else None
 
 
@@ -341,9 +347,20 @@ class Cricket(Sport):
             return str(named[0]["id"]) if len(named) == 1 else None
         return VOID if _NO_WINNER.search(summary) else None
 
-    def outcome(self, result: str, teams: list[str]) -> str | None:
-        # "India won by 5 wickets": a win for an India player, a loss for their opponents'.
-        return winner_outcome(result, teams)
+    def outcome(self, result: str, teams: list[str], board: dict[str, Any] | None = None, side: str | None = None) -> str | None:
+        """Won or lost by the side the player played for, as the board marks the winner: a summary the source garbled
+        ("Royal Challengers won by 6Bengaluru wickets") is still Bengaluru's win. Their side is the one `side` names,
+        else the one of the board's that's one of their teams by name. With no side marked (a tie, no result, a source
+        that doesn't say), the summary's words decide (winner_outcome), read for that side, else for their teams."""
+        pair = [t for t in (board or {}).get("teams") or [] if isinstance(t, dict)]
+        ours = next((t for t in pair if side and str(t.get("id") or "") == side), None)
+        if ours is None:
+            wanted = {team_key(t) for t in teams} - {""}
+            named = [t for t in pair if team_key(str(t.get("name") or "")) in wanted]
+            ours = named[0] if len(named) == 1 else None
+        if ours is not None and any(t.get("winner") is True for t in pair):
+            return "W" if ours.get("winner") is True else "L"
+        return winner_outcome(result, [str(ours.get("name") or "")] if ours else teams, [str(t.get("name") or "") for t in pair] or None)
 
     def notable(self, fixture: Fixture) -> Notable | None:
         """Every match its sources list is one, as big as its stage (a final 95, a semi-final 85, a playoff

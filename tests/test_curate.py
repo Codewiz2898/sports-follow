@@ -241,7 +241,8 @@ def test_with_the_model_off_the_rules_still_judge_and_the_rest_waits(monkeypatch
     assert curate.judge(candidate(platform_flags={"paid_partnership": True}), llm).stage == "rules"  # type: ignore[arg-type]
     with pytest.raises(CurateError, match="off"):
         curate.judge(candidate(), llm)  # type: ignore[arg-type]
-    assert curate.judge_many([candidate(), candidate(text="#ad")], llm) == [None, curate.rules(candidate(text="#ad")).final]  # type: ignore[arg-type]
+    off, ad = curate.judge_many([candidate(), candidate(text="#ad")], llm)  # type: ignore[arg-type]
+    assert isinstance(off, CurateError) and off.kind == "off" and ad == curate.rules(candidate(text="#ad")).final
     assert not llm.calls
 
 
@@ -258,7 +259,7 @@ def test_judge_many_keeps_the_order_and_leaves_failures_unjudged():
             return FakeGateway({**GOOD, "reason": f"Post {n}"}).complete(**request)
 
     out = curate.judge_many(items, Gateway(), workers=4)  # type: ignore[arg-type]
-    assert [v.reason if v else None for v in out] == ["Post 0", "Post 1", "Post 2", "Marked as an ad (#ad).", "Post 4", None, "Post 6", "Post 7"]
+    assert [v.reason if isinstance(v, curate.Verdict) else v.kind for v in out] == ["Post 0", "Post 1", "Post 2", "Marked as an ad (#ad).", "Post 4", "unavailable", "Post 6", "Post 7"]
     assert curate.judge_many([], Gateway()) == []  # type: ignore[arg-type]
 
 

@@ -1,6 +1,7 @@
 """The pipeline worker: arq jobs for card builds, source refreshes, live polls and agent live
-checks, plus the one-minute scheduler tick (which also sends moments no sender claimed). Cron times
-are UTC, whatever the machine's zone.
+checks, plus the one-minute scheduler tick (which also sends moments no sender claimed), which runs
+beside the jobs rather than in one of their slots, as the prediction pushes do (ON_THE_CLOCK). Cron
+times are UTC, whatever the machine's zone.
 
 Run it with:  .venv/bin/arq sports_follow.worker.WorkerSettings
 """
@@ -8,6 +9,7 @@ Run it with:  .venv/bin/arq sports_follow.worker.WorkerSettings
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import inspect
 import logging
@@ -32,10 +34,15 @@ log = logging.getLogger("sports_follow.worker")
 # 2 vCPU server, so six long jobs used to leave every other job, and the tick, waiting for one.
 MAX_JOBS = 24
 _tick_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tick")
+# The prediction pushes' own thread, likewise: a job arq timed out keeps its thread, so the jobs' can all be taken.
+# One run at a time.
+_pushes_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pushes")
 # After a sleep or a paused VM, arq queues every run a cron job missed, one per heartbeat, from the first
 # it missed: 384 ticks in four minutes once. A run this many seconds past its time is skipped, unless no
 # other late run has gone for as long, so a busy queue that delays every tick can't stop them all.
 LATE = 50
+# A minute, as the jobs ON_THE_CLOCK keep it: tests make it shorter.
+MINUTE = 60
 
 # Again at startup: arq's CLI replaces the logging config after importing this module.
 logs.setup()
@@ -247,10 +254,10 @@ async def prepare_questions(ctx) -> None:
 
 async def prediction_pushes(ctx) -> None:
     """"Make your pick" before a campaign's games, and how each pick went once settled (predictions_push.py): every
-    minute."""
+    minute, at :50 (ON_THE_CLOCK)."""
     if await _missed(ctx, "prediction_pushes"):
         return
-    await asyncio.to_thread(predictions_push.run)
+    await asyncio.get_running_loop().run_in_executor(_pushes_pool, logs.carried(predictions_push.run))
 
 
 async def read_league(ctx, system: str) -> None:
@@ -335,8 +342,9 @@ async def startup(ctx) -> None:
     (it looks up hosts in one)."""
     logs.setup()
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=MAX_JOBS + 4, thread_name_prefix="job"))
-    # A connection for each of those threads, the tick's, notify's and the live cards': checkouts give up after 5 s.
-    db.size_pool(MAX_JOBS + 4 + _tick_pool._max_workers + notify._pool._max_workers + livecards._pool._max_workers)
+    # A connection for each of those threads, the tick's, the prediction pushes', notify's and the live cards':
+    # checkouts give up after 5 s.
+    db.size_pool(MAX_JOBS + 4 + _tick_pool._max_workers + _pushes_pool._max_workers + notify._pool._max_workers + livecards._pool._max_workers)
     metrics.watch()  # the live games, the queue, cards and source allowances, read each minute here alone
     metrics.seed()
     redis = ctx.get("redis")
@@ -345,13 +353,21 @@ async def startup(ctx) -> None:
         await redis.enqueue_job("refresh_starters", _job_id="refresh_starters:startup")
     if redis is not None and not await redis.exists(TEAMS_DONE):
         await redis.enqueue_job("import_teams", _job_id="import_teams:startup")
+    if redis is not None:
+        ctx["on_the_clock"] = [asyncio.create_task(_on_the_clock(ctx, *job)) for job in ON_THE_CLOCK]  # stopped by wind_down
 
 
 async def wind_down(ctx) -> None:
-    """The worker is stopping (a deploy, a restart). arq has cancelled the running jobs and queued them
-    again, but their threads run on: they end at their next step (shutdown.stopping) and free their locks.
-    Whatever is still held after STOP_WAIT, say a build waiting on the model, is freed here, so the next
-    worker starts that work at once instead of finding it locked for up to twenty minutes (BHA-51)."""
+    """The worker is stopping (a deploy, a restart). The jobs ON_THE_CLOCK stop first, so the tick queues
+    nothing more. arq has cancelled the running jobs and queued them again, but their threads run on: they
+    end at their next step (shutdown.stopping) and free their locks. Whatever is still held after STOP_WAIT,
+    say a build waiting on the model, is freed here, so the next worker starts that work at once instead of
+    finding it locked for up to twenty minutes (BHA-51)."""
+    clocked = ctx.pop("on_the_clock", [])
+    for task in clocked:
+        task.cancel()
+    if clocked:
+        await asyncio.wait(clocked)
     shutdown.stopping.set()
     deadline = time.monotonic() + STOP_WAIT
     while bus.held() and time.monotonic() < deadline:
@@ -403,12 +419,54 @@ async def tick(ctx) -> None:
                  len(due.builds), len(due.refreshes), len(due.teams), len(due.polls), len(due.lanes), len(due.lives), len(due.profiles))
 
 
+# Every-minute jobs that keep their minute however full the job slots are: arq runs a cron job in a job slot like any
+# other, and with MAX_JOBS poll sessions running (about 20 followed chess players live in a broadcast, each board its
+# own ten-minute poll) no game was armed, no poll handed over, no moment swept and no "Make your pick" sent for up to
+# ten minutes (BUG-173). Each runs beside the jobs instead (_on_the_clock). An entry is the job, its second of the
+# minute (UTC), the seconds after which a run is cancelled (its timeout as a cron job), and whether it also runs as
+# the worker starts.
+ON_THE_CLOCK = [
+    (tick, 0, 900, True),
+    (prediction_pushes, 50, 120, False),
+]
+
+
+def _next_run(last: float, now: float, at: float = 0) -> float:
+    """When a job ON_THE_CLOCK that last ran, or was due, at `last` runs next, it being `now`: `at` seconds past
+    the next whole MINUTE after both. A run that went long, or a laptop that slept, skips the minutes it missed
+    instead of running them all, and one woken a moment early doesn't run its minute twice."""
+    return max((last - at) // MINUTE, (now - at) // MINUTE) * MINUTE + MINUTE + at
+
+
+async def _on_the_clock(ctx, fn, at: float, timeout: float, at_startup: bool) -> None:
+    """An every-minute job (ON_THE_CLOCK) as a task of the worker's own, `at` seconds past each minute, and at once
+    if `at_startup`: it takes no job slot, and its work keeps to threads of its own (_tick_pool, _pushes_pool). Each run
+    is a task of its own, logged as a quiet job is, under an id like arq's for a cron run ("cron:tick:<ms>", which
+    _missed reads); it's cancelled after `timeout` seconds, and runs once a minute however many workers share the
+    queue (a "tick:<ms>" key), as arq's cron did. A run that fails, or Redis not answering, doesn't stop the next."""
+    name, run = fn.__name__, _logged(fn, quiet=True)
+    due = time.time() if at_startup else _next_run(time.time(), time.time(), at)
+    while True:
+        await asyncio.sleep(due - time.time())
+        ms = int(due * 1000)
+        try:
+            first = await ctx["redis"].set(f"{name}:{ms}", "1", nx=True, px=int(MINUTE * 2000))
+        except Exception:
+            log.warning("%s: Redis didn't answer; the next run tries again", name, exc_info=True)
+            first = False
+        if first:
+            job = {"redis": ctx["redis"], "job_id": f"cron:{name}:{ms}", "enqueue_time": datetime.fromtimestamp(due, timezone.utc)}
+            with contextlib.suppress(Exception):  # a run that failed or timed out has logged how it ended (_logged)
+                await asyncio.wait_for(asyncio.create_task(run(job)), timeout)
+        due = _next_run(due, time.time(), at)
+
+
 class WorkerSettings:
     functions: list[Any] = [_logged(f) for f in (build_card, reread_profile, refresh_live, refresh_structured, refresh_team, poll_event, poll_lane, send_moments, send_held, engine_lane, history_lane, adopt_stragglers, read_live, read_match, read_league)]
     functions.append(func(_logged(refresh_starters), timeout=2400))  # also queued by a worker starting without a recent refresh
     functions.append(func(_logged(import_teams), timeout=1800))  # and the team import, likewise
+    # Nor the every-minute jobs ON_THE_CLOCK: a cron run waits for a free job slot.
     cron_jobs = [
-        cron(_logged(tick, quiet=True), second=0, run_at_startup=True),
         cron(_logged(purge_sessions), hour=4, minute=10, second=0),
         cron(_logged(refresh_starters), hour=4, minute=40, second=0, timeout=2400),
         cron(_logged(warm_sources), minute=set(range(0, 60, 10)), second=30, run_at_startup=True, timeout=900),
@@ -420,7 +478,6 @@ class WorkerSettings:
         cron(_logged(read_sidelined), hour={6, 16}, minute=30, second=0, timeout=600),
         cron(_logged(refresh_campaigns), hour=5, minute=10, second=0, timeout=600),
         cron(_logged(prepare_questions, quiet=True), minute=set(range(4, 60, 10)), second=20, run_at_startup=True, timeout=300),
-        cron(_logged(prediction_pushes, quiet=True), second=50, timeout=120),
     ]
     # Without a zone arq reads cron times in the machine's own: the weekly import ran at 22:00 UTC on a
     # laptop in India, Sunday evening's football.

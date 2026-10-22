@@ -194,8 +194,8 @@ const told = new Set<string>() // the videos this app has told the server won't 
  * button turns it on or off for the videos after it too. YouTube's own buttons do the rest: pausing, its full screen
  * (upright, as the phone is held). Drawn once a video (`key` it by the video). A link out of it opens in the YouTube
  * app or the browser. One that won't load says so, with the way to the video; one YouTube won't play here (its owner
- * keeps it off other sites: refusedHere) says that, and the server is told, once, so no fan's Feed serves it again
- * (BHA-380). `bare`: without YouTube's controls, a Short's (BHA-384). */
+ * keeps it off other sites: refusedHere) says that, and the server is told, once, so this fan's Feed doesn't serve it
+ * again, nor anyone's once enough networks have said so (BHA-380). `bare`: without YouTube's controls, a Short's (BHA-384). */
 function InlineVideo({ item, playerId, bare, onTouch }: { item: FeedItem; playerId: number; bare?: boolean; onTouch?: () => void }) {
   const [failed, setFailed] = useState<'load' | 'refused' | null>(null)
   const site = `${API_URL}/`

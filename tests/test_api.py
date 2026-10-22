@@ -21,6 +21,9 @@ import asyncio
 import errno
 import json
 import logging
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
@@ -113,11 +116,40 @@ class Redis:
     async def delete(self, *keys):
         return sum(self.data.pop(k, None) is not None for k in keys)
 
+    async def sadd(self, key, *members):
+        held = self.data.setdefault(key, set())
+        assert isinstance(held, set)
+        new = set(members) - held
+        held.update(new)
+        return len(new)
+
+    async def scard(self, key):
+        return len(self.data.get(key) or ())  # type: ignore[arg-type]
+
+    async def srem(self, key, *members):
+        held = self.data.get(key) or set()
+        assert isinstance(held, set)
+        gone = held & set(members)
+        held.difference_update(gone)
+        return len(gone)
+
     async def expire(self, key, seconds, nx=False):
         return True
 
     async def ttl(self, key):
         return 42 if key in self.data else -2
+
+    async def sadd(self, key, *members):
+        held = self.data.setdefault(key, set())
+        assert isinstance(held, set)
+        new = set(members) - held
+        held.update(new)
+        return len(new)
+
+    async def scard(self, key):
+        held = self.data.get(key) or set()
+        assert isinstance(held, set)
+        return len(held)
 
     def pipeline(self, transaction=True):
         return Pipeline(self)
@@ -173,6 +205,8 @@ class Db:
             return _param(stmt, "fan_id") in {fan for fan, _ in self.api.follows}  # does a fan id own anything here
         if d["expr"] is PlayerIdentity.player_id and _param(stmt, "system") == "wikidata":
             return self.api.qids.get(_param(stmt, "external_id"), (None,))[0]  # who holds a qid, by qid alone
+        if d["expr"] is PushSubscription.id:
+            return 1 if _param(stmt, "endpoint") in self.api.devices else None  # is a device stored, by its endpoint or token
         if d["entity"] is not Follow or (_param(stmt, "fan_id"), _param(stmt, "player_id")) not in self.api.follows:
             return None
         return SimpleNamespace(alert_rules={}) if d["expr"] is Follow else {} if d["expr"] is Follow.alert_rules else 1
@@ -383,6 +417,107 @@ def test_searches_that_reach_the_live_sources_are_limited_per_fan_and_per_addres
     searching("new-cookie", PUBLIC)
     searching("someone-else", "81.2.69.143")
     assert allowed[4:] == [False, True]
+
+
+@pytest.fixture
+def a_source(api, monkeypatch):
+    """ESPN soccer has every athlete id; the ids it was asked for. A pick makes a new player each time."""
+    asked = []
+    adapter = ADAPTERS["espn_soccer"]
+    monkeypatch.setattr(adapter, "player", lambda athlete_id, league=None: asked.append(athlete_id) or PlayerRef(adapter.system, athlete_id, "Someone", [], []))
+    made = iter(range(100, 200))
+    monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: (next(made), True))
+    return asked
+
+
+def test_follows_that_ask_a_source_are_limited_per_fan_and_per_address(api, a_source, monkeypatch):
+    # BUG-090: a script walking a source's ids made a player polled every half hour for each, with no limit.
+    monkeypatch.setattr(server, "SOURCE_LOOKUPS_PER_MINUTE", 3, raising=False)
+    monkeypatch.setattr(server, "SOURCE_LOOKUPS_PER_ADDRESS", 5, raising=False)
+
+    def follow(fan, address, athlete_id):
+        return api.call("POST", "/api/follows", fan=fan, address=address, body={"system": "espn_soccer", "athlete_id": athlete_id})
+
+    answers = [follow("script", PUBLIC, str(n)) for n in range(4)]
+    assert [r.status_code for r in answers] == [200, 200, 200, 429]
+    assert answers[-1].json()["detail"] == "You've looked up a lot of new athletes this minute. Try again in a minute."
+    assert a_source == ["0", "1", "2"]
+    # New cookies from the same address stop at the address's limit; another address isn't held up.
+    assert [follow(f"cookie-{n}", PUBLIC, str(10 + n)).status_code for n in range(3)] == [200, 200, 429]
+    assert follow("someone-else", "81.2.69.143", "20").status_code == 200
+    # Following by registry id when no player holds them yet looks them up in the source too: counted the same.
+    person = registry.Person("Q99", "football", "Some One", [], date(2000, 1, 1), [], None, {})
+    monkeypatch.setattr(server, "_registry_athlete", lambda db, body: person)
+
+    async def resolve(person):
+        return pytest.fail("the source was asked")
+
+    monkeypatch.setattr(server, "_resolve", resolve)
+    assert api.call("POST", "/api/follows", fan="script", address=PUBLIC, body={"qid": "Q99", "sport": "football"}).status_code == 429
+    # A player already here asks no source: never counted.
+    assert api.call("POST", "/api/follows", fan="script", address=PUBLIC, body={"player_id": 1}).status_code == 200
+
+
+def test_previews_that_ask_a_source_are_limited_per_fan_and_per_address(api, previews, monkeypatch):
+    # BUG-128: previews of made-up ids, with no cookie, spent a paid source's allowance for the hour.
+    monkeypatch.setattr(server, "SOURCE_LOOKUPS_PER_MINUTE", 3, raising=False)
+    monkeypatch.setattr(server, "SOURCE_LOOKUPS_PER_ADDRESS", 5, raising=False)
+
+    def preview(athlete_id, fan=None, address=PUBLIC):
+        return api.call("GET", f"/api/athletes/espn_soccer/{athlete_id}", fan=fan, address=address).status_code
+
+    assert [preview(str(999_000 + n), "script") for n in range(4)] == [404, 404, 404, 429]
+    assert [preview(str(999_100 + n)) for n in range(3)] == [404, 404, 429]  # no cookie: a new fan each time, the same address
+    assert len(previews) == 5
+    assert preview("231388", address="81.2.69.143") == 200
+    # A preview kept from a moment ago asks no source: never counted.
+    monkeypatch.setitem(server.player_search._previews, "espn_soccer:231388", (time.time(), {"name": "Someone"}))
+    assert preview("231388", "script") == 200
+    # A registry athlete's preview looks them up in their source by name: counted the same.
+    person = registry.Person("Q99", "football", "Some One", [], date(2000, 1, 1), [], None, {})
+    monkeypatch.setattr(server, "_registry_athlete", lambda db, body: person)
+
+    async def resolve(person):
+        return pytest.fail("the source was asked")
+
+    monkeypatch.setattr(server, "_resolve", resolve)
+    assert api.call("GET", "/api/athletes/wikidata/Q99", fan="script", address=PUBLIC).status_code == 429
+
+
+def test_a_previews_league_doesnt_make_it_a_new_one(monkeypatch):
+    # BUG-128: any well-formed ?league= was a new key, so the same athlete was read again for each.
+    reads = []
+    adapter = SimpleNamespace(preview_fixtures=False, player=lambda athlete_id, league: reads.append(league) or PlayerRef("espn_soccer", athlete_id, "Someone", [], [], league=league),
+                              stats=lambda ref, recent: ([], ""))
+    monkeypatch.setitem(ADAPTERS, "espn_soccer", adapter)
+    monkeypatch.setattr(server.player_search, "_previews", {})
+    monkeypatch.setattr(structured, "sport_name", lambda adapter, ref: "Football")
+    for named in (None, "eng.1", "a1", "a2"):
+        assert server.player_search.preview("espn_soccer", "231388", named)["name"] == "Someone"
+    assert reads == [None]
+    assert server.player_search.previewed("espn_soccer", "231388")
+
+
+def test_a_fan_follows_at_most_so_many_players(api, a_source, monkeypatch):
+    # BUG-090: one fan could follow every athlete a source has, each polled every half hour for good.
+    monkeypatch.setattr(server, "PLAYERS_MAX", 2, raising=False)
+    plain = Db.scalar
+
+    def scalar(self, stmt):  # how many players a fan follows
+        if stmt.column_descriptions[0]["name"] == "count":
+            return sum(fan == _param(stmt, "fan_id") for fan, _ in api.follows)
+        return plain(self, stmt)
+
+    monkeypatch.setattr(Db, "scalar", scalar)
+    api.follows |= {("fan", 1), ("fan", 2)}
+    refused = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"system": "espn_soccer", "athlete_id": "231388"})
+    assert (refused.status_code, refused.json()["detail"]) == (429, "You follow 2 players already: unfollow one to follow another.")
+    assert a_source == []  # refused before the source was asked
+    typed = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"query": "Brand New Name"})
+    assert typed.status_code == 429 and api.redis.data[server.player_search.research_key("fan")] == 0  # its research given back
+    assert api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"player_id": 1}).status_code == 200  # one followed already: no new follow
+    assert api.call("POST", "/api/follows", fan="another", address=PUBLIC, body={"player_id": 1}).status_code == 200
+    assert not [s for s in api.statements if isinstance(s, Insert) and s.table.name == "follow" and _param(s, "fan_id") == "fan" and _param(s, "player_id") != 1]
 
 
 def test_limits_count_the_public_address_a_client_comes_from():
@@ -789,6 +924,11 @@ SALAH = registry.Person("Q1354960", "football", "Mohamed Salah", [], date(1992, 
     # No id in this source: the birth date decides.
     (registry.Person(**{**SALAH.__dict__, "ids": {}}), PlayerRef("espn_soccer", "173896", "Mohamed Salah", ["364"], ["Liverpool"], born="1992-06-15"), True),
     (registry.Person(**{**SALAH.__dict__, "ids": {}}), PlayerRef("espn_soccer", "555", "Mohamed Salah", ["1"], ["Al Ahly"], born="1995-03-02"), False),
+    # A stranger born the same day: Giacomo De Pieri's profile went to ESPN's Ethan Mbappé (BUG-146).
+    (registry.Person("Q118643915", "football", "Giacomo De Pieri", [], date(2006, 12, 29), [], None, {}, registry.DAY),
+     PlayerRef("espn_soccer", "355971", "Ethan Mbappé", ["1"], ["Lille"], born="2006-12-29"), False),
+    # The name, with the day and month the other way round: someone else.
+    (registry.Person("Q2", "football", "Asha Rao", [], date(2001, 3, 4), [], None, {}, registry.DAY), PlayerRef("espn_soccer", "556", "Asha Rao", ["1"], [], born="2001-04-03"), False),
 ])
 def test_a_pick_links_the_registry_athlete_only_when_the_registry_agrees(api, monkeypatch, person, pick, linked):
     links = []
@@ -1286,6 +1426,128 @@ def test_a_device_moves_to_another_fan_only_with_its_own_keys(api):
     assert len(trims) == 3  # the device cap, after each subscription that went through
 
 
+# ---------------------------------------------------------------- devices and test pushes from one network (BUG-181, BUG-182)
+
+
+def test_one_network_turns_notifications_on_for_only_so_many_new_devices_a_day(api, monkeypatch):
+    # BUG-181: new cookies are free, so the cap of a fan's devices didn't bound one network's.
+    monkeypatch.setattr(server, "DEVICES_PER_ADDRESS", 3, raising=False)
+    monkeypatch.setattr(server.fcm, "enabled", lambda: True)
+
+    def browser(fan: str, n: int, address: str = PUBLIC) -> int:
+        body = {"subscription": {"endpoint": f"https://fcm.googleapis.com/fcm/send/{n}", "keys": {"p256dh": f"k{n}", "auth": "a"}}}
+        return api.call("POST", "/api/push/subscriptions", fan=fan, address=address, body=body).status_code
+
+    def phone(fan: str, n: int, address: str = PUBLIC) -> int:
+        return api.call("POST", "/api/push/fcm", fan=fan, address=address, body={"token": f"dGVzdC1pbnN0YW5jZQ:APA91bE{n}" + "x" * 140}).status_code
+
+    assert [browser(f"script-{n}", n) for n in range(2)] + [phone("script-2", 2), browser("script-3", 3), phone("script-4", 4)] == [200, 200, 200, 429, 429]
+    # A device already counted, sent again as each start of the app sends it, is never refused; nor is another network.
+    assert browser("script-0", 0) == 200 and phone("script-2", 2) == 200
+    assert browser("someone", 9, "81.2.69.143") == 200
+    assert set(api.devices) == {"https://fcm.googleapis.com/fcm/send/0", "https://fcm.googleapis.com/fcm/send/1", "https://fcm.googleapis.com/fcm/send/9",
+                                "dGVzdC1pbnN0YW5jZQ:APA91bE2" + "x" * 140}
+
+
+def test_a_device_already_on_is_never_refused_however_many_new_ones_its_network_has(api, monkeypatch):
+    # Review of BUG-181's cap: it counted every device sent that day, and each start of the app sends its device
+    # again, so the 21st fan with notifications already on behind one carrier's address couldn't save quiet hours,
+    # live cards, or move their device with a sign-in. Only a device not already stored is new.
+    monkeypatch.setattr(server, "DEVICES_PER_ADDRESS", 2, raising=False)
+    monkeypatch.setattr(server, "DEVICES_PER_IPV6", 1, raising=False)
+    monkeypatch.setattr(server.fcm, "enabled", lambda: True)
+    token = "dGVzdC1pbnN0YW5jZQ:APA91bE" + "x" * 140
+
+    def browser(fan: str, n: int, address: str = PUBLIC) -> int:
+        body = {"subscription": {"endpoint": f"https://fcm.googleapis.com/fcm/send/{n}", "keys": {"p256dh": "k", "auth": "a"}}, "quiet_start": "22:00", "quiet_end": "07:00"}
+        return api.call("POST", "/api/push/subscriptions", fan=fan, address=address, body=body).status_code
+
+    def phone(fan: str, address: str = PUBLIC) -> int:
+        return api.call("POST", "/api/push/fcm", fan=fan, address=address, body={"token": token, "live_cards": False}).status_code
+
+    assert [browser("fan-0", 0), phone("fan-1")] == [200, 200]
+    for key in [k for k in api.redis.data if k.startswith("push:devices:")]:
+        del api.redis.data[key]  # the next day
+    assert [browser("fan-2", 2), browser("fan-3", 3), browser("fan-4", 4)] == [200, 200, 429]  # the day's new ones
+    # Past the day's room, devices already on change their settings, and move with a sign-in.
+    assert [browser("fan-0", 0), phone("fan-1"), browser("acct-0", 0), phone("acct-1")] == [200] * 4
+    assert (api.devices["https://fcm.googleapis.com/fcm/send/0"][0], api.devices[token][0]) == ("acct-0", "acct-1")
+    # An IPv6 /64 is one home or phone, not a carrier's many: it has less room.
+    assert [browser("v6-5", 5, "2a00:1450:4001:80b::5"), browser("v6-6", 6, "2a00:1450:4001:80b::6")] == [200, 429]
+
+
+@pytest.fixture
+def unanswered(api, monkeypatch):
+    """Every fan has ten devices (the cap), whose push services never answer a test push till the event is set."""
+    release = threading.Event()
+    devices = [(i, "webpush", f"https://fcm.googleapis.com/fcm/send/{i}", "k", "a") for i in range(notify.MAX_DEVICES)]
+
+    @contextmanager
+    def session():  # what send_test read the devices from before it was handed them
+        yield SimpleNamespace(scalars=lambda stmt: [SimpleNamespace(id=i, transport=t, endpoint=e, p256dh=p, auth=a) for i, t, e, p, a in devices])
+
+    tests = ThreadPoolExecutor(max_workers=4)
+    monkeypatch.setattr(notify, "public_key", lambda: "key")
+    monkeypatch.setattr(notify, "session", session)
+    monkeypatch.setattr(notify, "newest_devices", lambda db, fan: devices, raising=False)
+    monkeypatch.setattr(notify, "deliver", lambda device, payload, ttl, topic=None: release.wait(30) and "Read timed out.")
+    monkeypatch.setattr(notify, "settle", lambda results: None)
+    monkeypatch.setattr(notify, "_tests", tests, raising=False)
+    monkeypatch.setattr(notify, "TEST_WAIT", 0.3, raising=False)
+    yield release
+    release.set()
+    tests.shutdown(wait=True)
+
+
+def test_test_pushes_to_devices_that_never_answer_hold_up_no_search(unanswered):
+    # BUG-182: each test push held one of the threads search, following and sign-in run on (about six a worker),
+    # pushing its ten devices one after another: 34 at once and a search took 77 s.
+    async def go():
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=4))
+
+        async def test_push(n: int) -> httpx.Response:
+            transport = httpx.ASGITransport(app=server.app, client=(f"81.2.69.{10 + n}", 50000), raise_app_exceptions=False)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                return await client.post("/api/push/test", headers={"Cookie": f"sf_fan={server.sign_fan(f'fan-{n}')}"})
+
+        pushes = [asyncio.create_task(test_push(n)) for n in range(8)]
+        await asyncio.sleep(0.2)
+        try:
+            searched = await asyncio.wait_for(asyncio.to_thread(lambda: "found"), 2)  # as /api/search runs _search
+        except TimeoutError:
+            searched = "still waiting for a thread"
+        finally:
+            unanswered.set()
+        return searched, await asyncio.gather(*pushes)
+
+    searched, answers = asyncio.run(go())
+    assert searched == "found"
+    assert [(a.status_code, a.json()) for a in answers] == [(200, {"sent": 0})] * 8  # none answered in time
+
+
+def test_test_pushes_are_limited_for_each_fan_and_network(api, unanswered, monkeypatch):
+    unanswered.set()
+    monkeypatch.setattr(server, "PUSH_TESTS_PER_FAN", 5, raising=False)
+    monkeypatch.setattr(server, "PUSH_TESTS_PER_ADDRESS", 8, raising=False)
+
+    def test_push(fan: str, address: str = PUBLIC) -> int:
+        return api.call("POST", "/api/push/test", fan=fan, address=address).status_code
+
+    expiries: list[tuple[str, bool]] = []
+
+    async def expire(key, seconds, nx=False):
+        expiries.append((key, nx))
+        return True
+
+    monkeypatch.setattr(api.redis, "expire", expire)
+    assert [test_push("fan") for _ in range(6)] == [200] * 5 + [429]
+    assert [test_push(f"cookie-{n}") for n in range(4)] == [200, 200, 200, 429]  # new cookies share their network's
+    assert test_push("someone", "81.2.69.143") == 200
+    # Each count's hour is set by its first try, never pushed back by more: a network someone keeps trying from
+    # still gets its tests back after the hour.
+    assert expiries and all(nx for _, nx in expiries)
+
+
 def test_starters_are_offered_as_the_fan_sees_them(api, monkeypatch):
     """GET /api/starters answers from starters.offer for this fan (whose follows mark the rows); starters.py
     and tests/test_players.py hold what's offered."""
@@ -1465,6 +1727,20 @@ def test_following_a_whole_team_follows_each_player_on_its_roster_with_key_alert
     assert api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={"players": True}).json() == {"player_ids": [], "failed": 0}  # no players of its own
 
 
+def test_following_a_whole_team_over_and_over_without_a_cookie_stops_asking_its_source(api, monkeypatch):
+    # BUG-128 (H13): each tap asked the source for every roster player not on the app yet, with no cookie and no limit.
+    from sports_follow import campaigns
+
+    monkeypatch.setattr(campaigns, "page", lambda db, slug, fan: WORLDS if slug == "worlds" else None)
+    monkeypatch.setattr(server, "SOURCE_LOOKUPS_PER_ADDRESS", 5, raising=False)
+    asked = []
+    monkeypatch.setitem(ADAPTERS, "pandascore_esports", KNOWN["pandascore_esports"])  # PandaScore runs only with its token
+    monkeypatch.setattr(ADAPTERS["pandascore_esports"], "player", lambda athlete_id, league=None: asked.append(athlete_id))  # none of them is there any more
+    answers = [api.call("POST", "/api/campaigns/worlds/follow", address=PUBLIC, body={"team": "126061"}).json() for _ in range(3)]
+    assert len(asked) == 5  # Oner, Gone and Broken, then two more: the address's minute
+    assert answers[-1] == {"player_ids": [3, 4], "failed": 3}
+
+
 def test_a_fans_first_links_tags_are_kept_once_and_only_in_their_shape(api):
     def kept() -> list[dict]:
         return [{k: _param(s, k) for k in ("fan_id", "tag", "utm_source", "utm_medium", "utm_campaign", "landing")} for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source"]
@@ -1479,34 +1755,62 @@ def test_a_fans_first_links_tags_are_kept_once_and_only_in_their_shape(api):
 
 
 def test_a_video_that_wont_play_inside_the_app_is_said_so_of_so_many_an_hour_and_odd_ones_are_refused_plainly(api, monkeypatch):
-    """A fan's app says a Feed video's player refused it (feed.unplayable, BHA-380): it leaves everyone's Feed, so a
-    fan says so only so many times an hour, and an address and everyone together mark only so many videos. Junk ids
-    and a video said of again count against the fan alone."""
-    marked: set[str] = set()
+    """A fan's app says a Feed video's player refused it (BHA-380): it leaves their Feed (feed.said_unplayable), and
+    it's their network's vote on whether it leaves everyone's (BHA-422): feed.UNPLAYABLE_VOTES networks saying so take
+    it out of every fan's (feed.unplayable). A fan says so only so many times an hour, and an address and everyone
+    together vote only so many times. Junk ids, a video an admin vouched for and a network's word again count
+    against the fan alone."""
+    marked: list[str] = []
 
-    def unplayable(db, player_id, item):
+    def said(db, fan, player_id, item):
         if item == "not-an-item":
             raise ValueError("No such item.")
         if item == "0" * 16:
             raise LookupError("That video isn't in this player's feed.")
-        new = item not in marked
-        marked.add(item)
-        return new
+        return None if item == "f" * 16 else f"youtube:{item}"  # f…f: an admin vouched for it
 
-    def say(item: str, fan: str = "fan") -> httpx.Response:
-        return api.call("POST", f"/api/players/7/feed/{item}/unplayable", fan=fan, address=PUBLIC)
+    def unplayable(db, player_id, item):
+        marked.append(item)
+        return True
 
+    def say(item: str, fan: str = "fan", address: str = PUBLIC) -> httpx.Response:
+        return api.call("POST", f"/api/players/7/feed/{item}/unplayable", fan=fan, address=address)
+
+    monkeypatch.setattr(feed, "said_unplayable", said, raising=False)
     monkeypatch.setattr(feed, "unplayable", unplayable)
     first = say("0123456789abcdef")
-    assert first.status_code == 200 and first.json() == {"item_id": "0123456789abcdef", "unplayable": True, "marked": True}
-    assert say("0123456789abcdef").json()["marked"] is False
-    assert say("not-an-item").status_code == 422 and say("0" * 16).status_code == 404
+    assert first.status_code == 200 and first.json() == {"item_id": "0123456789abcdef", "unplayable": True, "marked": False}  # their Feed's alone
+    assert say("0123456789abcdef", fan="new-cookie").json()["marked"] is False  # the same network again
+    assert say("not-an-item").status_code == 422 and say("0" * 16).status_code == 404 and say("f" * 16).json()["marked"] is False
     for _ in range(feed.UNPLAYABLE_PER_FAN - 4):
         assert say("0123456789abcdef").status_code == 200
     assert say("0123456789abcdef").status_code == 429  # the fan's hour
-    assert api.redis.data[f"feed:unplayable:address:{PUBLIC}"] == api.redis.data["feed:unplayable:all"] == 1  # one mark
-    # Other fans on the same network, until the address has marked as many videos as an address may.
+    assert api.redis.data[f"feed:unplayable:address:{PUBLIC}"] == api.redis.data["feed:unplayable:all"] == 1  # one vote
+    # Other networks: with enough of them, it leaves every fan's Feed.
+    for n in range(feed.UNPLAYABLE_VOTES - 1):
+        assert say("0123456789abcdef", fan=f"elsewhere-{n}", address=f"81.2.70.{n + 1}").json()["marked"] is (n == feed.UNPLAYABLE_VOTES - 2)
+    assert marked == ["0123456789abcdef"]
+    # Other fans on the same network, until the address has voted as many times as an address may.
     for n in range(feed.UNPLAYABLE_PER_ADDRESS - 1):
-        assert say(f"{n + 1:016x}", fan=f"fan-{n}").json()["marked"] is True
+        assert say(f"{n + 1:016x}", fan=f"fan-{n}").status_code == 200
     assert say(f"{999:016x}", fan="new-fan").status_code == 429
-    assert len(marked) == feed.UNPLAYABLE_PER_ADDRESS
+    assert api.redis.data[f"feed:unplayable:address:{PUBLIC}"] == feed.UNPLAYABLE_PER_ADDRESS  # the refused one given back
+
+
+def test_a_burst_of_wont_play_reports_at_once_cant_pass_an_addresss_limit(api, monkeypatch):
+    """BHA-422: each count is taken before a report is acted on, and given back when it's refused, so reports that
+    arrive together can't all find the count under the limit and all pass."""
+    monkeypatch.setattr(feed, "said_unplayable", lambda db, fan, player_id, item: f"youtube:{item}", raising=False)
+    monkeypatch.setattr(feed, "unplayable", lambda db, player_id, item: True)
+    key = f"feed:unplayable:address:{PUBLIC}"
+    api.redis.data[key] = feed.UNPLAYABLE_PER_ADDRESS - 1  # one short of the hour's limit
+
+    async def burst() -> list[httpx.Response]:
+        transport = httpx.ASGITransport(app=server.app, client=(PUBLIC, 50000))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await asyncio.gather(*(client.post(f"/api/players/7/feed/{n:016x}/unplayable", headers={"Cookie": f"sf_fan={server.sign_fan(f'script-{n}')}"})
+                                          for n in range(20)))  # fmt: skip
+
+    answers = asyncio.run(burst())
+    assert sorted(r.status_code for r in answers) == [200] + [429] * 19
+    assert api.redis.data[key] == feed.UNPLAYABLE_PER_ADDRESS

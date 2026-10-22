@@ -107,6 +107,14 @@ class FakeRedis:
         self.ttl[key] = seconds
         return int(key in self.data)
 
+    def incr(self, key):
+        self.data[key] = int(self.data.get(key, 0)) + 1
+        return self.data[key]
+
+    def decr(self, key):
+        self.data[key] = int(self.data.get(key, 0)) - 1
+        return self.data[key]
+
     def eval(self, script, numkeys, key, token, *args):
         """bus.py's two scripts: delete, or set a new expiry, only if the key still holds the token."""
         if self.data.get(key) != token:
@@ -263,6 +271,32 @@ def test_without_the_agent_a_sources_page_is_whole_and_nothing_waits_for_a_model
     assert cards[2].card["error"] == "No live source has this player, so there's no page to show yet."
 
 
+def test_new_players_backgrounds_stop_at_the_hours_allowance(monkeypatch, redis):
+    # BUG-090: each new player a live source has and Wikipedia has no article on sent the research agent, counted
+    # nowhere: a script following a source's ids one by one could spend the day's model budget.
+    players = [Player(id=n, slug=f"pro-{n}", name=f"Pro {n}", sport="Valorant", status="active", teams=["Sentinels"]) for n in (1, 2, 3)]
+    cards = [PlayerCard(player_id=n, status="ready", card={"status": "ready", "pending": ["profile"]}, version=1, built_at=None) for n in (1, 2, 3)]
+    clock, sent, published = [NOW], [], {}
+    monkeypatch.setattr(config, "AGENT", True)
+    monkeypatch.setattr(config, "BACKGROUNDS_PER_HOUR", 2, raising=False)
+    monkeypatch.setattr(pipeline, "session", lambda: nullcontext(FakeDb(*players, *cards)))
+    monkeypatch.setattr(pipeline, "_now", lambda: clock[0])
+    monkeypatch.setattr(pipeline, "llm", lambda: None)
+    monkeypatch.setattr(pipeline, "follow_player", lambda llm, name, known, background_only=False: sent.append((name, background_only)) or iter([]))
+    monkeypatch.setattr(pipeline, "refresh_profile", lambda player_id: None)  # no Wikipedia article: no About
+    monkeypatch.setattr(structured, "binding", lambda db, player_id: SimpleNamespace(adapter="pandascore_esports"))  # their games from a source
+    monkeypatch.setattr(structured, "describe", lambda player_id: None)
+    monkeypatch.setattr(bus, "store_card", lambda player_id, card: published.__setitem__(player_id, card))
+    for n in (1, 2, 3):
+        pipeline.build_card(n)
+    assert sent == [("Pro 1", True), ("Pro 2", True)]
+    # The third page doesn't wait for one: it's whole from its source, and a fan opening it later sends the agent.
+    assert published[3]["status"] == "ready" and "pending" not in published[3]
+    clock[0] += timedelta(hours=1)
+    pipeline.build_card(3)
+    assert sent[-1] == ("Pro 3", True)
+
+
 @pytest.mark.parametrize("agent", [True, False])
 def test_a_pick_waits_for_its_profile_with_or_without_the_agent(monkeypatch, agent):
     # The profile comes from Wikidata and Wikipedia, not a model: the build queued with the pick reads it.
@@ -403,6 +437,9 @@ class RefusingSource:
 
     def sport_of(self, ref):
         return self.sports[0]
+
+    def player(self, athlete_id, league=None):
+        return None  # asked again who they are (structured.reread): nothing new
 
     def fixtures(self, ref):
         self.requests.append(ref.athlete_id)

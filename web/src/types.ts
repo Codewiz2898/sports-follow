@@ -106,6 +106,9 @@ export interface RecentResult {
   match?: string | null  // its match page's address after /match/, where a source has the game
   game_key?: string | null  // the game it's one fixture of, as a live game's (LiveStatus)
   scorecard?: boolean | 'missing'  // the player's line has been read (history), or the source has none
+  // Won, drew or lost from the player's side, told by the server from the side they played for (null: it can't
+  // say); missing on a result it didn't tell (format.ts: resultOutcome).
+  outcome?: 'W' | 'D' | 'L' | null
 }
 
 /** A page of a player's results history, newest first (sports_follow/results.py). */

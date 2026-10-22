@@ -339,10 +339,17 @@ class Chess(Sport):
         players, tournament, rnd = sorted(self.board_players(state)), state.get("tournament"), state.get("round")
         return "|".join([str(tournament), str(rnd), *players]) if len(players) == 2 and tournament and rnd else ""
 
+    def question_board(self, state: dict[str, Any]) -> str:
+        """A mini-match's questions are its first game's board's: the round showed that game alone when they were
+        asked, before anyone could know more would follow (asks), and its next games, each a board of its own, find
+        them there."""
+        return str((state.get("match") or {}).get("first") or "") or self.board(state)
+
     def asks(self, state: dict[str, Any]) -> list[Ask]:
         """Who wins, or a draw, once the round's pairing is out: the two players by their FIDE ids, White first. A
-        knockout round's mini-match (several games on one board) asks nothing: each of its games shows only once
-        the one before is over, too late to call."""
+        knockout round's mini-match (several games on one board) asks nothing more: each of its games shows only
+        once the one before is over, too late to call. The question its first game was asked, shown alone before
+        the start, is the match's (question_board, answer)."""
         white, black = state.get("white") or {}, state.get("black") or {}
         if state.get("match") or not (state.get("game_id") and white.get("id") and black.get("id") and white.get("name") and black.get("name")):
             return []
@@ -352,7 +359,16 @@ class Chess(Sport):
         return status in ("live", "final") or bool(state.get("result"))
 
     def answer(self, ask: str, status: str | None, state: dict[str, Any]) -> str | None:
-        """The winner's FIDE id, or a draw, from the board's result."""
+        """The winner's FIDE id, or a draw, once the board's over: of a mini-match, who's ahead in it (state["match"]);
+        of one game, its result. Its source keeps a game live while its pairing's next may follow it in the round, so
+        no game of a tiebreak answers for its match."""
+        if status != "final":
+            return None
+        match = state.get("match")
+        if match:
+            if "ahead" not in match:
+                return None  # a board read before it said who's ahead: the next read says
+            return str(match["ahead"]) if match["ahead"] else DRAW
         side = RESULTS.get(state.get("result") or "")
         if side is None:
             return None

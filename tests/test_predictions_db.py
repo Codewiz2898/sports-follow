@@ -19,12 +19,12 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import accounts, bus, engine, league, live, match, notify, pipeline, predictions, server, sports, structured
-from sports_follow.adapters import ADAPTERS, KNOWN, Fixture, LiveGame, pandascore_esports as ps, sportmonks_cricket as sc, sportmonks_football as sm
+from sports_follow.adapters import ADAPTERS, KNOWN, Fixture, LiveGame, lichess_chess, pandascore_esports as ps, sportmonks_cricket as sc, sportmonks_football as sm
 from sports_follow.models import Account, Event, EventPlayer, Follow, League, LeagueMember, Pick, Player, Question
 from sports_follow.sports import Notable
 
 from .test_match_follow import Store
-from .test_new_adapters import CARLSEN, LAZAVIK, load
+from .test_new_adapters import CARLSEN, LAZAVIK, load, tiebreak
 from .test_pandascore import FINAL, NRG, SEN, _game, _match
 from .test_predictions import board
 from .test_sportmonks import AWAY, HOME, _match as football_match
@@ -164,6 +164,33 @@ def test_a_chess_game_is_asked_before_it_starts_and_settled_from_its_recorded_re
     predictions.settle(db, [settled], structured.sports.get("chess"), "final", board(1).state, datetime.now(timezone.utc))
     db.commit()
     assert picks(db) == {"asha": (CARLSEN, 0), "ravi": (CARLSEN, 0), "meera": ("draw", 80), "kiran": (LAZAVIK, 0), "dev": (LAZAVIK, 0)}
+
+
+def test_a_tiebreak_rounds_question_is_settled_by_its_match_through_its_polls(db, redis):
+    # "Who wins?" asked of a tiebreak round's game 1, shown alone before the start (BUG-213): its games 1–4 come one at
+    # a time, each a board of its own, and none of them settles it; the match does once the round's over: Lazavik won
+    # 2½–1½ (Carlsen won game 1, Lazavik games 2 and 3, game 4 drawn), and the picks of Lazavik are right.
+    chess_board(db, soon())
+
+    def look(*results: str, **when: bool) -> None:
+        for event_id, fide in ((1, CARLSEN), (2, LAZAVIK)):
+            poll(event_id, lichess_chess.parse_board(tiebreak(*results, **when), fide))
+
+    look("*", to_come=True)
+    [q] = db.scalars(select(Question)).all()
+    assert q.game == GAME
+    for fan, option in (("asha", CARLSEN), ("ravi", LAZAVIK), ("meera", "draw")):
+        predictions.pick(db, fan, q.id, option)
+    db.commit()
+    for results in (("*",), ("1-0",), ("1-0", "*"), ("1-0", "1-0"), ("1-0", "1-0", "0-1"), ("1-0", "1-0", "0-1", "½-½")):
+        look(*results)
+        db.expire_all()
+        assert (db.get(Question, q.id).status, db.get(Question, q.id).answer) == ("closed", None), results  # type: ignore[union-attr]
+    look("1-0", "1-0", "0-1", "½-½", finished=True)
+    db.expire_all()
+    assert (db.get(Question, q.id).status, db.get(Question, q.id).answer) == ("settled", LAZAVIK)  # type: ignore[union-attr]
+    assert {fan: points > 0 for fan, (_, points) in picks(db).items() if points is not None} == {"asha": False, "ravi": True, "meera": False}
+    assert db.scalars(select(Question)).all() == [q]  # one question, the match's, through all its boards
 
 
 def test_a_series_settles_map_by_map_and_a_map_never_played_is_voided(db, redis):

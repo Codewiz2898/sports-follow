@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -24,6 +25,12 @@ URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
 
 NOW = datetime.now(timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def worked_out_each_time(monkeypatch):
+    """A fan's week as worked out on each ask: none kept between asks (week.mine). The test of keeping it keeps it."""
+    monkeypatch.setattr(week, "KEPT_FOR", 0, raising=False)
 
 
 @pytest.fixture
@@ -315,3 +322,25 @@ def test_a_fan_who_follows_nobody_gets_the_best_known_facts(facts, monkeypatch):
         ("Kai Havertz · hamstring injury", f"/athlete/{SM}/9001", False), ("Mohamed Salah · hamstring injury", "/player/1", False)]
     monkeypatch.setattr(week, "ADAPTERS", {})  # football turned off: no facts
     assert server.this_week("nobody", db)["wire"] == []
+
+
+def test_a_fans_week_is_worked_out_once_a_minute_and_at_once_when_they_follow_someone(db, monkeypatch):
+    """Every open app asks for This week again after a big moment, and Today asks each time it opens (BUG-265):
+    a fan's answer is kept a minute (per API process), unless they've followed someone or stopped since."""
+    clock = SimpleNamespace(now=1000.0)
+    monkeypatch.setattr(week, "KEPT_FOR", 60, raising=False)
+    monkeypatch.setattr(week, "time", SimpleNamespace(monotonic=lambda: clock.now), raising=False)
+    moment(db, 1, 1, 10, "goal", "Goal: Mohamed Salah", "Egypt 1 – 0 South Africa · 10'", 85)
+    first = server.this_week("fan", db)
+    assert [p["word"] for p in first["posters"]] == ["Goal"]
+    moment(db, 2, 2, 20, "hundred", "Smriti Mandhana reaches 100", "112 (98) · IND 289/4", 90)
+    clock.now += 59
+    assert server.this_week("fan", db) == first  # kept: not worked out again
+    assert [p["word"] for p in server.this_week("other", db)["posters"]] == []  # another fan's is their own
+    clock.now += 2
+    assert [p["word"] for p in server.this_week("fan", db)["posters"]] == ["Hundred", "Goal"]
+    # Following someone is read at once, kept or not.
+    moment(db, 3, 3, 20, "fifty", "Virat Kohli reaches 50", "50 (40)", 95)
+    db.add(Follow(fan_id="fan", player_id=3))
+    db.flush()
+    assert [p["word"] for p in server.this_week("fan", db)["posters"]] == ["Fifty", "Hundred", "Goal"]

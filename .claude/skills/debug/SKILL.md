@@ -119,7 +119,8 @@ alerts. Bharath opens it in the browser. From the Mac, [grafana.py](grafana.py) 
 - **The API** (`server.py`) answers the app, under one `rid` per request.
 - **The worker** (`worker.py`, arq) runs the jobs:
   - The tick, every minute, queues due work (`pipeline.due_work`): card builds, structured refreshes,
-    live polls, and moments nobody sent.
+    live polls, and moments nobody sent. It runs beside the jobs, not in a job slot, so it keeps its
+    minute when every slot is taken; the work it queues still waits for one.
   - `build_card` runs the research agent through the LLM gateway (`agent.py`).
   - `refresh_structured` reads a bound source.
   - `poll_event` and `poll_lane` poll live games (`structured.py`) and find moments (`moments.py`),

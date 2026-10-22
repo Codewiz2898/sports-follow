@@ -42,7 +42,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from . import logs, players, registry, search, sports
+from . import logs, pipeline, players, registry, search, sports
 from .adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef, SourceTeam
 from .db import session
 from .models import Athlete, Campaign, Player, PlayerIdentity
@@ -82,21 +82,41 @@ def get(db: Session, slug: str) -> Campaign | None:
 
 def player_ids(db: Session, at: datetime) -> set[int]:
     """The players here, by their player ids, of the campaigns (of a sport that's on) with a game on their schedule
-    within NEAR of `at`: their own (by their registry ids) and their whole teams' (by their ids in the team's source).
-    A game of theirs starting then is a campaign's game, which fans are reminded to call (predictions_push.py); their
-    other games, before the event or after it, aren't."""
-    qids: set[str] = set()
+    within NEAR of `at`: their own (by their registry ids, as their page finds them: _players) and their whole teams'
+    (by their ids in the team's source). A game of theirs starting then is a campaign's game, which fans are reminded
+    to call (predictions_push.py); their other games, before the event or after it, aren't."""
+    found: set[int] = set()
     refs: set[tuple[str, str]] = set()
     for c in db.scalars(select(Campaign)):
         if not sports.on(c.sport) or not any(abs(datetime.fromisoformat(g["start_utc"]) - at) <= NEAR for g in c.games or [] if g.get("start_utc")):
             continue
-        qids.update(c.players or [])
+        found |= _players(db, c)
         refs.update((t["system"], p["athlete_id"]) for t in c.teams or [] for p in t.get("players") or [] if t.get("system") and p.get("athlete_id"))
-    found = set(db.scalars(select(Player.id).where(Player.wikidata_qid.in_(qids)))) if qids else set()
     for system, athlete_id in refs:
         player_id = db.scalar(select(PlayerIdentity.player_id).where(PlayerIdentity.system == system, PlayerIdentity.external_id == athlete_id))
         if player_id is not None:
             found.add(player_id)
+    return found
+
+
+def _players(db: Session, c: Campaign) -> set[int]:
+    """A campaign's own players here, by their player ids, as its page finds them (search._ours): bound to the id the
+    registry has for them in the source they're followed through, else holding their registry id as a "wikidata"
+    identity (registry.link: a player made from a source's pick, as a campaign's are), unless that's the athlete's
+    player in another sport (pipeline.registry_holder); else, one the research agent built, with it on the player."""
+    if not c.players:
+        return set()
+    athletes = {a.qid: a for a in db.scalars(select(Athlete).where(Athlete.sport.in_(_within(c.sport)), Athlete.qid.in_(c.players)))}
+    found: set[int] = set()
+    for qid in c.players:
+        athlete = athletes.get(qid)
+        row = search.from_athlete(athlete, "") if athlete is not None else None
+        held = None
+        if row is not None and row.system and row.athlete_id:
+            held = db.scalar(select(PlayerIdentity.player_id).where(PlayerIdentity.system == row.system, PlayerIdentity.external_id == row.athlete_id))
+        if held is None:
+            held = pipeline.registry_holder(db, qid, pipeline.registry_sport(athlete.sport if athlete is not None else c.sport))
+        found |= {held} if held is not None else set(db.scalars(select(Player.id).where(Player.wikidata_qid == qid)))
     return found
 
 

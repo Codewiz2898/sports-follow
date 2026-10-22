@@ -573,10 +573,12 @@ class Sport:
 
     def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
         """By default, every named player's moments as the player rules find them (during: a fifty, out, a
-        wicket haul, 30 points), each about that player, in the same words and detail a fan of theirs gets. A
-        game whose earlier poll had no lines yet while it was live (the source's first lines) tells none: what
-        they say happened before. A sport whose moments are a side's, or the board's (football's goals, chess's
-        turning, esports' maps), overrides it."""
+        wicket haul, 30 points), each about that player, in the same words a fan of theirs gets, and their detail
+        led by the player's id ("253802:out", "253802:i2:100"; a correction's, the moment's it takes back): each
+        player's out is the game's own, not the first one's alone (alerts.same reads it without). A game whose
+        earlier poll had no lines yet while it was live (the source's first lines) tells none: what they say
+        happened before. A sport whose moments are a side's, or the board's (football's goals, chess's turning,
+        esports' maps), overrides it."""
         if before.status == "live" and not before.lines and now.lines:
             return []
         found = []
@@ -585,7 +587,8 @@ class Sport:
             if not who:
                 continue
             for f in self.during(who, athlete_id, before.seen(athlete_id), now.seen(athlete_id)):
-                f.title, f.about = f"{name}: {f.title}", (athlete_id,)
+                kind, said, detail = f.detail.partition(":") if f.kind == "correction" else ("", "", f.detail)
+                f.title, f.about, f.detail = f"{name}: {f.title}", (athlete_id,), f"{kind}{said}{athlete_id}:{detail}"
                 found.append(f)
         return found
 
@@ -649,6 +652,11 @@ class Sport:
         once whichever of a fan's players it's under (structured.game_key). "" where the fixture is the game."""
         return ""
 
+    def question_board(self, state: dict[str, Any]) -> str:
+        """The board a game's questions are asked and settled under (predictions.ensure): board's, unless a game goes on
+        over several boards (a chess mini-match's games), whose questions stay with the board they were asked of."""
+        return self.board(state)
+
     def board_players(self, state: dict[str, Any]) -> tuple[str, ...]:
         """Who's on a game under several fixtures (board), by their ids in the source, each with a fixture of their
         own: its fixtures here are theirs, so alerts, live cards and mutes take them for one game (structured.boards).
@@ -682,7 +690,12 @@ class Sport:
 
     draws = False  # a record always shows draws (W–D–L), even with none
 
-    def outcome(self, result: str, teams: list[str]) -> str | None:
+    def outcome(self, result: str, teams: list[str], board: dict[str, Any] | None = None, side: str | None = None) -> str | None:
+        """W, D or L for a player in a finished game, None where it can't be told: by default from its result as their
+        source puts it from their side ("Won 2–1"). `teams` names the sides they play for; `board` is the game's sides as
+        its source marks them (its final Snapshot.state, else the schedule's Fixture.result), and `side` the id of the one
+        they played for in it, where known: a sport whose result is the game's own ("India won by 57 runs") reads them.
+        Decided as a result is kept (structured.result_item), so the app shows it rather than guessing from names."""
         return outcome(result)
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:

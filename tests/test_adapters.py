@@ -14,7 +14,7 @@ import pytest
 
 from sports_follow import moments, naming, sports, structured
 from sports_follow.adapters import espn, espn_cricket, espn_soccer, lichess_chess, liquipedia, opendota, pandascore, pubg, sportmonks
-from sports_follow.adapters.base import AdapterError, Fixture
+from sports_follow.adapters.base import AdapterError, Fixture, PlayerRef
 from sports_follow.sports import football
 
 FIXTURES = Path(__file__).parent / "fixtures" / "espn"
@@ -160,6 +160,18 @@ def test_cricket_winner_is_a_real_bool_on_every_board():
     snap = espn_cricket.parse_summary(data)
     assert [t["winner"] for t in snap.state["teams"]] == [None, None]
     assert cricket.side_final(snap.state, snap.score_label, snap.clock_label, west_indies) == "West Indies lost by 8 wkts (50b rem) v India"
+
+
+def test_cricket_scorecard_says_which_side_each_player_played_for():
+    # BUG-084: whether a player won is told from the side the scorecard has them in, not from their teams' names.
+    snap = espn_cricket.parse_summary(load("cricket-summary-final"))
+    india, west_indies = "6", "4"
+    assert (snap.sides[KOHLI], snap.sides["510823"]) == (india, west_indies)  # Kohli; Greaves, who batted first
+    odi = next(f for f in espn_cricket.parse_day(load("cricket-day-20260927")) if f.source_id == "1529227")
+    for_india = PlayerRef("espn_cricket", KOHLI, "Virat Kohli", ["335970"], ["Royal Challengers Bengaluru"])  # India isn't among his teams here
+    assert structured.result_item(espn_cricket.EspnCricket(), odi, snap, None, for_india)["outcome"] == "W"
+    greaves = PlayerRef("espn_cricket", "510823", "Justin Greaves", [west_indies], ["West Indies"])
+    assert structured.result_item(espn_cricket.EspnCricket(), odi, snap, None, greaves)["outcome"] == "L"
 
 
 def test_cricket_lines_cover_the_side_that_batted_first():

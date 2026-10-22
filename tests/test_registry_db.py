@@ -79,3 +79,17 @@ def test_rows_with_an_id_the_source_no_longer_gives_go_with_the_next_complete_ru
     assert registry.import_roster(Source()) == {"pubg": 1}
     # Shrimzy wasn't seen this run, but his id is of today's shape: kept for the grace, as before.
     assert sorted(db.scalars(select(Athlete.qid))) == ["fake:new", "fake:old"]
+
+
+def test_a_star_is_found_by_the_names_fans_use(db, monkeypatch):
+    # "leo messi" and "msd" found nothing: Wikidata keeps their aliases under "mul" (BUG-145). Dhoni with all 18
+    # of his: MSD is Wikidata's tenth, and "thala" its seventeenth.
+    from sports_follow import search
+    from tests.test_registry import DHONI, MESSI, stars
+
+    rows = [stars(monkeypatch, "football", MESSI), stars(monkeypatch, "cricket", DHONI)]
+    with registry.session() as s:
+        registry.upsert(s, rows, photos=False)
+    for query, qid in [("leo messi", "Q615"), ("msd", "Q470774"), ("thala", "Q470774"), ("mahendra singh dhoni", "Q470774"), ("m.s. dhoni", "Q470774")]:
+        found = search.run(db, query, may_ask=lambda: False)["results"]
+        assert qid in [r.get("qid") for r in found], query

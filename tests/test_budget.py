@@ -15,9 +15,10 @@ import httpx
 import pytest
 
 from sports_follow import controls, history, pipeline, registry, search, server, structured, tools, worker
-from sports_follow.adapters import ADAPTERS, PlayerRef, budget, lichess_chess, liquipedia, pubg
+from sports_follow.adapters import ADAPTERS, KNOWN, PlayerRef, budget, lichess_chess, liquipedia, pandascore, pubg, sportmonks
 
 from .test_api import api  # noqa: F401  (the fixture)
+from .test_new_adapters import load
 
 ADAPTERS_DIR = Path(__file__).resolve().parent.parent / "sports_follow" / "adapters"
 SMALL = budget.Budget("small", windows=(budget.Window(3600, 20, margin=2),), reserve=8)
@@ -54,6 +55,58 @@ def test_a_scarce_sources_fans_get_their_share_and_no_more(caplog):
             budget.take(scarce, lane_name="fan")
         budget.take(scarce, lane_name="live")  # live games still go
     assert "a fan request refused" in caplog.text
+
+
+def test_every_source_with_a_live_reserve_gives_fans_a_share_smaller_than_it():
+    # BUG-128: the fan lane leaves no reserve of its own, so without a share a loop of previews of made-up ids
+    # spent what live series, matches and boards are kept (PandaScore, Sportmonks, Lichess's chess searches).
+    for b in budget.known():
+        if b.reserve:
+            assert b.fan is not None and b.fan < b.reserve, b.name
+
+
+@pytest.mark.parametrize("scarce", [pandascore.BUDGET, sportmonks.BUDGET, lichess_chess.BUDGET], ids=lambda b: b.name)
+def test_fans_in_a_loop_never_spend_what_live_games_keep(scarce):
+    # The background spends all it may (down to the reserve), then a fan loop: refused past the fans' share, and
+    # live games still get the rest of what was kept.
+    while budget.spare(scarce, "x", lane_name="refresh"):
+        budget.take(scarce, "x", lane_name="refresh")
+    fans = 0
+    with pytest.raises(budget.RateLimited, match="fans' share"):
+        for _ in range(scarce.reserve + 1):
+            budget.take(scarce, "x", lane_name="fan")
+            fans += 1
+    assert fans == scarce.fan
+    for _ in range(scarce.reserve - scarce.fan):
+        budget.take(scarce, "x", lane_name="live")
+    with pytest.raises(budget.RateLimited):
+        budget.take(scarce, "x", lane_name="live")  # the margin, never spent
+
+
+@pytest.mark.parametrize("with_token", [True, False], ids=["token", "no-token"])
+def test_a_cold_chess_preview_and_its_follow_fit_in_lichesss_fans_share(api, monkeypatch, with_token):
+    # Lichess's fans' share holds what a fan's preview of a chess player nobody has previewed costs, and the follow
+    # after it: their FIDE record, read once (a chess preview reads no games: preview_fixtures), with or without the token.
+    kept = lichess_chess._budget(with_token)
+    monkeypatch.setattr(lichess_chess, "BUDGET", kept)
+    monkeypatch.setattr(lichess_chess, "SPACING", 0.0)
+    monkeypatch.setattr(search, "_previews", {})
+    monkeypatch.setitem(ADAPTERS, "lichess_chess", KNOWN["lichess_chess"])
+    monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: (5, True))
+    asked = []
+
+    def lichess(request):
+        asked.append(str(request.url))
+        assert str(request.url) == "https://lichess.org/api/fide/player?q=46616543", request.url
+        return httpx.Response(200, json=load("lichess/fide-search-id-gukesh"))
+
+    monkeypatch.setattr(lichess_chess, "_client", httpx.Client(transport=httpx.MockTransport(lichess)))
+    shown = api.call("GET", "/api/athletes/lichess_chess/46616543", fan="fan")
+    assert shown.status_code == 200 and shown.json()["name"] == "Gukesh D"
+    assert api.call("POST", "/api/follows", fan="fan", body={"system": "lichess_chess", "athlete_id": "46616543"}).status_code == 200
+    assert asked == ["https://lichess.org/api/fide/player?q=46616543"]
+    [fans] = [r for r in budget.usage([kept, lichess_chess.FIDE]) if r["lane"] == "fan"]
+    assert (fans["source"], fans["sent_h"], fans["refused_h"]) == ("lichess", 1, 0) and 1 <= kept.fan < kept.reserve
 
 
 def test_a_source_saying_slow_down_pauses_every_lane():
