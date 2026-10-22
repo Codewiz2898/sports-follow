@@ -19,11 +19,11 @@ SCRIPT = """
 import { register } from 'node:module'
 register(%(hook)s)
 const { feedKey } = await import(%(module)s)
-const press = (key, more = {}) => ({ key, code: more.code, ctrlKey: false, metaKey: false, altKey: false, repeat: false, ...more })
+const press = (key, more = {}) => ({ key, code: more.code, ctrlKey: false, metaKey: false, altKey: false, ...more })
 const does = (key, more, focus = null) => feedKey(press(key, more), focus)
 console.log(JSON.stringify({
   keys: [does(' '), does('f'), does('F'), does('m'), does('M'), does('k'), does('Enter'), does('ArrowDown'), does('Escape')],
-  held: [does('f', { ctrlKey: true }), does('m', { metaKey: true }), does(' ', { altKey: true }), does(' ', { repeat: true })],
+  held: [does('f', { ctrlKey: true }), does('m', { metaKey: true }), does(' ', { altKey: true })],
   shift: [does('F', { shiftKey: true }), does(' ', { shiftKey: true })],
   typing: [does(' ', {}, 'typing'), does('f', {}, 'typing'), does('m', {}, 'typing')],
   control: [does(' ', {}, 'control'), does('f', {}, 'control'), does('m', {}, 'control')],
@@ -48,8 +48,8 @@ def test_space_f_and_m_and_nothing_else(found):
     assert found["shift"] == ["full", "pause"]
 
 
-def test_not_the_browsers_or_the_systems_own_nor_a_key_held_down(found):
-    assert found["held"] == [None, None, None, None]
+def test_not_the_browsers_or_the_systems_own(found):
+    assert found["held"] == [None, None, None]
 
 
 def test_nothing_while_the_fan_types(found):

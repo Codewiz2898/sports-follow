@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import type { FeedEntry, FeedTabKey } from '../api'
 import { useAutoplay } from '../autoplay'
 import { channelOf, duration, isShort, statsLine, upright } from '../feed'
-import { feedKeyOf } from '../feedKeys'
+import { feedKeyOf, spaceTaken } from '../feedKeys'
 import { safeHref, shortName } from '../format'
 import { shareFeedItem } from '../share'
 import { setSound, useSound } from '../sound'
@@ -96,8 +96,9 @@ function useInFront(): boolean {
  * and one that started by itself and nobody touched as soon as autoplay isn't allowed (the tab behind another, say). A
  * click into the playing player (its frame takes the focus from the page) keeps it as the fan scrolls on. While not
  * `active` (the Shorts viewer over the list), nothing of it plays. One full screen (F) plays on till the fan's back. With
- * nothing playing, Space or F on a computer starts the one that would start by itself, as a tap on it does (feedKeys.ts;
- * once one plays, its keys are its player's). */
+ * nothing playing, Space or F on a computer starts the one that would start by itself, with its sound as a tap on it
+ * does, where it is (a Short too, as when it starts by itself, not in the Shorts viewer a tap opens); once one plays,
+ * its keys are its player's (feedKeys.ts). */
 export function usePlaying(box: HTMLElement | null, root: HTMLElement | null, entries: FeedEntry[], active = true): { playing: Playing | null; play: (id: string) => void } {
   const [playing, setPlaying] = useState<Playing | null>(null)
   const allowed = useAutoplay()
@@ -177,6 +178,8 @@ export function usePlaying(box: HTMLElement | null, root: HTMLElement | null, en
       const id = [...shown.current].find(([, ratio]) => ratio > 0.5)?.[0].dataset.video
       if (!id) return
       e.preventDefault()
+      if (e.repeat) return
+      if (does === 'pause') spaceTaken()
       if (does === 'full') fullScreenAsItStarts(id)
       play(id)
     }

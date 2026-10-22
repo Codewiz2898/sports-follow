@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type FeedItem } from '../api'
 import { openLabel, refusedHere, youtubeEmbed } from '../feed'
-import { feedKeyOf } from '../feedKeys'
+import { feedKeyOf, spaceTaken } from '../feedKeys'
 import { safeHref } from '../format'
 import { holdSound, mayPlayAloud, setSound, soundIsOn, useSound } from '../sound'
 
@@ -57,9 +57,11 @@ const BUFFERING = 3
 const players: { frame: HTMLIFrameElement; yt: () => YTPlayer | null }[] = []
 let fullOnce: { id: string; until: number } | null = null // F with nothing playing: the video it started
 
+/** At least half of it on screen (of the screen's height, for one taller than that), as a video starts by itself. */
 function onScreen(el: Element): boolean {
   const r = el.getBoundingClientRect()
-  return r.width > 0 && r.bottom > 0 && r.top < window.innerHeight && r.right > 0 && r.left < window.innerWidth
+  const seen = Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0)
+  return r.width > 0 && r.right > 0 && r.left < window.innerWidth && seen > 0 && seen >= Math.min(r.height, window.innerHeight) / 2
 }
 
 const refusedFull = () => { /* the browser said no (no full screen here, or the key was too long ago): as it was */ }
@@ -78,6 +80,8 @@ function pressed(e: KeyboardEvent) {
   const p = players.findLast((q) => onScreen(q.frame))
   if (!p) return
   e.preventDefault() // Space doesn't scroll the page too
+  if (e.repeat) return
+  if (does === 'pause') spaceTaken()
   if (does === 'sound') setSound(!soundIsOn())
   else if (does === 'full') full(p.frame)
   else {
