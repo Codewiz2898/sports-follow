@@ -30,10 +30,10 @@ from typing import Any
 from sqlalchemy import Select, and_, exists, or_, select, tuple_
 from sqlalchemy.orm import Session, aliased
 
-from . import news, notify, rank, registry, sports
+from . import feed, news, notify, rank, registry, sports
 from .adapters import ADAPTERS, NEWS, source_name
 from .moments import Found
-from .models import Event, EventPlayer, FeedCandidate, Follow, Moment, NewsItem, Player, PlayerIdentity, PlayerLine, Sidelined, Team, TeamFollow
+from .models import Event, EventPlayer, FeedCandidate, FeedFeedback, Follow, Moment, NewsItem, Player, PlayerIdentity, PlayerLine, Sidelined, Team, TeamFollow
 from .naming import team_key
 
 DAYS = 7
@@ -231,7 +231,8 @@ def wire(db: Session, fan: str, now: datetime | None = None) -> list[dict[str, A
 
 def _news(db: Session, fan: str, now: datetime) -> list[Row]:
     """The fan's players' line-ups and stories, newest first, none of a sport turned off. A player's line-up for a
-    game is its latest (a late change: "now on the bench"), and a story about two of the fan's players is one row."""
+    game is its latest (a late change: "now on the bench"), and a story about two of the fan's players is one row.
+    None the fan hid from their Feed (_hidden)."""
     rows = db.execute(
         select(Moment, Player, Event.title)
         .join(Follow, and_(Follow.player_id == Moment.player_id, Follow.fan_id == fan))
@@ -243,7 +244,8 @@ def _news(db: Session, fan: str, now: datetime) -> list[Row]:
         ))
         .order_by(Moment.id.desc())
     ).all()
-    found, linked = _stories(db, fan, now)
+    hidden = _hidden(db, fan)
+    found, linked = _stories(db, fan, now, hidden)
     ids = {int(m[1]) for moment, _, _ in rows if (m := _NEWS_KEY.search(moment.key))}
     stories = {n.id: n for n in db.scalars(select(NewsItem).where(NewsItem.id.in_(ids)))} if ids else {}
     told: set[tuple[str, int | None, int | None]] = set()  # line-ups by player and game, stories by id: newest first
@@ -263,8 +265,8 @@ def _news(db: Session, fan: str, now: datetime) -> list[Row]:
         # The kind the moment was told as: the story's row keeps the kind of whichever report stored it first.
         said = _NEWS_KIND.search(moment.title)
         kind = said[1] if said else story.kind if story else None
-        if story is None or kind not in NEWS_TAGS or not story.url or ("news", story.id, None) in told or story.url in linked:
-            continue  # gone, not a story the Wire tells, or on it already
+        if story is None or kind not in NEWS_TAGS or not story.url or ("news", story.id, None) in told or story.url in linked or feed.item_id(story.url) in hidden:
+            continue  # gone, not a story the Wire tells, on it already, or one the fan hid
         told.add(("news", story.id, None))
         found.append((moment.created_at, moment.id, row | {"tag": NEWS_TAGS[kind], "text": _plain(story.headline), "source": story.source or None, "url": story.url}))
     # When each reached us, as the Alerts list dates them: a story's own date is often a day with no time.
@@ -272,11 +274,18 @@ def _news(db: Session, fan: str, now: datetime) -> list[Row]:
     return [(at, row) for at, _, row in found]
 
 
-def _stories(db: Session, fan: str, now: datetime) -> tuple[list[tuple[datetime, int, dict[str, Any]]], set[str]]:
+def _hidden(db: Session, fan: str) -> set[str]:
+    """The items the fan hid from their Feed (not interested, not about the player, a report), by feed.item_id: a
+    story is one card, whichever player it was hidden from, and it's off the Wire too."""
+    return set(db.scalars(select(FeedFeedback.item_id).where(FeedFeedback.fan_id == fan)))
+
+
+def _stories(db: Session, fan: str, now: datetime, hidden: set[str]) -> tuple[list[tuple[datetime, int, dict[str, Any]]], set[str]]:
     """Each of the fan's players' best story of the last NEWS_DAYS that the curator served (news.py), and their
-    addresses: a story naming two of them once, with the first, and the other's next best in its place. Rows are
-    dated when the story was published, or reached us if that's earlier, as the agent's are: one linked to a player
-    only when a fan followed them, days after it ran, is as old as it is."""
+    addresses: a story naming two of them once, with the first, and the other's next best in its place, as in the
+    place of one the fan hid (`hidden`, by feed.item_id). Rows are dated when the story was published, or reached us
+    if that's earlier, as the agent's are: one linked to a player only when a fan followed them, days after it ran,
+    is as old as it is."""
     since = now - timedelta(days=NEWS_DAYS)
     rows = db.execute(
         select(FeedCandidate, Player)
@@ -291,7 +300,7 @@ def _stories(db: Session, fan: str, now: datetime) -> tuple[list[tuple[datetime,
     urls: set[str] = set()
     for row, player in rows:
         kept, verdict = row.candidate or {}, row.verdict or {}
-        if player.id in told or row.url in urls or verdict.get("kind") in NOT_ON_THE_WIRE or not kept.get("title") or not sports.on(player.sport):
+        if player.id in told or row.url in urls or verdict.get("kind") in NOT_ON_THE_WIRE or not kept.get("title") or not sports.on(player.sport) or feed.item_id(row.url) in hidden:
             continue
         published = rank.when(kept.get("published"))
         at = min(published, row.fetched_at) if published else row.fetched_at
