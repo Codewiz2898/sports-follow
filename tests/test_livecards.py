@@ -4,6 +4,7 @@ sends them to the fans of a game in a real database."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -77,6 +78,14 @@ def test_a_games_own_moment_is_read_without_the_games_name():
     # A goal whose title says only what happened has its kind's word.
     plain = ["Arsenal v Chelsea: Bukayo Saka scores"]
     assert notify.scorecard(push(plain), {1: item(1, "goal", plain[0], player_id=None)}, {1: board()}, {})["word"] == "Goal"
+
+
+def test_a_line_two_teammates_tell_alike_has_its_kinds_word_not_their_names():
+    # One push's line for two of the fan's players at once (alerts.fold): its head is whom it names, not a word.
+    line = "TenZ and zekken: Sentinels win map 1"
+    folded = replace(push([line], player_id=3, kind="map"), who="TenZ and zekken")
+    drawn = notify.scorecard(folded, {1: item(1, "map", line, player_id=3)}, {}, {3: ("TenZ", "Valorant", "")})
+    assert (drawn["word"], drawn["line"]) == ("Map", line)
 
 
 def test_a_players_news_wears_their_sports_colour_and_their_photo(monkeypatch):

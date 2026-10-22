@@ -503,6 +503,9 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
 
     players = {i.player_id for i in items if i.player_id is not None}
     events = {i.event_id for i in items if i.event_id}
+    # Each player as their moments' titles name them: one play two of a fan's players tell alike is one line (alerts.fold).
+    names = {pid: name for pid, name in db.execute(select(Player.id, Player.name).where(Player.id.in_(players)))} if players else {}
+    items = [replace(i, who=names.get(i.player_id, "")) if i.player_id is not None else i for i in items]
     levels: dict[str, dict[int, str]] = {}
     for fan, player_id, rules in db.execute(select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(players))) if players else []:
         levels.setdefault(fan, {})[player_id] = (rules or {}).get("level", DEFAULT_LEVEL)
@@ -622,6 +625,7 @@ def scorecard(p: alerts.Push, items: dict[int, alerts.Item], boards: dict[int, l
 
     lead = items.get(p.moment_ids[0]) if p.moment_ids else None
     who, sport_name, photo = players.get(p.player_id, ("", "", "")) if p.player_id is not None else ("", "", "")
+    who = p.who or who  # several of the fan's players, where its line is theirs at once (alerts.fold)
     board = boards.get(p.event_id) if p.event_id is not None else None
     sport = board.sport if board is not None else sports.of(sport_name)
 

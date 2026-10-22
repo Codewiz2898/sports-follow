@@ -1,5 +1,5 @@
 """The noise rules (alerts.py) down a moment's real path (notify.record, notify.send): what a fan hears when quiet hours
-end, and how a device's health is counted. ON CONFLICT and the push log need Postgres itself, so these run against a throwaway database at alembic head and are
+end and from two followed teammates at once, and how a device's health is counted. ON CONFLICT and the push log need Postgres itself, so these run against a throwaway database at alembic head and are
 skipped without one (see tests/test_corrections_db.py for setting it up). Every test empties the tables first."""
 
 from __future__ import annotations
@@ -174,3 +174,26 @@ def test_a_device_the_push_service_is_throttling_isnt_counted_as_failing(db):
         notify._health(db, device_id, 500)
     db.commit()
     assert db.scalars(select(PushSubscription.id)).all() == []  # one that keeps failing is removed
+
+
+# ---------------------------------------------------------------- teammates (BUG-206)
+
+
+def test_a_fan_of_two_teammates_hears_their_teams_result_once_naming_both(db, pushed):
+    # Their team's result is found for each of them (Sport.team_moments): one push, but its lines were the same fact
+    # twice, "zekken: Sentinels win 2–0 | TenZ: Sentinels win 2–0".
+    db.add_all([Player(id=3, slug="tenz", name="TenZ", sport="Valorant"), Player(id=4, slug="zekken", name="zekken", sport="Valorant"),
+                Event(id=1, key="pandascore_esports:777", sport="Valorant", title="Sentinels vs NRG", status="final")])
+    db.flush()
+    db.add_all([Follow(fan_id="fan", player_id=3, alert_rules={"level": "key"}), Follow(fan_id="fan", player_id=4, alert_rules={"level": "key"}),
+                Follow(fan_id="tenz-fan", player_id=3, alert_rules={"level": "key"})])
+    db.commit()
+    device(db, "fan")
+    device(db, "tenz-fan")
+    ids = [m for pid, who in ((3, "TenZ"), (4, "zekken")) for m in notify.record(db, pid, 1, [Found("final", "key", f"{who}: Sentinels win 2–0", "v NRG · Upper bracket final")])]
+    db.commit()
+    notify.send(ids)
+    heard = {fan: (p["title"], p["body"]) for fan, p in pushed}
+    assert heard == {"fan": ("TenZ and zekken: Sentinels win 2–0", "v NRG · Upper bracket final"), "tenz-fan": ("TenZ: Sentinels win 2–0", "v NRG · Upper bracket final")}
+    lines = {fan: lines for fan, lines in db.execute(select(Notification.fan_id, Notification.lines))}
+    assert lines == {"fan": ["TenZ and zekken: Sentinels win 2–0"], "tenz-fan": ["TenZ: Sentinels win 2–0"]}

@@ -503,7 +503,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   pushes: their level for the player (key moments, the default; everything; results only; off) says
   what reaches the phone, and only key moments make a sound. Each game is one notification on the
   phone, replaced as moments come with the story so far underneath, whichever followed players are
-  in it; "Mute this game" stops it. A game under several fixtures (a chess board is one of each player's)
+  in it (two teammates' same play, "TenZ and zekken: Sentinels win 2–0", is one line); "Mute this game" stops it. A game under several fixtures (a chess board is one of each player's)
   is one game too, its fixtures found by the players on it (`Sport.board_players`): one notification all
   through a mini-match, one Android live card and one mute, and a fan who follows both players hears each
   moment once, from the side it went toward (`Found.voice`), where that side's fixture is being polled to
