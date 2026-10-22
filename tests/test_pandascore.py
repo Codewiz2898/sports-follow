@@ -208,6 +208,30 @@ def test_the_series_result_from_the_teams_side():
     assert other.title == "TenZ: Sentinels 2 – 1 NRG"
 
 
+def test_a_series_over_before_its_winner_is_in_waits_for_it_and_never_says_draw():
+    """PandaScore can say a series is finished a poll before it fills in who won: its final is held a poll or two
+    for the winner (structured.hold_result), and if it still isn't in, the maps say who won, never "draw" (BUG-204)."""
+    nowinner = {**FINAL, "winner_id": None, "winner_type": None}
+    rules = sports.of("Valorant")
+    snap = ps.parse_match(nowinner)
+    assert rules.result_pending(snap.state, snap.score_label, snap.clock_label)
+    assert structured.hold_result(rules, snap, None).status == "live"
+    assert not rules.result_pending(ps.parse_match(FINAL).state, "", "")  # the winner's in
+    one_all = _seen(_match("running", 1, 1, [_game(1, "finished", SEN), _game(2, "finished", NRG), _game(3, "running")]))
+    [final] = moments.detect("Valorant", "TenZ", str(TENZ), one_all, _seen(nowinner))
+    assert final.title == "TenZ: Sentinels win 2–1"
+    [nrg] = moments.detect("Valorant", "s0m", "1", one_all, _seen(nowinner, teams=[str(NRG)]))
+    assert nrg.title == "s0m: NRG lose 1–2"
+    [f] = ps.parse_fixtures([nowinner])
+    assert (ps.result_label(f, [str(SEN)]), ps.result_label(f, [str(NRG)])) == ("Won 2–1", "Lost 1–2")
+    # A series that ends level (every game played, one each) is a draw, and nothing's to come.
+    level = _match("finished", 1, 1, [_game(1, "finished", SEN), _game(2, "finished", NRG)], number_of_games=2, match_type="all_games_played", draw=True)
+    assert not rules.result_pending(ps.parse_match(level).state, "", "")
+    [drew] = moments.detect("Valorant", "TenZ", str(TENZ), _seen(_match("running", 1, 0)), _seen(level))
+    assert drew.title == "TenZ: Sentinels draw 1–1"
+    assert ps.result_label(ps.parse_fixtures([level])[0], [str(SEN)]) == "Drew 1–1"
+
+
 def test_a_forfeit_is_a_result():
     # As PandaScore sends every forfeit (all 100 in /matches/past?filter[forfeit]=true on 2026-10-13):
     # "canceled", with forfeit set, the series awarded (winner_id) and no map played. It was stored as

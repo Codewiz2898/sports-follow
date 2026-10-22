@@ -27,6 +27,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, cast
 
 from .. import bus, naming, sports
+from ..sports import esports
 from . import budget, dota, opendota, pandascore
 from .base import DIGITS, Adapter, AdapterError, Fixture, LiveGame, PlayerRef, Roster, Rostered, Snapshot, SourceTeam, Stream
 
@@ -220,11 +221,8 @@ def result_label(fixture: Fixture, team_ids: list[str]) -> str:
     if r.get("forfeit"):
         return "Won by forfeit" if ours.get("winner") else "Lost by forfeit" if theirs.get("winner") else "Forfeit"
     score = f"{ours['score']}–{theirs['score']}"
-    if ours.get("winner"):
-        return f"Won {score}"
-    if theirs.get("winner"):
-        return f"Lost {score}"
-    return f"Drew {score}" if r.get("draw") or ours["score"] == theirs["score"] else score
+    won = esports.took(ours, theirs, bool(r.get("draw")))  # the winner as marked, else (a poll late) by the maps
+    return f"Won {score}" if won else f"Lost {score}" if won is False else f"Drew {score}"
 
 
 def parse_match(m: dict[str, Any]) -> Snapshot:
@@ -263,6 +261,7 @@ def parse_match(m: dict[str, Any]) -> Snapshot:
         "format": fmt,
         "stage": _stage(m),
         "forfeit": bool(m.get("forfeit")),
+        "draw": bool(m.get("draw")),  # level when every game's played: the series has no winner to wait for
         # Called off for good, not put back to a later date: what's still to be played of it won't be.
         "cancelled": status == "postponed" and m.get("status") == "canceled",
     }
