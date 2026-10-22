@@ -140,7 +140,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (counted as an AI research).
   `GET /api/athletes/{system}/{id}` and `/api/athletes/wikidata/{qid}` preview before following (a preview is
   kept 10 minutes, by the athlete, whatever `league` the link names). A fan follows at most 100 players
-  (`server.PLAYERS_MAX`). Previews and follows that ask a source for an athlete not on the app yet (a whole
+  (`follows.MAX`) of the sports that run; a sport turned off keeps its follows, out of sight, taking no room.
+  Previews and follows that ask a source for an athlete not on the app yet (a whole
   team's follow on a campaign page asks once for each such player) are limited to 30 a minute a fan and 120 a
   client address (`SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_MINUTE`, `SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_ADDRESS`), past
   which they're a 429; a player already here costs nothing. Follows of every kind (a player, a team, a game; a
@@ -1422,7 +1423,8 @@ the native app's, and the TWA loses its full screen.
   by sport, title and date.
 - Signing in is optional. Without it each browser or phone is its own anonymous fan (a signed cookie);
   signed in (a code sent by email, or Google), a fan's players, alert levels, muted games and devices
-  are the same on every device, and what they followed before signing in comes with them. Google's
+  are the same on every device, and what they followed before signing in comes with them, as much as the account
+  may follow (100 players, 30 teams, 20 games; the fan is told how many didn't fit). Google's
   button is hidden in the iPhone home-screen app until its sign-in sheet is tried there.
 - Notifications: on iPhone, Web Push works only once the app is added to the Home Screen (iOS 16.4+),
   and there are no lock-screen live scores (Live Activities); the Android app has them, but a web page can't.

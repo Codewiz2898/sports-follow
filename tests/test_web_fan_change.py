@@ -22,7 +22,8 @@ SCRIPT = """
 import { PHONE_KEPT, WEB_KEPT, welcome } from %(module)s
 
 const said = [[0, 0], [1, 0], [3, 0], [3, 1], [0, 15], [2, 15]].map(([players, teams]) => welcome(players, teams))
-console.log(JSON.stringify({ said, web: WEB_KEPT, phone: PHONE_KEPT }))
+const dropped = [[2, 0, 1, 0], [2, 0, 4, 0], [0, 0, 0, 1], [2, 15, 4, 0], [2, 1, 1, 3]].map(([added, teams, players, games]) => welcome(added, teams, players, games))
+console.log(JSON.stringify({ said, dropped, web: WEB_KEPT, phone: PHONE_KEPT }))
 """
 
 
@@ -43,6 +44,21 @@ def test_a_sign_in_says_what_came_over_and_how_many_teams_didnt_fit():
         "Signed in. 15 teams you followed on this device didn't fit: your account follows as many teams as it can.",
         "Signed in. The 2 players you followed on this device are in your account now. "
         "15 teams you followed on this device didn't fit: your account follows as many teams as it can.",
+    ]
+
+
+def test_a_sign_in_says_how_many_players_and_games_didnt_fit():
+    # BUG-328: an account follows at most so many players and games too, and the device's that didn't fit went unsaid.
+    assert run()["dropped"] == [
+        "Signed in. The 2 players you followed on this device are in your account now. "
+        "One player you followed on this device didn't fit: your account follows as many players as it can.",
+        "Signed in. The 2 players you followed on this device are in your account now. "
+        "4 players you followed on this device didn't fit: your account follows as many players as it can.",
+        "Signed in. One game you followed on this device didn't fit: your account follows as many games as it can.",
+        "Signed in. The 2 players you followed on this device are in your account now. "
+        "4 players and 15 teams you followed on this device didn't fit: your account follows as many as it can.",
+        "Signed in. The 2 players you followed on this device are in your account now. "
+        "One player, one team and 3 games you followed on this device didn't fit: your account follows as many as it can.",
     ]
 
 

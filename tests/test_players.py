@@ -558,6 +558,63 @@ def test_a_turned_off_sports_registry_row_isnt_found_by_its_id_alone(db, monkeyp
     assert djokovic is not None and djokovic.name == "Novak Djokovic" and chahal is not None and chahal.sport == "chess"
 
 
+def test_a_turned_off_sports_page_isnt_followed_or_previewed_by_registry_id_or_by_name(db, monkeypatch):
+    # BUG-097 (reopened): with no sport said, whoever held a registry id was followed and previewed, a turned-off sport's
+    # page too; and a typed name found that page by its alias.
+    import asyncio
+
+    from sports_follow import pipeline, server
+
+    class Cards(dict):
+        async def get(self, key: str):
+            return super().get(key)
+
+        async def set(self, key: str, value: str, **kwargs) -> bool:
+            self[key] = value
+            return True
+
+    @contextmanager
+    def unit():
+        s = sessionmaker(bind=db.get_bind(), expire_on_commit=False)()
+        try:
+            yield s
+            s.commit()
+        finally:
+            s.close()
+
+    async def no_source(*args):
+        return None
+
+    for module in (server, pipeline):
+        monkeypatch.setattr(module, "session", unit)
+    monkeypatch.setitem(server.state, "redis", Cards())
+    monkeypatch.setattr(server, "_source_lookup", no_source)
+    monkeypatch.setattr(server, "_resolve", no_source)  # chess Chahal is in no live source here
+    registry.upsert(db, [athlete("Q2", "cricket", "Yuzvendra Chahal", {"espn_cricket": "430246"}, sitelinks=5),
+                         athlete("Q2", "chess", "Yuzvendra Chahal", {"lichess_chess": "yuzi"}, sitelinks=9)])
+    db.add(Player(id=1, slug="yuzvendra-chahal", name="Yuzvendra Chahal", sport="Cricket", wikidata_qid="Q2"))
+    db.flush()
+    db.add_all([PlayerCard(player_id=1, status="ready", card={"player_id": 1, "player": {"name": "Yuzvendra Chahal", "sport": "Cricket"}}),
+                PlayerIdentity(player_id=1, system="wikidata", external_id="Q2", confidence=1.0), PlayerAlias(alias="yuzvendra-chahal", player_id=1)])
+    db.commit()
+    request = SimpleNamespace(client=None)
+    monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "cricket"))
+    for body in ({"qid": "Q2"}, {"query": "Yuzvendra Chahal"}):
+        with pytest.raises(server.HTTPException) as off:
+            asyncio.run(server.follow(request, body, "fan"))  # pyright: ignore[reportArgumentType]
+        assert off.value.status_code == 404
+    assert "player_id" not in asyncio.run(server.registry_preview(request, "Q2", None, "fan"))  # pyright: ignore[reportArgumentType]: chess Chahal, as the registry has him
+    db.expire_all()
+    assert db.scalars(select(Follow.player_id)).all() == []
+    # Cricket on: the page is theirs to follow either way, as before.
+    monkeypatch.setattr(sports, "ENABLED", sports.ALL)
+    assert asyncio.run(server.registry_preview(request, "Q2", None, "fan")) == {"player_id": 1}  # pyright: ignore[reportArgumentType]
+    assert [asyncio.run(server.follow(request, body, "fan"))["player_id"] for body in ({"qid": "Q2"}, {"query": "Yuzvendra Chahal"})] == [1, 1]  # pyright: ignore[reportArgumentType]
+    # BUG-328: a fan with all the players they may follow was refused even one they follow already (a page's Retry).
+    monkeypatch.setattr("sports_follow.follows.MAX", 1)
+    assert asyncio.run(server.follow(request, {"qid": "Q2", "sport": "cricket"}, "fan"))["player_id"] == 1  # pyright: ignore[reportArgumentType]
+
+
 def test_removing_a_starter_or_the_athlete_takes_the_starter_out(db, capsys):
     chess_starters(db)
     for qid in ("Q10", "Q11"):

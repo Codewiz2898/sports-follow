@@ -20,9 +20,9 @@ from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import accounts, controls, fansports, matches, notify, teams
-from sports_follow.models import (Account, AccountSession, Clip, ClipReport, Event, FanSource, FanSport, Follow, League, LeagueMember, MatchFollow, Notification, NotificationMute, Pick,
-                                  Player, PushSubscription, Question, Team, TeamFollow)
+from sports_follow import accounts, controls, fansports, matches, notify, sports, teams
+from sports_follow.models import (Account, AccountSession, Clip, ClipReport, Event, FanSource, FanSport, FeedFeedback, Follow, League, LeagueMember, MatchFollow, Notification,
+                                  NotificationMute, Pick, Player, PushSubscription, Question, Team, TeamFollow)
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -218,6 +218,60 @@ def test_bringing_a_devices_teams_waits_for_a_team_follow_under_way_on_the_accou
     assert db.scalars(select(TeamFollow.fan_id)).all() == [fan] and done.teams_dropped == 0
 
 
+def test_the_devices_players_and_games_that_dont_fit_in_the_account_are_counted_for_the_fan(db, monkeypatch):
+    """BUG-328: signing in brought every player the device followed, past follows.MAX, and then the account couldn't
+    follow anyone; and the games that didn't fit (matches.MAX) went without a word."""
+    account_id, fan = account(db)
+    db.add_all([Player(id=4, slug="p4", name="Player 4"), Player(id=5, slug="p5", name="Player 5", sport="Chess")])
+    db.add_all([Event(id=i, key=f"e{i}", sport="football", title=f"Game {i}") for i in range(10, 10 + matches.MAX - 1)])
+    db.add(Event(id=3, key="e3", sport="football", title="Game 3"))
+    db.flush()
+    for event_id, days in ((1, 3), (2, 1), (3, 2)):
+        db.get(Event, event_id).start_utc = NOW + timedelta(days=days)
+    db.add_all([MatchFollow(fan_id=fan, event_id=i) for i in range(10, 10 + matches.MAX - 1)])  # room for one more game
+    db.add_all([MatchFollow(fan_id="anon", event_id=i) for i in (1, 2, 3)])
+    follow(db, fan, 1, days_ago=5)
+    follow(db, fan, 2, days_ago=5)
+    follow(db, "anon", 2, days_ago=9)  # both follow them
+    follow(db, "anon", 5, days_ago=8)  # a turned-off sport's: out of sight, it takes no room
+    follow(db, "anon", 3, days_ago=7)  # the earliest followed of those that fit
+    follow(db, "anon", 4, days_ago=1)
+    db.commit()
+    monkeypatch.setattr("sports_follow.follows.MAX", 3)
+    monkeypatch.setattr(sports, "ENABLED", [s for s in sports.ALL if s.key != "chess"])
+    done = accounts.sign_in(db, account_id, "anon")
+    db.commit()
+    assert set(follows(db, fan)) == {1, 2, 3, 5} and follows(db, "anon") == {}
+    assert (done.players, done.players_dropped, done.games_dropped) == (3, 1, 2)
+    assert follows(db, fan)[2][1] == NOW - timedelta(days=9)  # the earlier follow
+    assert sorted(db.scalars(select(MatchFollow.event_id).where(MatchFollow.fan_id == fan, MatchFollow.event_id < 10))) == [2]  # the soonest
+    assert db.scalars(select(MatchFollow.event_id).where(MatchFollow.fan_id == "anon")).all() == []
+
+
+def test_bringing_a_devices_players_and_games_waits_for_a_follow_under_way_on_the_account(db):
+    """BUG-328: the move counted the account's players and games without the locks a follow takes (server._room_to_follow,
+    matches.follow), so a follow on another device at that moment could take the account past either cap."""
+    account_id, fan = account(db)
+    follow(db, "anon", 1)
+    db.add(MatchFollow(fan_id="anon", event_id=1))
+    db.commit()
+    for name in ("follow", "match-follow"):
+        other = db.get_bind().connect()
+        under_way = other.begin()
+        other.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"{name}:{fan}", 0))))
+        try:
+            db.execute(text("SET lock_timeout = '300ms'"))
+            with pytest.raises(OperationalError, match="lock timeout"):
+                accounts.sign_in(db, account_id, "anon")
+            db.rollback()
+        finally:
+            under_way.rollback()
+            other.close()
+    done = accounts.sign_in(db, account_id, "anon")  # once they're done
+    db.commit()
+    assert done.players == 1 and set(follows(db, fan)) == {1}
+
+
 def test_the_devices_teams_that_dont_fit_in_the_account_are_counted_for_the_fan(db):
     """BUG-228: the account follows at most teams.MAX teams, and the device's that didn't fit went without a word."""
     account_id, fan = account(db)
@@ -232,6 +286,52 @@ def test_the_devices_teams_that_dont_fit_in_the_account_are_counted_for_the_fan(
     db.add_all([TeamFollow(fan_id="anon-2", team_id=i) for i in (1, 2)])
     db.commit()
     assert accounts.sign_in(db, other_id, "anon-2").teams_dropped == 0
+
+
+def test_what_the_device_writes_as_it_signs_in_comes_into_the_account_a_minute_later(db, monkeypatch):
+    """BUG-327: the move copied a device's rows, then deleted every row it had, so a follow, team, game, mute, hidden
+    item, report or first link that landed in between was deleted, not moved: the minute after found nothing."""
+    from sqlalchemy.sql.dml import Delete, Insert
+
+    account_id, fan = account(db)
+    db.add_all([Clip(slug=f"c{i}", source="game_client", seconds=30, width=1386, height=900, status="live") for i in (1, 2)])
+    db.flush()
+    late = {"follow": Follow(fan_id="anon", player_id=2, alert_rules={}), "match_follow": MatchFollow(fan_id="anon", event_id=2),
+            "team_follow": TeamFollow(fan_id="anon", team_id=2), "notification_mute": NotificationMute(fan_id="anon", event_id=2),
+            "feed_feedback": FeedFeedback(fan_id="anon", player_id=1, item_id="b", verdict="not_interested"),
+            "clip_report": ClipReport(clip_id=2, fan_id="anon"), "fan_source": FanSource(fan_id="anon", landing="/gukesh")}
+    follow(db, "anon", 1)
+    db.add_all([MatchFollow(fan_id="anon", event_id=1), TeamFollow(fan_id="anon", team_id=1), NotificationMute(fan_id="anon", event_id=1),
+                FeedFeedback(fan_id="anon", player_id=1, item_id="a", verdict="not_interested"), ClipReport(clip_id=1, fan_id="anon")])
+    db.commit()
+    other = sessionmaker(bind=db.get_bind())
+    run = db.execute
+
+    def execute(stmt, *args, **kwargs):
+        done = run(stmt, *args, **kwargs)
+        table = stmt.table.name if isinstance(stmt, (Insert, Delete)) else None
+        if table in late:  # the device's request, committing just after the move first touched that table
+            with other() as s:
+                s.add(late.pop(table))
+                s.commit()
+        return done
+
+    monkeypatch.setattr(db, "execute", execute)
+    done = accounts.sign_in(db, account_id, "anon")
+    db.commit()
+    monkeypatch.undo()
+    assert late == {}
+    accounts.adopt_later("anon", account_id, done.session_id)
+    db.expire_all()
+    assert sorted(db.scalars(select(Follow.player_id).where(Follow.fan_id == fan))) == [1, 2]
+    assert sorted(db.scalars(select(MatchFollow.event_id).where(MatchFollow.fan_id == fan))) == [1, 2]
+    assert sorted(db.scalars(select(TeamFollow.team_id).where(TeamFollow.fan_id == fan))) == [1, 2]
+    assert sorted(db.scalars(select(NotificationMute.event_id).where(NotificationMute.fan_id == fan))) == [1, 2]
+    assert sorted(db.scalars(select(FeedFeedback.item_id).where(FeedFeedback.fan_id == fan))) == ["a", "b"]
+    assert sorted(db.scalars(select(ClipReport.clip_id).where(ClipReport.fan_id == fan))) == [1, 2]
+    assert db.scalars(select(FanSource.landing).where(FanSource.fan_id == fan)).all() == ["/gukesh"]
+    for model in (Follow, MatchFollow, TeamFollow, NotificationMute, FeedFeedback, ClipReport, FanSource):
+        assert db.scalars(select(model.fan_id).where(model.fan_id == "anon")).all() == []
 
 
 def test_the_device_signing_in_is_never_the_one_dropped_for_room(db):

@@ -35,7 +35,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.dml import Delete, Insert
 
-from sports_follow import alerts, bus, db as db_module, feed, league, live, logs, match, notify, pipeline, registry, server, sports, starters, structured, web_errors
+from sports_follow import alerts, bus, db as db_module, feed, follows, league, live, logs, match, notify, pipeline, registry, server, sports, starters, structured, web_errors
 from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, PlayerRef, Snapshot
 from sports_follow.models import Athlete, Event, Follow, Notification, Player, PlayerCard, PlayerIdentity, PushSubscription
 
@@ -300,7 +300,7 @@ def api(monkeypatch):
     monkeypatch.setitem(server.state, "arq", fake.queue)
     monkeypatch.setattr(server, "cookie_key", lambda: KEY)
     # A typed name nobody has followed: a new placeholder player, so following it counts as a research.
-    monkeypatch.setattr(pipeline, "resolve_or_create", lambda db, query: SimpleNamespace(id=7, name=query))
+    monkeypatch.setattr(pipeline, "resolve_or_create", lambda db, query: SimpleNamespace(id=7, name=query, sport=""))
     return fake
 
 
@@ -516,15 +516,8 @@ def test_a_previews_league_doesnt_make_it_a_new_one(monkeypatch):
 
 def test_a_fan_follows_at_most_so_many_players(api, a_source, monkeypatch):
     # BUG-090: one fan could follow every athlete a source has, each polled every half hour for good.
-    monkeypatch.setattr(server, "PLAYERS_MAX", 2, raising=False)
-    plain = Db.scalar
-
-    def scalar(self, stmt):  # how many players a fan follows
-        if stmt.column_descriptions[0]["name"] == "count":
-            return sum(fan == _param(stmt, "fan_id") for fan, _ in api.follows)
-        return plain(self, stmt)
-
-    monkeypatch.setattr(Db, "scalar", scalar)
+    monkeypatch.setattr(follows, "MAX", 2)
+    monkeypatch.setattr(follows, "counted", lambda db, fan: sum(f == fan for f, _ in api.follows))  # how many players a fan follows
     api.follows |= {("fan", 1), ("fan", 2)}
     refused = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"system": "espn_soccer", "athlete_id": "231388"})
     assert (refused.status_code, refused.json()["detail"]) == (429, "You follow 2 players already: unfollow one to follow another.")
@@ -534,6 +527,11 @@ def test_a_fan_follows_at_most_so_many_players(api, a_source, monkeypatch):
     assert api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"player_id": 1}).status_code == 200  # one followed already: no new follow
     assert api.call("POST", "/api/follows", fan="another", address=PUBLIC, body={"player_id": 1}).status_code == 200
     assert not [s for s in api.statements if isinstance(s, Insert) and s.table.name == "follow" and _param(s, "fan_id") == "fan" and _param(s, "player_id") != 1]
+    # BUG-328: one picked in search that the fan follows already is no new follow, so it isn't refused (a page's Retry).
+    monkeypatch.setattr(server, "_holder", lambda db, system, external_id: 1 if (system, external_id) == ("espn_soccer", "231388") else None)
+    monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: (1, False))
+    again = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"system": "espn_soccer", "athlete_id": "231388"})
+    assert (again.status_code, again.json().get("player_id")) == (200, 1)
 
 
 def test_follows_are_limited_per_fan_and_per_address_and_a_refused_one_isnt_counted(api, monkeypatch):

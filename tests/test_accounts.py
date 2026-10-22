@@ -38,6 +38,7 @@ class Accounts:
         self.bumped = False
         self.blocked_ids: set[int] = set()  # blocked by an admin (admin.py)
         self.dropped = 0  # the device's teams that don't fit in the account (teams.merge)
+        self.dropped_players = self.dropped_games = 0  # and its players and games (accounts.adopt)
         self.fresh: set[int] = set()  # accounts made today; the rest stood a day before (accounts.standing)
 
     def find_or_create(self, db, email):
@@ -56,7 +57,8 @@ class Accounts:
         self.sessions[accounts.token_hash(token)] = signed
         if anon:
             self.adopted.append((anon, account_id))
-        return accounts.SignedIn(token=token, session_id=signed.session_id, fan_id=signed.fan_id, players=2 if anon else 0, teams_dropped=self.dropped if anon else 0)
+        return accounts.SignedIn(token=token, session_id=signed.session_id, fan_id=signed.fan_id, players=2 if anon else 0, teams_dropped=self.dropped if anon else 0,
+                                 players_dropped=self.dropped_players if anon else 0, games_dropped=self.dropped_games if anon else 0)
 
     def session_for(self, db, token_hash):
         self.lookups += 1
@@ -767,6 +769,16 @@ def test_the_fan_is_told_how_many_of_the_devices_teams_didnt_fit_in_the_account(
     store.dropped = 0
     _, back = go_to_google(api, google, fan="anon-h")
     assert back.headers["location"] == "/account?welcome=2"
+
+
+def test_the_fan_is_told_how_many_of_the_devices_players_and_games_didnt_fit_in_the_account(api, store, outbox, google):
+    """BUG-328: an account follows at most follows.MAX players and matches.MAX games, and the device's that didn't fit
+    went without a word. The answer says how many of each, and so does Google's way back to the app."""
+    store.dropped_players, store.dropped_games = 4, 2
+    answer = sign_in(api, outbox, headers=cookies(fan="anon-1")).json()
+    assert (answer["players_added"], answer["teams_dropped"], answer["players_dropped"], answer["games_dropped"]) == (2, 0, 4, 2)
+    _, back = go_to_google(api, google)
+    assert back.headers["location"] == "/account?welcome=2&players_dropped=4&games_dropped=2"
 
 
 @pytest.mark.parametrize("claims", [
