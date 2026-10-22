@@ -62,10 +62,13 @@ function MovesPanel({ page, sans, at, open, steps, pal }: { page: ChessPage; san
     } else {
       // The move the board is after, kept in sight: the list scrolls, not the screen.
       const place = at ? places.current[at - 1] : { y: 0, height: 0 }
-      if (place && (place.y < seen.current || place.y + place.height > seen.current + MOVES_HEIGHT)) list.current?.scrollTo({ y: Math.max(0, place.y - (MOVES_HEIGHT - place.height) / 2), animated: false })
+      if (place && (place.y < seen.current || place.y + place.height > seen.current + MOVES_HEIGHT)) {
+        seen.current = Math.max(0, place.y - (MOVES_HEIGHT - place.height) / 2)
+        list.current?.scrollTo({ y: seen.current, animated: false })
+      }
     }
     stepped.current = at
-  }, [at])
+  }, [at, sans?.length])
   const about = [page.game ? `Game ${page.game}` : null, movesAbout(page)].filter(Boolean).join(' · ')
   return (
     <View style={{ gap: 6 }}>
