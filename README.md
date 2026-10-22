@@ -1001,7 +1001,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **Starter players**, who a new fan is offered in each sport (the welcome, an empty Today, search's
   "Try"), find themselves, the same way for every sport (`sports_follow/starters.py`): who's playing
   now or soon, worked out as asked from the live cards; the most followed by signed-in fans (at least two:
-  a cookie's follow is its own), counted as asked; and the
+  a cookie's follow is its own, and an inbox is one fan however many plus-addresses' accounts it has made), counted as asked; and the
   best known (Wikipedia editions, the home country's counting double: `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY`)
   with a game soon, which the worker finds in their sources once a day. The operator can pin a few
   ahead of them with `players starter add <registry id>` (it checks the source has them, and keeps
