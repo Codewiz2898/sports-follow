@@ -35,7 +35,7 @@ from urllib.parse import quote
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select, tuple_, update
 from sqlalchemy.orm import Session
 
 from . import accounts, controls, feed, feedstats, rank, sports
@@ -469,33 +469,54 @@ def sign_out(db: Session, account_id: int) -> list[str] | None:
 def feed_page(db: Session, show: str = "all", offset: int = 0) -> dict[str, Any]:
     """A page of the Feed's candidates, newest found first, with the judge's verdict, the score and an admin's
     word on each. show: all, unjudged, served (scored, not hidden), held (judged, not served), reviewed, or
-    unplayable: those fans' apps took from every Feed (feed.unplayable) and no admin hid, newest taken first, for an
-    admin to put back (approving one does) any that does play."""
+    unplayable: the videos fans' apps took from every Feed (taken_out), each once."""
     if show not in FEED_SHOWS:
         raise ValueError(f"show one of {', '.join(FEED_SHOWS)}")
-    query = select(FeedCandidate, Player.name, Player.sport).join(Player, Player.id == FeedCandidate.player_id)
-    taken_out = FeedCandidate.unplayable_at.is_not(None) & FeedCandidate.review.is_distinct_from("hidden")
-    where = {
-        "unjudged": FeedCandidate.verdict.is_(None),
-        "served": FeedCandidate.served(),
-        "held": FeedCandidate.verdict.is_not(None) & rank.unserved(),
-        "reviewed": FeedCandidate.review.is_not(None),
-        "unplayable": taken_out,
-    }.get(show)
-    if where is not None:
-        query = query.where(where)
-    newest = FeedCandidate.unplayable_at if show == "unplayable" else FeedCandidate.fetched_at
-    rows = db.execute(query.order_by(newest.desc(), FeedCandidate.id.desc()).offset(offset).limit(PAGE + 1)).all()
+    if show == "unplayable":
+        candidates, more = taken_out(db, offset)
+    else:
+        query = select(FeedCandidate, Player.name, Player.sport).join(Player, Player.id == FeedCandidate.player_id)
+        where = {
+            "unjudged": FeedCandidate.verdict.is_(None),
+            "served": FeedCandidate.served(),
+            "held": FeedCandidate.verdict.is_not(None) & rank.unserved(),
+            "reviewed": FeedCandidate.review.is_not(None),
+        }.get(show)
+        if where is not None:
+            query = query.where(where)
+        rows = db.execute(query.order_by(FeedCandidate.fetched_at.desc(), FeedCandidate.id.desc()).offset(offset).limit(PAGE + 1)).all()
+        candidates, more = [_candidate_row(c, name, sport) for c, name, sport in rows[:PAGE]], len(rows) > PAGE
+    marked = select(FeedCandidate.source, FeedCandidate.external_id).where(_taken_out()).distinct().subquery()
     counts = dict(db.execute(select(FeedCandidate.review, func.count()).where(FeedCandidate.review.is_not(None)).group_by(FeedCandidate.review)).all())
     totals = {
         "all": db.scalar(select(func.count()).select_from(FeedCandidate)) or 0,
         "unjudged": db.scalar(select(func.count()).select_from(FeedCandidate).where(FeedCandidate.verdict.is_(None))) or 0,
         "served": db.scalar(select(func.count()).select_from(FeedCandidate).where(FeedCandidate.served())) or 0,
-        "unplayable": db.scalar(select(func.count()).select_from(FeedCandidate).where(taken_out)) or 0,
+        "unplayable": db.scalar(select(func.count()).select_from(marked)) or 0,  # videos, not rows
         **{f"review_{k}": v for k, v in counts.items()},
     }
-    return {"candidates": [_candidate_row(c, name, sport) for c, name, sport in rows[:PAGE]], "next": offset + PAGE if len(rows) > PAGE else None,
-            "totals": totals, "channels": channels_view(db), "layout": layout_view()}  # fmt: skip
+    return {"candidates": candidates, "next": offset + PAGE if more else None, "totals": totals, "channels": channels_view(db), "layout": layout_view()}
+
+
+def _taken_out() -> Any:
+    """The SQL condition for a row of a video fans' apps took from every Feed (feed.unplayable) that no admin hid."""
+    return FeedCandidate.unplayable_at.is_not(None) & FeedCandidate.review.is_distinct_from("hidden")
+
+
+def taken_out(db: Session, offset: int = 0) -> tuple[list[dict[str, Any]], bool]:
+    """A page of the videos fans' apps took from every Feed (feed.unplayable) that no admin hid, newest taken first,
+    for an admin to put back any that does play (feed.put_back): each once, as its first row, with every player it's
+    kept for (players), whatever the judge said of it for each. And whether there are more."""
+    found = db.execute(select(FeedCandidate.source, FeedCandidate.external_id).where(_taken_out()).group_by(FeedCandidate.source, FeedCandidate.external_id)
+                       .order_by(func.max(FeedCandidate.unplayable_at).desc(), FeedCandidate.external_id).offset(offset).limit(PAGE + 1)).all()  # fmt: skip
+    page = [(v.source, v.external_id) for v in found[:PAGE]]
+    rows = db.execute(select(FeedCandidate, Player.name, Player.sport).join(Player, Player.id == FeedCandidate.player_id)
+                      .where(_taken_out(), tuple_(FeedCandidate.source, FeedCandidate.external_id).in_(page)).order_by(FeedCandidate.id)).all() if page else []  # fmt: skip
+    entries: dict[tuple[str, str], dict[str, Any]] = {}
+    for c, name, sport in rows:
+        entry = entries.setdefault((c.source, c.external_id), {**_candidate_row(c, name, sport), "players": []})
+        entry["players"].append({"id": c.player_id, "name": name, "sport": sport})
+    return [entries[v] for v in page if v in entries], len(found) > PAGE
 
 
 def layout_view() -> dict[str, Any]:

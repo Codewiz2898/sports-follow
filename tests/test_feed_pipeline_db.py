@@ -644,13 +644,13 @@ def test_a_fan_abroad_saying_a_video_wont_play_hides_it_from_them_and_takes_it_f
     assert queue.jobs == []
 
 
-def admin_review(row: int, said: str | None) -> dict:
-    """PUT /api/admin/feed/<row> as the admin panel sends it, signed in."""
+def as_admin(method: str, path: str, body: dict) -> dict:
+    """A request as the admin panel sends it, signed in: its answer."""
 
     async def go() -> httpx.Response:
         transport = httpx.ASGITransport(app=server.app, client=("81.2.69.9", 50000))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            return await client.put(f"/api/admin/feed/{row}", json={"review": said})
+            return await client.request(method, path, json=body)
 
     server.app.dependency_overrides[server.require_admin] = lambda: None
     try:
@@ -659,6 +659,11 @@ def admin_review(row: int, said: str | None) -> dict:
         server.app.dependency_overrides.pop(server.require_admin, None)
     assert answer.status_code == 200, answer.text
     return answer.json()
+
+
+def admin_review(row: int, said: str | None) -> dict:
+    """PUT /api/admin/feed/<row>: an admin's word on a candidate."""
+    return as_admin("PUT", f"/api/admin/feed/{row}", {"review": said})
 
 
 def test_an_admins_word_on_a_video_fans_said_wont_play_starts_their_votes_on_it_over(made, monkeypatch):
@@ -682,10 +687,12 @@ def test_an_admins_word_on_a_video_fans_said_wont_play_starts_their_votes_on_it_
     assert redis.data[votes] == {"81.2.69.4"}
 
 
-def test_the_admin_panel_lists_videos_fans_reports_took_out_newest_first_and_put_back_serves_one_again(made, monkeypatch):
+def test_the_admin_panel_lists_each_video_fans_reports_took_out_once_and_put_back_leaves_the_judges_word_as_it_was(made, monkeypatch):
     """BUG-100: a video fans' apps on three networks said won't play leaves every Feed at once, and the admin panel's
-    Feed tab lists every such video (admin.feed_page, "unplayable"), newest first, with how many. Putting one back
-    (approving it) serves it again, on every player's row of it, and clears its votes; one an admin hid isn't listed."""
+    Feed tab lists each such video once (admin.taken_out), newest first, with every player it's kept for, and counts
+    videos, not rows; one an admin hid isn't listed. Put back (feed.put_back) takes the mark off every player's row of
+    it and clears its votes, approving nothing: a row the judge held back for its player stays held. Approving one
+    puts it back too, as before."""
     monkeypatch.setattr(feed, "UNPLAYABLE_VOTES", 3, raising=False)
     pid = asha()
     with db_module.session() as s:
@@ -695,7 +702,7 @@ def test_the_admin_panel_lists_videos_fans_reports_took_out_newest_first_and_put
         s.add(PlayerCard(player_id=p.id, status="ready", card={"player": {"name": "Ravi Rao"}, "news": []}))
         other = p.id
     stored(pid, "blocked0001", "Verma's hundred, every boundary", EDITS, 5, verdict=said())
-    stored(other, "blocked0001", "Verma and Rao's stand", EDITS, 5, verdict=said())
+    held = stored(other, "blocked0001", "Verma and Rao's stand", EDITS, 5, verdict=said(about_player="no"))  # not about Rao, the judge said
     later = stored(pid, "blocked0002", "Verma's fifty", STATS, 6, verdict=said())
     hid = stored(pid, "blocked0003", "Verma in the nets", TALKS, 7, verdict=said())
     stored(pid, "plays000001", "Verma talks through the hundred", TALKS, 4, verdict=said())
@@ -708,21 +715,32 @@ def test_the_admin_panel_lists_videos_fans_reports_took_out_newest_first_and_put
     videos = lambda: {i.title for g in page(made, "fan", pid).groups for i in g.items if i.kind == "video"}  # noqa: E731
     assert videos() == {"Verma talks through the hundred"}
 
-    def listed() -> tuple[list[str], int]:
+    def listed() -> tuple[list[tuple[str, list[str]]], int]:
         s = made()
         try:
             shown = admin.feed_page(s, "unplayable")
-            return [c["title"] for c in shown["candidates"]], shown["totals"]["unplayable"]
+            return [(c["title"], [p["name"] for p in c["players"]]) for c in shown["candidates"]], shown["totals"]["unplayable"]
         finally:
             s.close()
 
-    assert listed() == (["Verma's fifty", "Verma and Rao's stand", "Verma's hundred, every boundary"], 3)
-    put_back = admin_review(later, "approved")
-    assert put_back["unplayable_at"] is None and put_back["served"]
-    assert videos() == {"Verma's fifty", "Verma talks through the hundred"}
-    assert "feed:unplayable:votes:youtube:blocked0002" not in redis.data and "feed:unplayable:votes:youtube:blocked0001" in redis.data
-    assert listed() == (["Verma and Rao's stand", "Verma's hundred, every boundary"], 2)
+    assert listed() == ([("Verma's fifty", ["Asha Verma"]), ("Verma's hundred, every boundary", ["Asha Verma", "Ravi Rao"])], 2)
+    # Put back from Rao's row, which the judge held back: every row loses the mark, and Rao's stays held.
+    assert as_admin("POST", f"/api/admin/feed/{held}/put-back", {}) == {"put_back": "youtube:blocked0001"}
+    assert {r.player_id: (r.unplayable_at, r.review, r.served_now) for r in served_rows("blocked0001")} == {pid: (None, None, True), other: (None, None, False)}
+    assert videos() == {"Verma's hundred, every boundary", "Verma talks through the hundred"}
+    assert "feed:unplayable:votes:youtube:blocked0001" not in redis.data and "feed:unplayable:votes:youtube:blocked0002" in redis.data
+    assert listed() == ([("Verma's fifty", ["Asha Verma"])], 1)
+    # Approving one puts it back too, and clears its votes.
+    assert admin_review(later, "approved")["unplayable_at"] is None
+    assert "feed:unplayable:votes:youtube:blocked0002" not in redis.data and listed() == ([], 0)
     assert queue.jobs == []
+
+
+def served_rows(vid: str) -> list[Any]:
+    """Each player's row of a video, and whether the Feed serves it now (FeedCandidate.served)."""
+    with db_module.session() as s:
+        return list(s.execute(select(FeedCandidate.player_id, FeedCandidate.unplayable_at, FeedCandidate.review, FeedCandidate.served().label("served_now"))
+                              .where(FeedCandidate.external_id == vid)))  # fmt: skip
 
 
 def all_rows() -> list[FeedCandidate]:

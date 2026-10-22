@@ -2158,6 +2158,19 @@ async def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[
 
 
 
+@app.post("/api/admin/feed/{row_id}/put-back", dependencies=AdminOnly)
+async def admin_put_back(row_id: RowId) -> dict[str, Any]:
+    """The video a candidate is plays after all, says an admin, from the Feed tab's list of those fans' apps took out:
+    every player's row of it is served again as the judge and any admin's word on it say, with nothing approved
+    (feed.put_back), and fans' apps' votes on it start again from none."""
+    video = await in_db(feed.put_back, row_id)
+    if video is None:
+        raise HTTPException(404, "There's no such candidate.")
+    await state["redis"].delete(feed.unplayable_votes_key(video))
+    admin_log.info("admin panel: feed video %s put back", video)
+    return {"put_back": video}
+
+
 @app.get("/api/admin/users", dependencies=AdminOnly)
 def admin_users(q: Annotated[str, Query(max_length=254)] = "", offset: Annotated[int, Query(ge=0, le=MAX_ID)] = 0, db: Session = Depends(get_db)) -> dict[str, Any]:
     return {"overview": admin.overview(db), "predictions": predictions.numbers(db), **admin.account_page(db, q, offset)}

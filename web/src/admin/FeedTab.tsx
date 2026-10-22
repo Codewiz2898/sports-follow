@@ -37,7 +37,19 @@ export function FeedTab() {
     try {
       const now = await admin.review(row.id, row.review === said ? null : said)  // pressed again, it's taken back
       setRows((old) => old?.map((r) => (r.id === now.id ? now : r)) ?? null)  // in place: the page stays where it was
-      if (show === 'unplayable' && row.unplayable_at && !now.unplayable_at) await load()  // put back: every row of the video leaves the list
+      if (show === 'unplayable' && row.unplayable_at && !now.unplayable_at) await load()  // approved: the video leaves the list
+    } catch (e) {
+      setError(failed(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+  const putBack = async (row: FeedCandidateRow) => {
+    setBusy(`row${row.id}`)
+    setError(null)
+    try {
+      await admin.putBack(row.id)
+      await load()  // every player's row of the video changes, and it leaves the Won't play list
     } catch (e) {
       setError(failed(e))
     } finally {
@@ -94,9 +106,11 @@ export function FeedTab() {
         top of This week (or of their moment), however old. A channel's trust multiplies its videos' scores: Hidden keeps them out, except one you approved or pinned. A channel no sport lists
         serves nothing whatever its trust: only a video of it you approve or pin. Signed-in
         fans reporting a channel's videos lower its default trust, to half at most; a trust you set stands as it is. A video fans' apps on
-        three networks said won't play in the app (its owner keeps it off other sites) is held back for everyone, and listed under Won't play,
-        newest first: Put back (or approve or pin) one that does play, and no app's word holds it back again while you have (pressing a pressed
-        Approve or Pin takes it back instead). The weekly check drops one YouTube says is gone, private or no longer embeddable.
+        three networks said won't play in the app (its owner keeps it off other sites) is held back for everyone, and listed once under Won't
+        play, newest first, with every player it's kept for. Put back one that does play: each player's row of it goes back to what the judge
+        (or you) said of it, and apps on three more networks can take it out again. Approving or pinning it puts it back too, and then no app's
+        word holds it back again while you have (pressing a pressed Approve or Pin takes it back instead). The weekly check drops one YouTube
+        says is gone, private or no longer embeddable.
       </Note>
       <div className="stat-grid" aria-label="Candidates">
         <div className="stat"><span className="dsp num">{count(totals.all ?? 0)}</span><span className="tiny">Candidates</span></div>
@@ -106,7 +120,7 @@ export function FeedTab() {
           <span className="dsp num">{count((totals.review_approved ?? 0) + (totals.review_hidden ?? 0) + (totals.review_pinned ?? 0))}</span>
           <span className="tiny">Reviewed by you</span>
         </div>
-        <div className="stat"><span className="dsp num">{count(totals.unplayable ?? 0)}</span><span className="tiny">Taken out by fans' reports</span></div>
+        <div className="stat"><span className="dsp num">{count(totals.unplayable ?? 0)}</span><span className="tiny">Videos taken out by fans' reports</span></div>
       </div>
       {error && <div className="error-box" role="alert">{error}</div>}
       <div className="segmented feed-admin-shows" role="group" aria-label="Show">
@@ -126,13 +140,13 @@ export function FeedTab() {
               <div className="stack" style={{ gap: 6 }}>
                 <a href={row.url} target="_blank" rel="noreferrer noopener" className="title link">{row.title || row.url}</a>
                 <span className="small muted">
-                  {row.player.name} · {row.channel || 'Unknown channel'} · {row.published ? relative(row.published) : 'no date'}
+                  {row.players ? `Kept for ${row.players.map((p) => p.name).join(', ')}` : row.player.name} · {row.channel || 'Unknown channel'} · {row.published ? relative(row.published) : 'no date'}
                   {row.views != null && ` · ${count(row.views)} views`}{row.likes != null && ` · ${count(row.likes)} likes`}
                 </span>
                 <Verdict row={row} />
                 <div className="row" style={{ justifyContent: 'flex-start', flexWrap: 'wrap', gap: 6 }}>
                   {row.unplayable_at && row.review !== 'hidden' && (
-                    <button type="button" className="btn small primary" disabled={busy === `row${row.id}`} onClick={() => void review(row, 'approved')}>Put back</button>
+                    <button type="button" className="btn small primary" disabled={busy === `row${row.id}`} onClick={() => void putBack(row)}>Put back</button>
                   )}
                   {REVIEWS.map(([said, label]) => (
                     <button key={said} type="button" className={`btn small${row.review === said ? ' primary' : ''}`} aria-pressed={row.review === said}
