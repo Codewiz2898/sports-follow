@@ -7,7 +7,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as SplashScreen from 'expo-splash-screen'
-import { createContext, use, useEffect, useState, type ReactNode } from 'react'
+import { createContext, use, useEffect, useRef, useState, type ReactNode } from 'react'
 import { AppState } from 'react-native'
 import { NO_SPORTS, sportsOf, type Sports } from '../../web/src/sports/naming'
 import { api, type SportCatalog } from './api'
@@ -20,29 +20,38 @@ SplashScreen.preventAutoHideAsync().catch(() => {})
 
 const SportsContext = createContext<Sports>(sportsOf(NO_SPORTS))
 
+/** Whether the app has the sports yet (the web's catalogKnown): 'known' (the server's, or the copy kept on the phone:
+ * an empty list is none), 'asking' (none until the server answers), or 'failed' (it didn't); and asking again. */
+export interface SportsKnown { known: 'known' | 'asking' | 'failed'; askAgain: () => void }
+const KnownContext = createContext<SportsKnown>({ known: 'asking', askAgain: () => {} })
+
 export function SportsProvider({ children }: { children: ReactNode }) {
   const [sports, setSports] = useState<Sports>(() => sportsOf(NO_SPORTS))
   const [ready, setReady] = useState(false)
+  const [known, setKnown] = useState<SportsKnown['known']>('asking')
+  const again = useRef<() => void>(() => {})
 
   useEffect(() => {
     let fresh = false
     let asked = 0
     const timer = setTimeout(() => setReady(true), LONGEST_MS)
     AsyncStorage.getItem(KEPT)
-      .then((raw) => { if (raw && !fresh) { setSports(sportsOf(JSON.parse(raw) as SportCatalog)); setReady(true) } })
+      .then((raw) => { if (raw && !fresh) { setSports(sportsOf(JSON.parse(raw) as SportCatalog)); setKnown('known'); setReady(true) } })
       .catch(() => {})
     const ask = () => {
       asked = Date.now()
       return api.sports()
         .then((catalog) => {
-          if (!catalog?.sports) return
+          if (!catalog?.sports) throw new Error('no sports')
           fresh = true
           // The same catalog again draws nothing again.
           setSports((shown) => (JSON.stringify(shown.catalog) === JSON.stringify(catalog) ? shown : sportsOf(catalog)))
+          setKnown('known')
           AsyncStorage.setItem(KEPT, JSON.stringify(catalog)).catch(() => {})
         })
-        .catch(() => {}) // offline: the kept copy, or none
+        .catch(() => setKnown((k) => (k === 'asking' ? 'failed' : k))) // offline: the kept copy, or none
     }
+    again.current = () => { setKnown((k) => (k === 'failed' ? 'asking' : k)); void ask() }
     ask().finally(() => setReady(true))
     const sub = AppState.addEventListener('change', (state) => { if (state === 'active' && Date.now() - asked >= AGAIN_MS) void ask() })
     return () => { clearTimeout(timer); sub.remove() }
@@ -50,11 +59,15 @@ export function SportsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => { if (ready) SplashScreen.hideAsync().catch(() => {}) }, [ready])
 
-  return <SportsContext value={sports}>{children}</SportsContext>
+  return <SportsContext value={sports}><KnownContext value={{ known, askAgain: () => again.current() }}>{children}</KnownContext></SportsContext>
 }
 
 export function useSports(): Sports {
   return use(SportsContext)
+}
+
+export function useSportsKnown(): SportsKnown {
+  return use(KnownContext)
 }
 
 /**

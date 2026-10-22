@@ -10,6 +10,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { findGames, pickedGame, type GameRow } from '../../../web/src/filter'
 import type { SportInfo } from '../api'
 import { useTone } from '../catalog'
+import { useFollowing } from '../following'
+import { YourSportsSheet } from '../yourSports'
 import { SearchIcon } from '../icons'
 import { colour, font, GUTTER } from '../theme'
 import { alpha, Btn, Eyebrow, Notice } from '../ui'
@@ -61,14 +63,16 @@ function GameChip({ game, picked, onPress, onLayout }: { game: SportInfo | null;
 }
 
 /**
- * Today's game filter, under its head: All, a chip of each of the fan's own games on the page, and a search for the
- * others (filter.ts gameRow); one of those picked has its chip after the fan's own while it's picked. Not there while
- * the page holds one game or none. The chips scroll sideways out to the page's edge; the search stays at the row's
- * end, in sight however many games the fan has. A game picked off the row's edge (from the search, or a link) is
- * brought into it.
+ * Today's game filter, under its head: All, a chip of each of the fan's own games on the page (their sports' among
+ * them), and a search for the others (filter.ts gameRow), which leads to their sports too, so a game found can keep
+ * its chip; one of those picked has its chip after the fan's own while it's picked. Not there while the page holds
+ * one game or none. The chips scroll sideways out to the page's edge; the search stays at the row's end, in sight
+ * however many games the fan has. A game picked off the row's edge (from the search, or a link) is brought into it.
  */
 export function GameChips({ row, game, onPick }: { row: GameRow; game: SportInfo | null; onPick: (key: string | null) => void }) {
   const [finding, setFinding] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const { sportsLoaded } = useFollowing() // the fan's sports as the server has them, before the sheet can save over them
   const line = useRef<ScrollView>(null)
   const view = useRef({ x: 0, width: 0 }) // how far the row is scrolled, and how wide it shows
   const places = useRef(new Map<string, { x: number; width: number }>()) // where each chip is along it
@@ -115,7 +119,9 @@ export function GameChips({ row, game, onPick }: { row: GameRow; game: SportInfo
           <SearchIcon size={18} />
         </Pressable>
       ) : null}
-      <FindGame open={finding} games={row.more} onPick={onPick} onClose={() => setFinding(false)} />
+      <FindGame open={finding} games={row.more} onPick={onPick} onClose={() => setFinding(false)}
+        onYourSports={sportsLoaded ? () => { setFinding(false); setEditing(true) } : undefined} />
+      <YourSportsSheet open={editing} onClose={() => setEditing(false)} />
     </View>
   )
 }
@@ -134,8 +140,10 @@ function useKeyboard(): number {
 }
 
 /** The row's search (the web's FindGame, a .feed-sheet as the Feed's "…" sheet, post.tsx's ItemSheet): the other games
- * with something on Today, narrowed as the fan types; a tap shows that one. Back, or a tap above it, closes it. */
-function FindGame({ open, games, onPick, onClose }: { open: boolean; games: SportInfo[]; onPick: (key: string) => void; onClose: () => void }) {
+ * with something on Today, narrowed as the fan types; a tap shows that one. At its foot, the way to the fan's sports
+ * (`onYourSports`: the Edit sheet, once their sports have come), so a game they came looking for gets a chip every
+ * day. Back, or a tap above it, closes it. */
+function FindGame({ open, games, onPick, onClose, onYourSports }: { open: boolean; games: SportInfo[]; onPick: (key: string) => void; onClose: () => void; onYourSports?: () => void }) {
   const insets = useSafeAreaInsets()
   const keyboard = useKeyboard()
   const [words, setWords] = useState('')
@@ -164,6 +172,15 @@ function FindGame({ open, games, onPick, onClose }: { open: boolean; games: Spor
           {found.map((x) => <GameChip key={x.key} game={x} picked={false} onPress={() => choose(x.key)} />)}
           {!found.length ? <Text style={s.none}>No game by that name on today</Text> : null}
         </ScrollView>
+        {onYourSports ? (
+          <Pressable onPress={onYourSports} accessibilityRole="button" style={({ pressed }) => [s.yours, pressed && { opacity: 0.8 }]}>
+            <View style={{ flex: 1, gap: 3 }}>
+              <Text style={s.yoursTitle}>Want one in your row every day?</Text>
+              <Text style={s.none}>Add it to your sports: it gets a chip, and players to follow.</Text>
+            </View>
+            <View style={s.go}><Text style={s.goText}>Your sports</Text></View>
+          </Pressable>
+        ) : null}
         <Btn kind="primary" label="Close" style={{ height: 48 }} onPress={onClose} />
       </View>
     </Modal>
@@ -196,4 +213,8 @@ const s = StyleSheet.create({
   list: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   none: { fontFamily: font[500], fontSize: 13, lineHeight: 18.5, color: colour.muted },
   notice: { flex: 1, fontFamily: font[600], fontSize: 13, color: colour.text },
+  yours: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 16, borderRadius: 20, backgroundColor: colour.bg },
+  yoursTitle: { fontFamily: font[800], fontSize: 14, color: colour.text },
+  go: { height: 36, paddingHorizontal: 14, borderRadius: 999, borderWidth: 2, borderColor: colour.text, justifyContent: 'center', flexShrink: 0 },
+  goText: { fontFamily: font[800], fontSize: 13, color: colour.text },
 })

@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 import { AppState, Pressable, StyleSheet, Text, View } from 'react-native'
 import { shortName } from '../../../web/src/format'
 import { moreOn, type GameOn } from '../../../web/src/today'
+import { inYourOrder } from '../../../web/src/yourSports'
 import { api, type LiveGame, type LiveSport } from '../api'
 import { openMatch, OtherGameCard } from '../blocks'
 import { toneOf, useSports } from '../catalog'
@@ -105,11 +106,12 @@ function LiveGameCard({ game, sport, follow, fill }: { game: LiveGame; sport: st
   )
 }
 
-/** "Live now" in the welcome: every game on, the sports the fan picked (`first`) first. Nothing while nothing is on. */
+/** "Live now" in the welcome: every game on, the sports the fan picked (`first`) first, in that order. Nothing while
+ * nothing is on. */
 export function LiveNow({ first = [] }: { first?: string[] }) {
   const sports = useLive()
   const follow = useFollowToggle()
-  const ordered = [...sports].sort((a, b) => Number(!first.includes(a.key)) - Number(!first.includes(b.key)))
+  const ordered = inYourOrder(sports, (x) => x.key, first)
   const games = ordered.flatMap((x) => x.games.map((g) => ({ ...g, sport: x.key })))
   if (!games.length) return null
   return (
@@ -154,14 +156,16 @@ export function AlsoLive({ games, theirsOn = false }: { games: GameOn[]; theirsO
 
 /**
  * Today's way to every other game on now, under the fan's own live boards (`theirsOn`; the web's MoreLive): a quiet
- * link to the Live page, "12 other games on now", or with none of theirs on, "12 games on now". `games` are gamesOn's
- * others (a game of theirs isn't counted), narrowed to the game picked on Today. Nothing when nothing else is on.
+ * link to the Live page, "12 other games on now", or with none of theirs on, "12 games on now"; "· Valorant first"
+ * where one of the fan's sports (`first`, its name) leads the page there. `games` are gamesOn's others (a game of
+ * theirs isn't counted), narrowed to the game picked on Today (`game`), which the Live page is narrowed to too.
+ * Nothing when nothing else is on.
  */
-export function MoreLive({ games, theirsOn }: { games: GameOn[]; theirsOn: boolean }) {
+export function MoreLive({ games, theirsOn, game = null, first = null }: { games: GameOn[]; theirsOn: boolean; game?: string | null; first?: string | null }) {
   if (!games.length) return null
   return (
-    <Pressable onPress={() => router.push('/live')} accessibilityRole="link" hitSlop={8} style={s.more}>
-      <Eyebrow>{moreOn(games.length, theirsOn)}</Eyebrow>
+    <Pressable onPress={() => router.push(game ? { pathname: '/live', params: { game } } : '/live')} accessibilityRole="link" hitSlop={8} style={s.more}>
+      <Eyebrow>{moreOn(games.length, theirsOn)}{first ? ` · ${first} first` : ''}</Eyebrow>
       <ChevronIcon size={16} strokeWidth={2.6} color={colour.muted} />
     </Pressable>
   )
