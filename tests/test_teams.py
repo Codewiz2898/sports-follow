@@ -438,8 +438,9 @@ def test_the_fan_stream_carries_a_teams_games_from_a_day_and_a_half_before_they_
     # And the stream subscribes to those games' channels, with the fan's teams in its first frame.
     subscribed: list[list[str]] = []
     monkeypatch.setattr(server, "_stream", lambda channels, first, request: subscribed.append(channels) or "stream")
-    monkeypatch.setattr(server, "_sse", lambda body: body)
-    assert asyncio.run(server.my_stream(SimpleNamespace(), fan="gooner")) == "stream"
+    monkeypatch.setattr(server, "_sse", lambda body, places=None: body)
+    monkeypatch.setattr(server, "streaming", server.Counter())  # the stream's places, given back by its answer
+    assert asyncio.run(server.my_stream(SimpleNamespace(client=None), fan="gooner")) == "stream"
     assert subscribed == [[f"match:{key['pitch:100']}"]]
 
 

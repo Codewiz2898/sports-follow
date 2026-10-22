@@ -165,19 +165,25 @@ def session_key(token: str) -> str:
 
 
 def sports_view() -> list[dict[str, Any]]:
-    """Every sport: whether the server's settings let it run, whether the panel has it on, its sources, and
-    the group it's one of (each esports game is a sport, under "Esports")."""
+    """Every sport: whether the server's settings let it run, whether the panel has it on, its sources, whether
+    fans are offered it (sports.offered: a sport on with no source running and research off isn't, and the
+    panel says to turn it off), and the group it's one of (each esports game is a sport, under "Esports")."""
     off = controls.current().sports_off
     running = sports.ENABLED
-    return [{
-        "key": s.key,
-        "label": s.label,
-        "group": sports.BY_KEY[s.group].label if s.group in sports.BY_KEY else "",
-        "allowed": s in sports.ALLOWED,
-        "on": not sports.named(s, off),
-        "running": s in running,
-        "sources": list(dict.fromkeys(a.name for a in ADAPTERS.values() if s.key in a.sports)),
-    } for s in sports.ALL]
+    rows = []
+    for s in sports.ALL:
+        sources = list(dict.fromkeys(a.name for a in ADAPTERS.values() if s.key in a.sports))
+        rows.append({
+            "key": s.key,
+            "label": s.label,
+            "group": sports.BY_KEY[s.group].label if s.group in sports.BY_KEY else "",
+            "allowed": s in sports.ALLOWED,
+            "on": not sports.named(s, off),
+            "running": s in running,
+            "sources": sources,
+            "offered": sports.offered(s, bool(sources)),
+        })
+    return rows
 
 
 def set_sport(key: str, on: bool) -> None:

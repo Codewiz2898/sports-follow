@@ -17,6 +17,7 @@ import os
 import re
 import secrets
 import time
+from collections import Counter
 from collections.abc import Awaitable, Callable, MutableMapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -55,8 +56,18 @@ HEARTBEAT = 15
 # An event, not a comment: EventSource hides comments, and the app counts on hearing something every
 # HEARTBEAT to know its stream is alive (a proxy can keep it open after the API behind it is gone).
 PING = "event: ping\ndata:\n\n"
+# A live stream (_stream) holds a Redis connection while it's open, from a pool of the streams' own, so one
+# client can't hold enough to starve the worker's polling, locks and limits (BUG-184). So many are open at
+# once for one fan, for one client address (an IPv6 /64: a household, or a phone network's shared address)
+# and in this process; past that the next is refused, and the app tries again a little later. A connection a
+# phone dropped can stay open some minutes before the server hears of it, so a fan's share allows for a few.
+STREAMS_PER_FAN = 8
+STREAMS_PER_ADDRESS = 60
+STREAMS_PER_PROCESS = 1000
+REDIS_CONNECTIONS = 100  # the API's other Redis connections, in each process: past them a command waits its turn
 
 state: dict[str, Any] = {}
+streaming: Counter[str] = Counter()  # this process's open streams: by "fan:<id>", by "address:<address>", and "all"
 
 
 @asynccontextmanager
@@ -64,10 +75,12 @@ async def lifespan(app: FastAPI):
     cookie_key()  # a server without its cookie key stops here, not on a fan's first request
     metrics.seed()
     state["arq"] = await create_pool(RedisSettings.from_dsn(REDIS_URL))
-    state["redis"] = aredis.Redis.from_url(REDIS_URL, decode_responses=True)
+    state["redis"] = aredis.Redis.from_pool(aredis.BlockingConnectionPool.from_url(REDIS_URL, decode_responses=True, max_connections=REDIS_CONNECTIONS, timeout=10))
+    state["streams"] = aredis.Redis.from_url(REDIS_URL, decode_responses=True, max_connections=STREAMS_PER_PROCESS)  # each stream's pubsub
     yield
     await state["arq"].aclose()
     await state["redis"].aclose()
+    await state["streams"].aclose()
 
 
 # FastAPI traces requests itself once tracing is on, and records the query string (a search's words):
@@ -1736,13 +1749,17 @@ def _switch(body: dict, field: str) -> bool:
 async def admin_login(request: Request, response: Response, body: dict = Body(...)) -> dict[str, Any]:
     """Sign in to the admin panel with its password and, once one is set, a code from the authenticator
     app; each code works once. Tries are limited from each client address, and wrong ones from everyone
-    together, so neither can be guessed at speed. Every sign-in is counted (metrics.admin_sign_in), and
-    one that works is emailed (app-rules.json)."""
+    together, so neither can be guessed at speed. Past everyone's limit the right password and code still
+    get in (BUG-101: else a few addresses guessing keep the admin out), and every other try is refused
+    alike, so a guess learns nothing, not even whether its password was right; with no code set, nothing
+    gets in until the hour is over. Every sign-in is counted (metrics.admin_sign_in), and one that works is
+    emailed (app-rules.json)."""
     keys = await _admin_keys()
     now = time.time()
     await _take(f"admin-tries:{client_address(request) or 'unknown'}:{int(now // 900)}", admin.ATTEMPTS_PER_ADDRESS, 1800, "Too many tries. Wait a quarter of an hour.")
     failed = f"admin-fails:{int(now // 3600)}"
-    if int(await state["redis"].get(failed) or 0) >= admin.FAILURES_PER_HOUR:
+    walled = int(await state["redis"].get(failed) or 0) >= admin.FAILURES_PER_HOUR
+    if walled and not keys.totp:
         raise HTTPException(429, "Too many wrong tries this hour. Try again in an hour.")
     # Counted as wrong before it's checked, so tries sent at once can't all get in under the limit.
     await state["redis"].incr(failed)
@@ -1756,6 +1773,8 @@ async def admin_login(request: Request, response: Response, body: dict = Body(..
     if not right:
         metrics.admin_sign_in("wrong")
         admin_log.warning("admin panel: a wrong password or code")
+        if walled:
+            raise HTTPException(429, "Too many wrong tries this hour: until it's over, only the right password and code get in.")
         raise HTTPException(401, "That password or code isn't right." if keys.totp else "That isn't the admin password.")
     await state["redis"].decr(failed)
     token = secrets.token_urlsafe(32)
@@ -2599,8 +2618,9 @@ async def athlete_preview(request: Request, system: str, athlete_id: str, league
 async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[str, Any]]]], request: Request):
     """Every message on the channels, after `first()`: what they cover as it is now, read once
     subscribed so nothing published in between is missed. Each reconnect starts here, so it is how an
-    app catches up. Holds no database connection."""
-    pubsub = state["redis"].pubsub()
+    app catches up. Holds no database connection, and one Redis connection, from the streams' own pool;
+    its route takes its places first (_hold_streams)."""
+    pubsub = state["streams"].pubsub()
     await pubsub.subscribe(*channels)
     try:
         for event in await first():
@@ -2616,8 +2636,43 @@ async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[s
         await pubsub.aclose()
 
 
-def _sse(body) -> StreamingResponse:
-    return StreamingResponse(body, media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+def _hold_streams(request: Request, fan: str | None) -> list[str]:
+    """Places for one more open stream: the fan's (when the route has one), its client address's (a public
+    one) and this process's. Past the fan's or the address's share a 429, past the process's a 503, and then
+    it holds none. The stream's answer gives them back when it ends (_Stream)."""
+    address = client_address(request)
+    shares = {f"fan:{fan}": STREAMS_PER_FAN} if fan else {}
+    if address:
+        shares[f"address:{address}"] = STREAMS_PER_ADDRESS
+    if any(streaming[key] >= share for key, share in shares.items()):
+        raise HTTPException(429, "Too many live updates open at once from here. Close some, and they come back.")
+    if streaming["all"] >= STREAMS_PER_PROCESS:
+        raise HTTPException(503, "Live updates are busy. The app tries again in a moment.")
+    places = [*shares, "all"]
+    streaming.update(places)
+    return places
+
+
+class _Stream(StreamingResponse):
+    """A stream's answer, which gives back its places (_hold_streams) when it ends, however it ends: its
+    client gone, the server stopping, or an error."""
+
+    def __init__(self, body: Any, places: list[str]) -> None:
+        super().__init__(body, media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        self.places = places
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            streaming.subtract(self.places)
+            for key in self.places:
+                if streaming[key] <= 0:
+                    del streaming[key]
+
+
+def _sse(body, places: list[str] | None = None) -> StreamingResponse:
+    return _Stream(body, places or [])
 
 
 @app.get("/api/players/{player_id}/stream")
@@ -2629,7 +2684,8 @@ async def player_stream(player_id: RowId, request: Request) -> StreamingResponse
         card = await read_card(player_id)
         return [{"type": "card", "player_id": player_id, "card": card}] if card else []
 
-    return _sse(_stream([bus.channel(player_id)], first, request))
+    places = _hold_streams(request, None)  # it needs no cookie: its address's share holds it
+    return _sse(_stream([bus.channel(player_id)], first, request), places)
 
 
 @app.get("/api/me/stream")
@@ -2651,7 +2707,8 @@ async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingRe
     async def first() -> list[dict[str, Any]]:
         return [{"type": "following", "players": await _following(fan), "matches": await in_db(matches.mine, fan), "teams": await in_db(teams.mine, fan)}]
 
-    return _sse(_stream([*(bus.channel(i) for i in ids), *(bus.match_channel(e) for e in games)], first, request))
+    places = _hold_streams(request, fan)
+    return _sse(_stream([*(bus.channel(i) for i in ids), *(bus.match_channel(e) for e in games)], first, request), places)
 
 
 # ---------------------------------------------------------------- the Android app

@@ -16,7 +16,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from functools import lru_cache
 from typing import Any, overload
 
-from .. import controls
+from .. import config, controls
 from ..config import SPORTS
 from . import basketball, chess, cricket, esports, football, tennis
 from .base import VOID, Ask, Fact, Fired, Found, Glance, Notable, Played, Seen, Sport
@@ -107,6 +107,15 @@ def on(name: str | None) -> bool:
     return sport is None or sport in ENABLED or any(s in ENABLED for s in members(sport))
 
 
+def offered(sport: Sport, served: bool) -> bool:
+    """Whether the app offers a sport to fans (GET /api/sports: the welcome's tiles, search's filters): it runs
+    (a group while any of its sports does), and something can show its players: a running source (`served`), or
+    research (config.RESEARCH), whose agent writes the pages of players no source has. One that runs with
+    neither would find nobody, so the admin panel says to turn it off (admin.sports_view)."""
+    runs = sport in ENABLED or any(s in ENABLED for s in members(sport))
+    return runs and (served or config.RESEARCH)
+
+
 def running_keys() -> list[str]:
     """The keys of the sports that run now, and of the groups any of them is in (the registry's rows of an
     esports pro whose game can't be told are "esports")."""
@@ -156,14 +165,15 @@ def label(name: str | None) -> str:
 
 def shown(sport: Sport, live: bool) -> dict[str, Any]:
     """A sport as the app knows it (GET /api/sports): what it's called, which free-text names are it, what
-    its alert levels say (for a player, and for a game followed by itself), whether this build runs it and has live scores for it, the group it's drawn as
+    its alert levels say (for a player, and for a game followed by itself), whether the app offers it (offered)
+    and a running source has live scores for it (`live`), the group it's drawn as
     (its board and line art: "esports" for a game; "" for a sport drawn as itself), and its colours for an
     app that doesn't read /api/sports.css (the Android app): the block, text on it, softer text on it and
     the colour as text on ink, or None for a sport that wears ink."""
     return {
         "key": sport.key or "other",
         "label": sport.label,
-        "on": sport in ENABLED or any(s in ENABLED for s in members(sport)),
+        "on": offered(sport, live),
         "group": sport.group,
         "live": live,
         "pattern": sport.pattern,
@@ -196,5 +206,5 @@ def names_of(sport: Sport) -> list[str]:
 
 __all__ = [
     "ALL", "ALLOWED", "BY_KEY", "ENABLED", "GROUPS", "OTHER", "VOID", "Ask", "Fact", "Fired", "Found", "Glance", "Notable", "Played", "Seen", "Sport", "css", "expand", "family", "get", "label", "members",
-    "named", "names_of", "of", "of_state", "on", "pick", "running_keys", "shown", "within",
+    "named", "names_of", "of", "of_state", "offered", "on", "pick", "running_keys", "shown", "within",
 ]
