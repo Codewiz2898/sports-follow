@@ -612,6 +612,57 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 /* Over: who won, big under the board; to come: the countdown under the title. */
 .match-verdict { margin: 0; font-size: 36px; line-height: 1; overflow-wrap: anywhere; }
 .match-count { font-size: 56px; line-height: 1; overflow-wrap: anywhere; }
+
+/* ---------------------------------------------------------------- team crests and the match band (look.ts, BHA-665) */
+/* A team's crest: its logo, in a disc where it would vanish on the colour under it, or our badge (its short code in a
+   white ring) where it has none or its sport's logos are off. */
+.crest { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: var(--crest, 40px); height: var(--crest, 40px); }
+.crest img { width: 100%; height: 100%; object-fit: contain; border-radius: calc(var(--crest, 40px) * 0.08); }  /* a flag's corners; a crest's are clear */
+.crest.disc { border-radius: 50%; }
+.crest.disc img { width: 70%; height: 70%; }
+.crest.badge { border-radius: 50%; background: #fff; color: #0d0d0d; box-shadow: inset 0 0 0 max(2px, calc(var(--crest, 40px) / 22)) #0d0d0d; font-family: var(--display); font-size: calc(var(--crest, 40px) * 0.34); line-height: 1; text-transform: uppercase; letter-spacing: 0.01em; }
+.crest.badge.long { font-size: calc(var(--crest, 40px) * 0.27); }
+
+/* Its two sides, face to face at the band's top: each crest slides in from its side, the V pops, the names rise. */
+.faceoff { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; padding-top: 4px; }
+.faceoff-side { display: flex; flex-direction: column; align-items: center; gap: 12px; min-width: 0; text-align: center; }
+.faceoff-name { font-size: 26px; line-height: 0.95; overflow-wrap: anywhere; }
+.faceoff-v { position: absolute; left: 50%; top: 34px; width: 46px; height: 46px; margin-left: -23px; }
+.faceoff-v > span { display: inline-flex; align-items: center; justify-content: center; width: 46px; height: 46px; border-radius: 50%; background: #0d0d0d; color: #fff; box-shadow: 0 0 0 3px #fff; font-family: var(--display); font-size: 20px; }
+.faceoff-side.l .crest { animation: crest-in-l 0.8s cubic-bezier(0.2, 1.25, 0.35, 1) 0.32s both; }
+.faceoff-side.r .crest { animation: crest-in-r 0.8s cubic-bezier(0.2, 1.25, 0.35, 1) 0.44s both; }
+.faceoff-v > span { animation: v-pop 0.45s cubic-bezier(0.3, 1.7, 0.4, 1) 0.9s both; }
+.faceoff-name { animation: rise 0.4s ease-out 1.05s both; }
+@keyframes crest-in-l { from { transform: translateX(-220px) rotate(-16deg); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes crest-in-r { from { transform: translateX(220px) rotate(16deg); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes v-pop { from { transform: scale(0); } to { transform: scale(1); } }
+@keyframes rise { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* The band in the two teams' colours (7a): split on a slant, each team's accent a stripe at the seam, each half
+   sweeping in from its side. What's the game's, not a side's, sits in a pill or a card of its own. */
+.match-band.duo { background: var(--raised); --text: #0d0d0d; --muted: #55575c; --line: #deded8; --raised: #e8e8e2; --focus: #0d0d0d; }
+.match-band.duo::before, .match-band.duo::after { content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.match-band.duo::before { background: linear-gradient(108deg, var(--l) 0 49%, var(--la) 49% 53%, var(--ra) 53% 54.4%, transparent 54.4% 100%); animation: half-in-l 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.match-band.duo::after { background: linear-gradient(108deg, transparent 0 54.4%, var(--r) 54.4% 100%); animation: half-in-r 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) 0.08s both; }
+.match-band.duo > * { z-index: 1; }
+@keyframes half-in-l { from { transform: translateX(-100%); } to { transform: none; } }
+@keyframes half-in-r { from { transform: translateX(100%); } to { transform: none; } }
+.match-band.duo .btn { border-color: #0d0d0d; background: #fff; color: #0d0d0d; }
+.match-band.duo .btn.primary, .match-band.duo .btn[aria-pressed='true'] { background: #0d0d0d; color: #fff; }
+.match-band.duo .btn.icon { background: #fff; color: #0d0d0d; }  /* white, so it shows on any team's colour (New Zealand's black) */
+.match-band.duo .faceoff-side.l { color: var(--l-ink); }
+.match-band.duo .faceoff-side.r { color: var(--r-ink); }
+.match-meta { align-self: center; display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 30px; padding: 4px 12px; border-radius: 999px; background: var(--sport); color: var(--on-sport); font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; text-align: center; }
+.match-meta .badge-live { height: 22px; }
+.match-time { align-self: center; display: inline-flex; align-items: center; min-height: 56px; padding: 6px 24px; border-radius: 999px; background: #0d0d0d; color: #fff; font-size: 30px; line-height: 1; text-align: center; }
+.match-band.duo .match-board { padding: 14px 16px; border-radius: 20px; background: var(--surface); box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6); }
+.match-band.duo .match-board .clock, .match-band.duo .match-board .live-note { color: var(--live-text); }
+.match-band.duo .match-board .linescore.lobby tr.ours td { color: var(--text); }
+.match-band.duo .match-verdict { align-self: center; padding: 8px 20px; border-radius: 999px; background: #fff; color: #0d0d0d; font-size: 30px; text-align: center; }
+.match-band.duo .tiny.soft { align-self: center; padding: 2px 10px; border-radius: 999px; background: rgba(255, 255, 255, 0.85); color: #55575c; }
+@media (prefers-reduced-motion: reduce) {
+  .match-band.duo::before, .match-band.duo::after, .faceoff-side .crest, .faceoff-v > span, .faceoff-name { animation: none; }
+}
 @media (min-width: 640px) { .match-verdict { font-size: 44px; } }
 .match-sides { gap: 16px; }
 .match-sides .who { display: flex; flex-wrap: wrap; gap: 6px; }

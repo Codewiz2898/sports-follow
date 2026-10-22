@@ -199,6 +199,7 @@ export interface SearchResponse {
  * it's from (`detail`), how many follow it, whether this fan does, and its next game as last read. */
 export interface TeamSummary {
   team_id: number
+  key: string  // its source and its id there ("sportmonks_football:83"), for its look (look.ts)
   name: string
   short: string  // its source's code for it: "ARS"
   sport: string  // a sport's key
@@ -479,7 +480,8 @@ export interface MatchPlayer { player_id: number; name: string; sport: string; r
  * players in it with their lines. */
 /** One of a game's teams to follow, as its match page offers it (sports_follow/teams.py in_game): whether this
  * fan follows it, and whether it can be followed now (its source runs). */
-export interface GameTeam { team_id: number; name: string; sport: string; following: boolean; can_follow: boolean }
+/** key: its source and its id there ("sportmonks_football:83"), for its look (look.ts); short: its source's code for it. */
+export interface GameTeam { team_id: number; key: string; short: string; name: string; sport: string; following: boolean; can_follow: boolean }
 
 export interface Match {
   key: string
