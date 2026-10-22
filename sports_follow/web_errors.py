@@ -5,7 +5,8 @@ and each becomes one line on the logger sports_follow.web, grouped as the server
 (logs.py): `error` is its name ("TypeError", or "HTTP 502" for a call), and `place` is where in the app's
 source it was thrown ("web/src/pages/PlayerPage.tsx"), or which call failed ("GET /api/players/{id}/card").
 The line also has the page, the app's version (its build) and the failed call's request id, which finds
-that request's own line and trace. Query strings are cut from every address in it (a search's words).
+that request's own line and trace. Query strings are cut from every address in it (a search's words), and the
+report's name and message are kept to one line (CONTROL).
 
 The build is minified. Its source maps (vite.config.ts keeps them in web/sourcemaps, which isn't served)
 turn the stack back into the app's own files, lines and columns. A stack from a build this server doesn't
@@ -59,6 +60,9 @@ POSITION = re.compile(r"(:\d+){1,2}$")
 # own files ("http://localhost:5173/src/pages/PlayerPage.tsx:120:14").
 FRAME = re.compile(r"(?:https?://[^\s()/]+)?/(?P<file>assets/[\w.-]+\.js|src/[^\s():]+):(?P<line>\d+):(?P<column>\d+)")
 ID = re.compile(r"/\d+(?=/|$)")
+# Line breaks and other control characters: in a report's name or message (whatever was sent), a run of them is a
+# space, as a line break would start a line of its own in the text log, which could pass for the server's.
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
 
 
 def _without_queries(text: str) -> str:
@@ -200,9 +204,9 @@ def record(report: Report, route: Callable[[str, str], str | None] = lambda meth
         else:
             place = "an API call"
     else:
-        error = report.name.strip() or "Error"
+        error = CONTROL.sub(" ", report.name).strip() or "Error"
         place = where or f"page {ID.sub('/{id}', page)}"
-    message = _without_queries(report.message)
+    message = CONTROL.sub(" ", _without_queries(report.message))
     fields = {
         "error": error, "place": place, "kind": report.kind, "page": page, "version": report.version or None,
         "call": call, "call_status": report.status, "call_rid": logs.given_id(report.request_id), "exc": stack or None,

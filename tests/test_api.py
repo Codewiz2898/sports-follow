@@ -744,6 +744,20 @@ def test_the_web_app_sends_only_so_many_errors_an_hour(api, monkeypatch, caplog)
     assert api.call("POST", "/api/errors", fan="fan", body={"kind": "nonsense", "page": "/"}).status_code == 422
 
 
+def test_a_web_report_is_one_line_of_the_log_whatever_its_text(api, caplog):
+    """BUG-104: a report's name and message are whatever the app (or anyone) sent, and both are in the line's
+    message: a line break or another control character in them made a line of its own in the text log, which
+    could pass for the server's. Each run of them is a space."""
+    caplog.set_level(logging.INFO, "sports_follow")
+    made_up = "\n12:00:00 WARNING sports_follow.admin: admin panel: account 1 deleted"
+    assert api.call("POST", "/api/errors", fan="fan", address=PUBLIC, body={
+        "kind": "error", "name": "TypeError\r\nX", "message": f"boom{made_up} \x1b[31m", "page": "/"}).status_code == 204
+    [line] = _web_lines(caplog)
+    text = logs.TextFormatter().format(line)
+    assert not any(c in text for c in "\n\r\x1b ")
+    assert line.error == "TypeError X" and "boom 12:00:00 WARNING sports_follow.admin" in line.getMessage()
+
+
 # ---------------------------------------------------------------- writes (BUG-029)
 
 
