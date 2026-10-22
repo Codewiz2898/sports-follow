@@ -4,7 +4,7 @@ more have picked that a friend's one pick isn't told by it. Picks made before co
 show their split again from their next pick.
 
 Revision ID: 89e07e122a1e
-Revises: a7d2c5e9f1b3
+Revises: c4e8b2f7a913
 Create Date: 2026-10-22
 """
 
@@ -15,7 +15,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "89e07e122a1e"
-down_revision = "a7d2c5e9f1b3"
+down_revision = "c4e8b2f7a913"
 branch_labels = None
 depends_on = None
 
