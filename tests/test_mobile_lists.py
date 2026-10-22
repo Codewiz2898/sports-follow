@@ -1,11 +1,17 @@
-"""What the Android app's shared lists show as the server changes under them (mobile/src/following.tsx).
+"""What the Android app's shared lists show as the server changes under them (mobile/src/following.tsx,
+mobile/src/activity.tsx).
 
 A player's alert level tapped while the 30 s re-read of the follow list was on its way flipped back on screen: the
 answer, read before the level was saved, replaced the cards whole. Team levels and follows were kept from it, a
 player's level wasn't (BUG-280). Now, as on the web (resync.listed), a level being changed stays as tapped, and a
 re-read that overlapped the save is dropped, as one that overlapped a follow is.
 
-The provider's own lines run here, taken from its file (all but what they draw), with React, React Native and
+A game muted from its notification's button (native code, the app away) or on another device still said "Mute this
+game" in the app, and Unmute was out of reach till a restart: the muted games were read only when the follow list
+changed (BUG-279). Now they're read again on coming back to the front, and with the activity list after news; a read
+that overlapped a mute or unmute tapped here is dropped.
+
+The providers' own lines run here, taken from the two files (all but what they draw), with React, React Native and
 the API faked. Run with Node (22.6 or later, which reads TypeScript); skipped without it."""
 
 from __future__ import annotations
@@ -103,9 +109,15 @@ def provider(path: str, first: str, name: str) -> str:
 
 MODULE = """
 import { listed, withFollowed } from %(resync)s
+import { followsKey } from %(alerts)s
+import { ACTIVITY, refetcher } from %(refetch)s
 export function following(props: any, { useAccount, useState, useRef, useEffect, useCallback, useMemo, createContext, api, AppState, useNotificationsArriving }: any) {
 %(following)s
   return FollowingProvider(props)
+}
+export function activity(props: any, { useFollowing, useAccount, useState, useRef, useEffect, useCallback, useMemo, createContext, AsyncStorage, api, AppState, StannNotifications }: any) {
+%(activity)s
+  return ActivityProvider(props)
 }
 """
 
@@ -159,7 +171,48 @@ async function levels(scenario) {
   return seen
 }
 
-console.log(JSON.stringify({ during: await levels('during'), before: await levels('before') }))
+// The games the fan muted, as the phone has them, while the server's change: a game muted from its notification's
+// button with the app away, then one on another device with the app in front, then one tapped here whose PUT is slow
+// while the phone comes back to the front.
+async function mutes() {
+  reset()
+  const server = new Set()
+  let put = null
+  const api = {
+    activity: async () => ({ items: [], next: null }),
+    mutes: async () => ({ event_ids: [...server] }),
+    mute: (id, on) => { put = held(); return put.promise.then(() => { if (on) server.add(id); else server.delete(id) }) },
+  }
+  const lists = { cards: [{ player_id: 7, alerts: 'key' }], loaded: true, heard: 0, matches: [], teams: [] }
+  const env = { api, useFollowing: () => lists, useAccount: () => ({ epoch: 0 }), AsyncStorage: { getItem: async () => '1', setItem: async () => {} },
+    StannNotifications: { takeDownLive() {} } }
+  const phone = mount(activity, env)
+  await settle()
+  const muted = () => [...phone.out.muted].sort((a, b) => a - b)
+  const seen = { first: muted() }
+  // Muted from the notification while the app was away (straight to the server, from native code); back in front.
+  await until(60_000); AppState.set('background')
+  server.add(42)
+  await until(120_000); AppState.set('active'); await settle()
+  seen.back = muted()
+  // Muted on the fan's laptop; the phone in front hears there's news (a followed game moved on), and reads the
+  // activity list after its wait.
+  server.add(43)
+  await until(150_000); lists.heard++; phone.render(); await settle()
+  await until(165_000)
+  seen.elsewhere = muted()
+  // Muted here, its PUT slow; the app goes away and comes back meanwhile: a read from before the mute isn't taken.
+  phone.out.setMuted(44, true).catch(() => {})
+  await settle()
+  AppState.set('background'); AppState.set('active'); await settle()
+  seen.during = muted()
+  put.done(); await settle()
+  await until(200_000); AppState.set('background'); AppState.set('active'); await settle()
+  seen.after = muted()
+  return seen
+}
+
+console.log(JSON.stringify({ during: await levels('during'), before: await levels('before'), mutes: await mutes() }))
 """
 
 
@@ -169,7 +222,10 @@ def run(tmp_path: Path) -> dict:
     module = tmp_path / "providers.mts"
     module.write_text(MODULE % {
         "resync": json.dumps((ROOT / "web" / "src" / "resync.ts").as_uri()),
+        "alerts": json.dumps((ROOT / "web" / "src" / "alerts.ts").as_uri()),
+        "refetch": json.dumps((ROOT / "web" / "src" / "refetch.ts").as_uri()),
         "following": provider("mobile/src/following.tsx", "const EVERY_MS", "Following"),
+        "activity": provider("mobile/src/activity.tsx", "const ActivityContext", "Activity"),
     })
     script = SCRIPT % {"hook": json.dumps(hook.as_uri()), "module": json.dumps(module.as_uri()), "react": REACT}
     done = subprocess.run([NODE or "node", "--experimental-strip-types", "--no-warnings", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
@@ -191,3 +247,16 @@ def test_a_level_tapped_while_the_list_is_read_again_stays_as_tapped(found):
 def test_a_re_read_asked_before_a_level_was_saved_doesnt_undo_it(found):
     # Before; the tap saved; the re-read asked before it answers; the next re-read. Was flipped back by that answer.
     assert found["before"] == ["key", "everything", "everything", "everything"]
+
+
+def test_a_game_muted_away_from_the_app_shows_as_muted(found):
+    mutes = found["mutes"]
+    assert mutes["first"] == []
+    assert mutes["back"] == [42]  # muted from the notification, the app away: read again on coming back
+    assert mutes["elsewhere"] == [42, 43]  # muted on another device: read with the activity list after news
+
+
+def test_a_read_of_the_muted_games_from_before_a_mute_tapped_here_isnt_taken(found):
+    mutes = found["mutes"]
+    assert mutes["during"] == [42, 43, 44]  # shown at once, and not taken off by a read from before it was saved
+    assert mutes["after"] == [42, 43, 44]
