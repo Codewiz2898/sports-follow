@@ -22,7 +22,7 @@ from sqlalchemy.orm import sessionmaker
 
 from types import SimpleNamespace
 
-from sports_follow import adapters, bus, players, registry, sports, starters
+from sports_follow import adapters, bus, photos, players, registry, sports, starters
 from sports_follow.adapters import Adapter, AdapterError, Fixture, PlayerRef, Roster, Rostered, pubg
 from sports_follow.adapters.budget import RateLimited
 from sports_follow.models import Account, Athlete, AthleteOverride, AthleteUnmatch, Follow, Moment, Photo, Player, PlayerCard, PlayerIdentity, Starter
@@ -93,6 +93,26 @@ def test_removing_a_page_takes_everything_with_it_and_blocks_the_athlete(db):
     registry.upsert(db, [athlete("Q213854", "cricket", "Virat Kohli", {"espn_cricket": "253802"}), athlete("Q1", "cricket", "Someone Else")])
     db.commit()
     assert [a.qid for a in db.scalars(select(Athlete))] == ["Q1"]
+
+
+def test_removing_a_player_takes_their_photo_off_the_credits_page_at_once(db):
+    # BUG-220: removing a player left their photo on the Credits page, and its file served, until the photos job
+    # forgot it, up to 30 days on. One another athlete's row still shows stays.
+    kohli(db)
+    registry.upsert(db, [athlete("Q213854", "chess", "Virat Kohli", {"lichess_chess": "vk"}, image="Kohli 2019.jpg")])  # the same person in a sport he isn't removed from
+    db.execute(update(Athlete).where(Athlete.sport == "cricket").values(image="Virat Kohli 2019.jpg"))
+    db.add(Player(id=2, slug="virat-kohli-chess", name="Virat Kohli", sport="Chess", wikidata_qid="Q213854"))
+    db.flush()
+    db.add(Follow(fan_id="c", player_id=2, alert_rules={}))
+    now = datetime.now(timezone.utc)
+    db.add_all([Photo(file="Virat Kohli 2019.jpg", name="Virat Kohli", status="ok", digest="a" * 32, media_type="image/jpeg", data=b"jpeg", fetched_at=now),
+                Photo(file="Kohli 2019.jpg", name="Virat Kohli", status="ok", digest="b" * 32, media_type="image/jpeg", data=b"jpeg", fetched_at=now)])
+    db.commit()
+    assert len(photos.used(db)) == 2 and photos.serve(db, f"{'a' * 32}.jpg") is not None
+    assert players.main(["remove", "1", "--yes"]) == 0
+    db.expire_all()
+    assert [p["name"] for p in photos.used(db)] == ["Virat Kohli"] and photos.serve(db, f"{'a' * 32}.jpg") is None
+    assert photos.serve(db, f"{'b' * 32}.jpg") is not None  # his chess page's
 
 
 def test_removing_asks_first(db, capsys):

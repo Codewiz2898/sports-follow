@@ -22,7 +22,7 @@ stale and unseen deletes), so it holds on a running server without a deploy and 
 undo it. Adding puts an athlete no source lists in the registry, keyed "op:…", or pins one an import would
 drop: search finds them, and following binds the source ids given. Removing deletes the player's page with
 everything that hangs off it (follows, moments, results, bindings: the database cascades) and its hot card
-in Redis, deletes their registry rows and blocks them: imports never write them again, and search and
+in Redis, deletes their registry rows and their photo (off the Credits page at once) and blocks them: imports never write them again, and search and
 following leave out their ids in the sources, in every source of their sport (each one they have no id in
 is asked for them by name and birth date), and following refuses a pick with their name and birth date from
 a source that couldn't be asked. A name typed for research isn't blocked; the agent decides who that is.
@@ -135,9 +135,9 @@ def _decide(db: Session, qid: str, sport: str, action: str, name: str, ids: dict
 
 def remove(db: Session, found: Found, note: str | None = None) -> list[int]:
     """Take out what a reference found: delete the pages (the database cascades their follows, moments,
-    results and bindings) and the registry rows, and block each athlete: by their ids in every source of their
-    sport, which are asked for those it has no id in (registry.everywhere), and by name and birth date
-    (registry.removed). Returns the deleted pages' ids, whose hot cards the caller clears once this commits."""
+    results and bindings), the registry rows and their photos, and block each athlete: by their ids in every
+    source of their sport, which are asked for those it has no id in (registry.everywhere), and by name and birth
+    date (registry.removed). Returns the deleted pages' ids, whose hot cards the caller clears once this commits."""
     if not found.players and not found.athletes:
         raise Refused("nothing to remove: no page or registry athlete has that id")
     # Who goes, each with their ids in the sources, found before anything is written: no row is held while the
@@ -168,6 +168,8 @@ def remove(db: Session, found: Found, note: str | None = None) -> list[int]:
 
         clips.forget_players(db, gone)  # tags are ids in a list: no cascade takes them
         db.execute(delete(Player).where(Player.id.in_(gone)))
+    # Their photos off the Credits page, and no longer served, now: not when the photos job next forgets old ones.
+    photos.forget(db, [a.image for a in found.athletes if a.image])
     return gone
 
 
