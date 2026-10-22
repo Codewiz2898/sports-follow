@@ -1241,6 +1241,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
     game_kept: tuple[str, str, int] | None = None  # the game's own poll, for Redis once this one is committed
     several = False  # a fixture of a game under several (boards), which notes it's told its side once committed
     new_moments: list[int] = []
+    left_out: set[int] = set()  # the followed players its team sheet leaves out: not in the game (Sport.left_out)
     with session() as db:
         event = db.get(Event, event_id)
         if event is None:
@@ -1300,13 +1301,15 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
                 told = notify.told(db, player_id, event_id) if before else []  # what a source may take back (a goal VAR rules out)
                 if before is not None or not old_news:
                     new_moments += notify.record(db, player_id, event_id, moments.detect(sport, name, athlete_id, before, seen, told))
+            # A player the team sheet leaves out (Sport.left_out) isn't in the game: their page doesn't show it live, nor
+            # its result as theirs (it's taken down if it went up before the sheet was out), nor their fans its live card.
+            out = snap.status in ("live", "final") and sports.of(sport).left_out(seen)
+            if out:
+                left_out.add(player_id)
             card_row = db.get(PlayerCard, player_id)
             if card_row is None or card_row.status != "ready":
                 continue
             card_row.live_checked_at = now
-            # A player the team sheet leaves out (Sport.left_out) isn't in the game: their page doesn't show it live, nor
-            # its result as theirs; it's taken down if it went up before the sheet was out.
-            out = snap.status in ("live", "final") and sports.of(sport).left_out(seen)
             if out:
                 if ((card_row.card or {}).get("live") or {}).get("event_id") != event.id:
                     continue
@@ -1346,7 +1349,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
     if published_game is not None:
         bus.publish_match(event_id, {"type": "match", "event_id": event_id, "match": published_game})
     notify.dispatch(new_moments)
-    livecards.polled(event, snap)  # its live card on Android phones, or its end
+    livecards.polled(event, snap, left_out)  # its live card on Android phones, or its end
     if published:
         log.info("poll %s: %s | %s -> %d card(s)", event_id, snap.score_label, snap.clock_label, len(published))
     wait = int(live_binding.get("cadence") or 10) if snap.status == "live" else 60

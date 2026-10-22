@@ -244,7 +244,7 @@ def test_muting_either_fixture_of_a_board_mutes_the_game(db, polls):
 
 def test_a_fan_of_both_players_has_one_live_card_for_their_board(db, polls, fake_fcm, monkeypatch):  # noqa: F811
     phones(db, "fcm")
-    monkeypatch.setattr(livecards, "_queue", lambda event_id, kind, made, board=None: livecards.send(event_id, kind, made, board))  # at once
+    monkeypatch.setattr(livecards, "_queue", lambda event_id, kind, made, board=None, out=(): livecards.send(event_id, kind, made, board, out))  # at once
 
     def cards() -> dict[str, list[tuple[str, list[str]]]]:
         """Each fan's live cards, by event and whom they name, and ends ("end", the card it takes down)."""
@@ -295,7 +295,7 @@ def test_with_redis_unreadable_each_side_tells_its_own(db, polls, fake_fcm, monk
     # other side's word for a moment a fan of both was told already isn't told again.
     phones(db)
     phones(db, "fcm")
-    monkeypatch.setattr(livecards, "_queue", lambda event_id, kind, made, board=None: livecards.send(event_id, kind, made, board))  # at once
+    monkeypatch.setattr(livecards, "_queue", lambda event_id, kind, made, board=None, out=(): livecards.send(event_id, kind, made, board, out))  # at once
     for event_id in (1, 2):
         poll(event_id, side(event_id, status="*"))
     polls.pushed.clear()

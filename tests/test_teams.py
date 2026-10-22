@@ -692,7 +692,7 @@ def followed_game(db, monkeypatch, fixture_id: str, sport: str, title: str, side
     phone; polled all along, its pushes sent at once and dropped, so what each fan was sent is its notification rows,
     and no live card goes anywhere."""
     monkeypatch.setattr(structured, "_polled", lambda event_id, cadence: True)
-    monkeypatch.setattr(structured.livecards, "polled", lambda event, snap: None)
+    monkeypatch.setattr(structured.livecards, "polled", lambda event, snap, out=(): None)
     monkeypatch.setattr(notify, "dispatch", notify.send)
     monkeypatch.setattr(notify, "push", lambda *args, **kwargs: None)
     monkeypatch.setattr(notify.bus, "publish", lambda player_id, event: None)

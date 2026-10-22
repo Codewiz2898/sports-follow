@@ -143,7 +143,7 @@ def cards(monkeypatch):
     boards: list[dict[str, str]] = []
     clock = SimpleNamespace(now=1_000_000.0)
 
-    def queue(event_id: int, kind: str, made: dict | None, board: dict[str, str] | None = None) -> None:
+    def queue(event_id: int, kind: str, made: dict | None, board: dict[str, str] | None = None, out: frozenset[int] = frozenset()) -> None:
         sent.append((event_id, kind, made))
         boards.append(board or {})
 
@@ -203,7 +203,7 @@ def test_a_game_sends_its_newest_card_only_and_one_at_a_time(monkeypatch):
     monkeypatch.setattr(livecards, "_sending", set())
     monkeypatch.setattr(livecards, "_pool", SimpleNamespace(submit=lambda fn, *args: threads.append((fn, args))))
 
-    def sending(event_id: int, kind: str, made: dict | None, board: dict[str, str] | None = None) -> None:
+    def sending(event_id: int, kind: str, made: dict | None, board: dict[str, str] | None = None, out: frozenset[int] = frozenset()) -> None:
         went.append((event_id, kind, (made or {}).get("status", "")))
         if (event_id, kind) == (5, "live"):
             livecards._queue(5, "end", None)  # the game ends while its last card is going out
