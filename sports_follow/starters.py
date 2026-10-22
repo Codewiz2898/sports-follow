@@ -33,7 +33,7 @@ from sqlalchemy import case, delete, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, registry, search, sports
+from . import bus, registry, search, shutdown, sports
 from .adapters import AdapterError, Fixture, SearchResult
 from .adapters.budget import RateLimited
 from .config import STARTERS_HOME_COUNTRY
@@ -50,7 +50,7 @@ TOP_DAYS = 21  # a top player is kept only with a game this soon
 RECENT_DAYS = 45  # or one this recent: chess has weeks between events
 TOP_CANDIDATES = 30  # the best-known athletes a sport's refresh looks at
 TOP_SECONDS = 300  # and the longest it spends on them: a source taking one request at a time (Lichess) is shared with live games
-TOP_TTL = 3 * 86400  # a refresh's pool outlasts a day or two of failed refreshes
+TOP_TTL = 3 * 86400  # a pool outlasts a day or two with no refresh (one that can't ask the sources keeps it)
 LIMITED_PAUSE = 65  # seconds a sport's refresh waits, once, when a source's allowance is spent: a minute's comes back
 FOLLOWED_LOOKED_AT = 50  # the most-followed players of a sport whose live cards are read for "playing"
 CACHE_SECONDS = 60  # what a sport offers, the same for every fan, is worked out at most this often (a process)
@@ -126,7 +126,13 @@ def refresh(now: datetime | None = None, keep: int = POOL) -> dict[str, int]:
     """Build every running sport's top pool: its best-known current athletes, found in the source they're
     followed through (registry.find_in_source, which writes a found id back), with their next game. Asks
     the sources, a few calls an athlete: the worker runs it once a day (worker.refresh_starters), and
-    `players starter refresh` by hand. Returns how many each sport kept."""
+    `players starter refresh` by hand. Returns how many each sport kept.
+
+    An athlete it can't look up (their source failing, or its allowance or this refresh's time running out
+    first) stays as the last refresh found them: a source's outage at 04:40 used to leave its sport with no
+    best-known starters for a day. And a worker stopping ends it at its next step, storing nothing more: its
+    thread used to ask on about each athlete while the interpreter shut down, and store the few it found
+    (BUG-172)."""
     now = now or datetime.now(timezone.utc)
     kept: dict[str, int] = {}
     for sport in sports.ENABLED:
@@ -135,11 +141,13 @@ def refresh(now: datetime | None = None, keep: int = POOL) -> dict[str, int]:
             # among ties the order would be the import's, and the checks would spend a scarce allowance.
             rows = db.scalars(select(Athlete).where(Athlete.sport == sport.key, Athlete.current, Athlete.sitelinks > 0).order_by(known().desc(), Athlete.id).limit(TOP_CANDIDATES)).all()
             people = [registry.Person.of(a) for a in rows]
+        last = {e["qid"]: e for e in top_pool(sport.key)}  # for whoever this refresh can't look up
         entries: list[dict[str, Any]] = []
+        as_before = 0
         waited = False
         queue = list(people)
         until = time.monotonic() + TOP_SECONDS
-        while queue and len(entries) < keep:
+        while queue and len(entries) < keep and not shutdown.stopping.is_set():
             if time.monotonic() > until:
                 log.info("starters: %s's top pool stops at %d after %ds", sport.key, len(entries), TOP_SECONDS)
                 break
@@ -155,23 +163,32 @@ def refresh(now: datetime | None = None, keep: int = POOL) -> dict[str, int]:
                     log.info("starters: %s's top pool stops at %d: %s", sport.key, len(entries), exc)
                     break
                 waited = True  # a minute's allowance comes back; an hour's or a day's won't, and the next try says so
-                time.sleep(LIMITED_PAUSE)
+                shutdown.sleep(LIMITED_PAUSE)
                 continue
-            except AdapterError as exc:
-                log.info("starters: %s (%s) left out: %s", person.name, sport.key, exc)
+            except Exception as exc:
+                if isinstance(exc, AdapterError):
+                    log.info("starters: %s (%s) couldn't be looked up: %s", person.name, sport.key, exc)
+                else:
+                    log.exception("starters: %s (%s) couldn't be looked up", person.name, sport.key)
                 queue.pop(0)
-                continue
-            except Exception:
-                log.exception("starters: %s (%s) left out", person.name, sport.key)
-                queue.pop(0)
+                if person.qid in last:
+                    entries.append(last[person.qid])
+                    as_before += 1
                 continue
             queue.pop(0)
             if playing:
                 entries.append({"qid": person.qid, "start_utc": game.start_utc.isoformat() if game and game.start_utc else None,
                                 "title": game.title if game else None, "competition": game.competition if game else None})
+        if shutdown.stopping.is_set():
+            log.info("starters: the worker is stopping; %s's top pool and the rest are left as they were", sport.key)
+            return kept
+        if queue and len(entries) < keep:  # it stopped short: those it didn't get to stay as they were too
+            unasked = [last[p.qid] for p in queue if p.qid in last][:keep - len(entries)]
+            entries += unasked
+            as_before += len(unasked)
         store_top(sport.key, entries)
         kept[sport.key] = len(entries)
-        log.info("starters: %d top %s players playing lately or soon", len(entries), sport.key)
+        log.info("starters: %d top %s players playing lately or soon, %d of them as the last refresh found them", len(entries), sport.key, as_before)
     return kept
 
 

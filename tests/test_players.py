@@ -12,6 +12,7 @@ Every test empties the tables first.
 from __future__ import annotations
 
 import os
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -461,8 +462,10 @@ def test_the_top_pool_is_the_best_known_with_a_game_soon(db, pools, monkeypatch)
         return games[ref]
 
     source.fixtures = unreachable
+    asked.clear()
     starters.refresh(NOW)
-    assert [e["qid"] for e in pools.top["chess"]] == ["Q20", "Q22"]  # left out, the rest still asked
+    # Kept as the last refresh found them, and the rest still asked (BUG-172).
+    assert [e["qid"] for e in pools.top["chess"]] == ["Q21", "Q20", "Q22"] and {"Q20", "Q22"} <= set(asked)
 
     def broken(ref):
         if ref == "Q20":
@@ -471,14 +474,81 @@ def test_the_top_pool_is_the_best_known_with_a_game_soon(db, pools, monkeypatch)
 
     source.fixtures = broken
     starters.refresh(NOW)
-    assert [e["qid"] for e in pools.top["chess"]] == ["Q21", "Q22"]  # any error leaves one athlete out, not the sport
+    assert [e["qid"] for e in pools.top["chess"]] == ["Q21", "Q20", "Q22"]  # any error keeps one athlete as they were, not the sport
+
+    refused: list[str] = []
 
     def spent(ref):
+        refused.append(ref)
         raise RateLimited("allowance spent")
 
     source.fixtures = spent
     monkeypatch.setattr(starters, "LIMITED_PAUSE", 0)
-    assert starters.refresh(NOW)["chess"] == 0  # waits once, then stops asking: every other call would be refused too
+    assert starters.refresh(NOW)["chess"] == 3  # those it didn't get to ask about stay as they were
+    assert refused == ["Q21", "Q21"]  # waits once, then stops asking: every other call would be refused too
+
+
+def three_playing(db, monkeypatch) -> tuple[SimpleNamespace, list[str]]:
+    """Three chess players, best known first, whom the live source has with a game this afternoon, as it answers
+    (`.fixtures`, which a test may change), and the athletes it was asked about, in order."""
+    system = registry.live_system("chess")
+    if system is None:
+        pytest.skip("no live chess source in this build")
+    registry.upsert(db, [athlete(f"Q3{i}", "chess", name, {system: name}, sitelinks=50 - i) for i, name in enumerate(("First", "Second", "Third"))])
+    db.commit()
+    game = Fixture(source_id="g", title="A game", competition="Cup", start_utc=NOW + timedelta(hours=5), venue=None, status="scheduled", team_ids=[], locator={})
+    source = SimpleNamespace(fixtures=lambda ref: [game])
+    asked: list[str] = []
+    monkeypatch.setattr(registry, "find_in_source", lambda person: asked.append(person.qid) or (source, person.qid))
+    return source, asked
+
+
+def test_a_source_outage_leaves_the_top_pool_as_the_last_refresh_found_it(db, pools, monkeypatch):
+    """The morning's refresh during a source outage stored what it found, nothing, so new fans were offered none of
+    the sport's best known for a day (BUG-172). Whoever it can't look up stays as the last refresh found them, and
+    whoever the source does answer for is as it says."""
+    source, _ = three_playing(db, monkeypatch)
+    assert starters.refresh(NOW)["chess"] == 3
+    before = pools.top["chess"]
+
+    def down(ref):
+        raise AdapterError("source unreachable: ConnectTimeout")
+
+    source.fixtures = down
+    assert starters.refresh(NOW)["chess"] == 3
+    assert pools.top["chess"] == before
+    source.fixtures = lambda ref: [] if ref == "Q31" else down(ref)  # back for one, who has no game near any more
+    starters.refresh(NOW)
+    assert [e["qid"] for e in pools.top["chess"]] == ["Q30", "Q32"]
+
+
+def test_a_refresh_the_worker_stops_during_ends_there_and_stores_nothing(db, pools, monkeypatch, stopping):
+    """A deploy stopped the worker during the refresh: its thread asked on about each athlete while the interpreter
+    shut down, every lookup failing, then stored the few it had found (BUG-172). It ends at its next step instead,
+    and leaves the pool as it was."""
+    source, asked = three_playing(db, monkeypatch)
+    starters.refresh(NOW)
+    before = pools.top["chess"]
+
+    def stopped(ref):
+        stopping.set()  # the worker's shutdown hook (worker.wind_down), while this athlete was looked up
+        raise RuntimeError("cannot schedule new futures after interpreter shutdown")
+
+    source.fixtures = stopped
+    asked.clear()
+    starters.refresh(NOW)
+    assert asked == ["Q30"] and pools.top["chess"] is before
+
+    def spent(ref):
+        stopping.set()
+        raise RateLimited("allowance spent")
+
+    source.fixtures = spent
+    stopping.clear()
+    monkeypatch.setattr(starters, "LIMITED_PAUSE", 30)
+    started = time.monotonic()
+    starters.refresh(NOW)
+    assert time.monotonic() - started < 5 and pools.top["chess"] is before  # no waiting out the minute's allowance
 
 
 def test_a_top_players_game_that_is_over_isnt_shown_and_a_live_card_wins(db, pools):
