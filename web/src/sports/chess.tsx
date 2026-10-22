@@ -174,7 +174,12 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
   // The steps along the moves: the start, after each, and the board as it is where the moves end short of it.
   const last = sans && replay ? sans.length + (replay.now ? 0 : 1) : 0
   const at = stepped && stepped.game === game && stepped.at < last ? stepped.at : null  // null: the board as it is
-  const stepTo = (to: number) => setStepped(to >= last ? null : { game, at: Math.max(0, to) })
+  // A step back (-1) or on (1) from where the board is: from the last step taken, which quick taps (or a held
+  // key's repeats) can come before the board has drawn.
+  const stepBy = (by: number) => setStepped((s) => {
+    const to = (s && s.game === game && s.at < last ? s.at : last) + by
+    return to >= last ? null : { game, at: Math.max(0, to) }
+  })
   // The arrow keys, wherever the keyboard is on the page but on what has arrows of its own, and not while a
   // dialog is open over it (the analysis board has its own; one that couldn't come leaves them to the page).
   heard.current = (e) => {
@@ -183,7 +188,7 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
     const target = e.target instanceof HTMLElement ? e.target : null
     if (target && (target.isContentEditable || target.closest(OWN_ARROWS))) return
     e.preventDefault()
-    stepTo((at ?? last) + (e.key === 'ArrowLeft' ? -1 : 1))
+    stepBy(e.key === 'ArrowLeft' ? -1 : 1)
   }
   useEffect(() => {
     if (!explore) return
@@ -201,10 +206,10 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
   // The arrow keys' steps as buttons, for a touch screen: back to the start, and on to the board as it is.
   const steps = last > 0 && (
     <span className="row" style={{ gap: 6, marginLeft: 'auto' }}>
-      <button type="button" className="btn icon chess-step" aria-label="Back a move" title="Back a move (←)" aria-disabled={at === 0} onClick={() => at !== 0 && stepTo((at ?? last) - 1)}>
+      <button type="button" className="btn icon chess-step" aria-label="Back a move" title="Back a move (←)" aria-disabled={at === 0} onClick={() => at !== 0 && stepBy(-1)}>
         <BackIcon width={18} height={18} />
       </button>
-      <button type="button" className="btn icon chess-step" aria-label="Forward a move" title="Forward a move (→)" aria-disabled={at == null} onClick={() => at != null && stepTo(at + 1)}>
+      <button type="button" className="btn icon chess-step" aria-label="Forward a move" title="Forward a move (→)" aria-disabled={at == null} onClick={() => at != null && stepBy(1)}>
         <ChevronIcon width={18} height={18} />
       </button>
     </span>
