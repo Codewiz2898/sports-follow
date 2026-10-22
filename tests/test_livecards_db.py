@@ -289,3 +289,27 @@ def test_the_poller_takes_down_the_card_of_a_fan_who_stopped_following(db, fake_
     db.commit()
     assert poll("live", "51'", 2) == [("gooner", "end"), ("keen", "live"), ("off", "live")]
     assert poll("final", "FT", 2) == [(fan, "end") for fan in sorted(("keen", "results", "off", "muted", "lapsed"))]
+
+
+def test_a_games_card_reaches_its_fans_among_more_followers_than_a_query_can_name(db, fake_fcm):  # noqa: F811
+    """BUG-325: Saka has 70,000 followers, each with a phone that has live scores turned off. Every query naming the
+    game's audience (its mutes, their phones, the players they follow on its board's other fixture) named them all
+    at once, past the 65,535 values Postgres takes: no card, and no end, for anyone."""
+    fans(db)
+    db.execute(text("INSERT INTO follow (fan_id, player_id, alert_rules, created_at) SELECT 'crowd-' || g, 7, '{}'::jsonb, now() FROM generate_series(1, 70000) g"))
+    db.execute(text("INSERT INTO push_subscription (fan_id, transport, endpoint, timezone, failures, live_cards, live_stopped, created_at)"
+                    " SELECT 'crowd-' || g, 'fcm', 'crowd-' || g || '-phone', 'UTC', 0, false, '[]'::jsonb, now() FROM generate_series(1, 70000) g"))
+    db.commit()
+    card = {"type": "live", "tag": "live-e1", "event_id": 1}
+    assert livecards.send(1, "live", card) == 3
+    assert set(by_fan(fake_fcm.sent)) == {"keen", "off", "gooner"}
+    fake_fcm.sent.clear()
+    assert livecards.send(1, "end") == 6
+    # A board under several fixtures: Keen follows a player here under the other one too, whose card names both.
+    db.add(Player(id=10, slug="kai-havertz", name="Kai Havertz", sport="Football"))
+    db.add(Event(id=2, key="espn_soccer:740002", sport="Football", title="Arsenal vs Chelsea", status="live"))
+    db.flush()
+    db.add_all([EventPlayer(event_id=2, player_id=10), Follow(fan_id="keen", player_id=10, alert_rules={})])
+    db.commit()
+    heard = livecards.audience(db, 1, True, {10: "1 goal"}, {2})
+    assert heard["keen"] == [7, 8, 10] and len(heard) == 70_003  # the crowd, Keen, Off (by the game itself) and the gooner

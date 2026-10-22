@@ -142,7 +142,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`server.PLAYERS_MAX`). Previews and follows that ask a source for an athlete not on the app yet (a whole
   team's follow on a campaign page asks once for each such player) are limited to 30 a minute a fan and 120 a
   client address (`SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_MINUTE`, `SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_ADDRESS`), past
-  which they're a 429; a player already here costs nothing.
+  which they're a 429; a player already here costs nothing. Follows of every kind (a player, a team, a game; a
+  campaign page's whole team is one for each player) are limited to 150 an hour a fan, and 300 an IPv6 /64 or
+  1,200 an IPv4 address (a phone network's may be shared by thousands of fans) (`server.FOLLOWS_PER_FAN`,
+  `FOLLOWS_PER_ADDRESS`, `FOLLOWS_PER_IPV4`), past which they're a 429; one refused isn't counted.
 - **AI research is capped** (only with `SPORTS_FOLLOW_RESEARCH=1`). A name no source knows goes to the research agent, 3 per fan per UTC day
   (`search.RESEARCH_PER_DAY`, counted in Redis), 10 per client address per day and 10 an hour across all
   fans (`SPORTS_FOLLOW_RESEARCH_PER_ADDRESS`, `SPORTS_FOLLOW_RESEARCH_PER_HOUR`). Following a player
@@ -518,7 +521,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Sound is rationed (once every 3 minutes a game, 6 times an hour a phone) except for the biggest
   moments. `sports_follow/notify.py` claims each batch once, logs every
   push (`notification`), sends it to each device at once (by Web Push with VAPID to browsers, by FCM to
-  the Android app, `fcm.py`), and the tick sweeps up any batch a restart dropped. Devices that took their last
+  the Android app, `fcm.py`), and the tick sweeps up any batch a restart dropped (a game's at a time, should the
+  batch fail, so a moment that can't be planned holds back no other). A player or a team with more fans than one
+  query can name (Postgres takes 65,535 values) is planned a part of them at a time (`notify.chunks`). Devices that took their last
   push go by threads of their own, apart from new and failing ones, and each push service gets 2 s to connect, so
   a device that never answers holds up no other fan's alerts; push addresses must be a known service's own, and
   one network turns notifications on for only so many new devices a day. Quiet hours are per device and make notifications arrive without a sound or vibration (on Android still on the lock screen, so a phone set to wake its screen for notifications may light it); one that arrived silent on every device doesn't count toward the hour's sound.

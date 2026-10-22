@@ -342,22 +342,25 @@ def audience(db: Session, event_id: int, live: bool = True, on: dict[int, str] |
         levels.setdefault(fan, set()).add((rules or {}).get("level", DEFAULT_LEVEL))
     for fan, by_game in teams.watches(db, {event_id}).items():
         levels.setdefault(fan, set()).add(by_game[event_id][0])
+    # Its fans are named a part at a time (notify.chunks): a star's are more than one query can name (BUG-325).
     if live and levels:
-        muted = set(db.scalars(select(NotificationMute.fan_id).where(NotificationMute.event_id.in_({event_id, *(fixtures or ())}), NotificationMute.fan_id.in_(list(levels)))))
+        muted = {fan for some in notify.chunks(levels)
+                 for fan in db.scalars(select(NotificationMute.fan_id).where(NotificationMute.event_id.in_({event_id, *(fixtures or ())}), NotificationMute.fan_id.in_(some)))}
         levels = {fan: theirs for fan, theirs in levels.items() if fan not in muted and theirs - set(QUIET)}
     if live and on and levels:
         # A game under several fixtures (a chess board is one of each player's, both polled): a fan who follows a
         # player on it under another has its card from their first player's (by id), whichever polls first, so their
         # phone shows one card; that card names all of theirs.
         here = set(db.scalars(select(EventPlayer.player_id).where(EventPlayer.event_id == event_id)))
-        rows = select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(set(on) - here), Follow.fan_id.in_(list(levels))).order_by(Follow.id)
-        for fan, player_id, rules in db.execute(rows):
-            level = (rules or {}).get("level", DEFAULT_LEVEL)
-            first = min(hearing.get(fan, []), default=None)
-            if level not in QUIET and (first is None or player_id < first):
-                levels.pop(fan, None)  # their card comes from that player's fixture
-            elif level != "off" and fan in levels:
-                players.setdefault(fan, []).append(player_id)
+        for some in notify.chunks(list(levels)):  # each fan's rows in one part: they leave levels as they're read
+            rows = select(Follow.fan_id, Follow.player_id, Follow.alert_rules).where(Follow.player_id.in_(set(on) - here), Follow.fan_id.in_(some)).order_by(Follow.id)
+            for fan, player_id, rules in db.execute(rows):
+                level = (rules or {}).get("level", DEFAULT_LEVEL)
+                first = min(hearing.get(fan, []), default=None)
+                if level not in QUIET and (first is None or player_id < first):
+                    levels.pop(fan, None)  # their card comes from that player's fixture
+                elif level != "off" and fan in levels:
+                    players.setdefault(fan, []).append(player_id)
     return {fan: players.get(fan, []) for fan in levels}
 
 
@@ -388,9 +391,10 @@ def android(db: Session, fans: list[str], event_id: int) -> dict[str, list[tuple
     if not fans:
         return out
     newest: dict[str, int] = {}
-    for device_id, fan, token, on, stopped in db.execute(select(PushSubscription.id, PushSubscription.fan_id, PushSubscription.endpoint, PushSubscription.live_cards, PushSubscription.live_stopped)
-                                                         .where(PushSubscription.fan_id.in_(fans), PushSubscription.transport == "fcm").order_by(PushSubscription.id.desc())):
-        newest[fan] = newest.get(fan, 0) + 1
-        if newest[fan] <= notify.MAX_DEVICES and on and event_id not in (stopped or []):
-            out.setdefault(fan, []).append((device_id, token))
+    for some in notify.chunks(fans):  # a star's fans are more than one query can name (BUG-325)
+        for device_id, fan, token, on, stopped in db.execute(select(PushSubscription.id, PushSubscription.fan_id, PushSubscription.endpoint, PushSubscription.live_cards, PushSubscription.live_stopped)
+                                                             .where(PushSubscription.fan_id.in_(some), PushSubscription.transport == "fcm").order_by(PushSubscription.id.desc())):
+            newest[fan] = newest.get(fan, 0) + 1
+            if newest[fan] <= notify.MAX_DEVICES and on and event_id not in (stopped or []):
+                out.setdefault(fan, []).append((device_id, token))
     return out
