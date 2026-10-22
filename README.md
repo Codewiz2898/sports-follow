@@ -638,7 +638,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   costs 1 unit); keeps those whose title or description's opening (up to its first blank line or link, 300
   characters at most: not the related-video or podcast links under it) names a followed player of that sport, or one
   of its pool (below) (their full name or a hashtag of it, a nickname fans typed, or their surname when no other
-  such player of the sport has it); one that names none of them but names a team they play for ("Falcons vs
+  such player of the sport has it: the last word of their name, or of an alias that shares a word with it, and the
+  given name of one written as FIDE does, "Gukesh" for "Gukesh D"; never an initial); one that names none of them but names a team they play for ("Falcons vs
   Vitality", "Liverpool v City": the team as its sport's titles write it, `Sport.team_names`, without the words its
   titles leave off, `team_affixes`; not "India Women" for India, `other_sides`) is kept for the team's followed
   players and 3 of its pool players, marked `about: team`, which the judge reads as a share about the team
@@ -739,8 +740,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   of their own name and the aliases with fewer words than it, the shortest that still names them and no other
   followed player of their sport, sharing a word with their own name (never a namesake's slug, "mohamed salah
   football"): "Jasprit Bumrah" for the registry's "Jasprit Jasbirsingh Bumrah", "MS
-  Dhoni" for "Mahendra Singh Dhoni", never "Bumrah" or "Boom Boom" alone, and their own name when two followed
-  players share the rest. Matching stays as it was: any of their names. And each search lists 50 results (25 before:
+  Dhoni" for "Mahendra Singh Dhoni", never "Bumrah" or "Boom Boom" alone, but "Gukesh" for FIDE's "Gukesh D" (their
+  own name without the initial it ends in), and their own name when two followed players share the rest. Matching stays as it was: any of their names. And each search lists 50 results (25 before:
   the same one search, and one `videos.list` read either way) and leaves out what's tagged `#shorts` (`q` ends
   `-#shorts`, YouTube's NOT): most watched first, results are mostly Shorts, and those under a minute are refused
   for length. `videoDuration` can't do it: its `short` is anything under 4 minutes, where 1-4 minute highlight
