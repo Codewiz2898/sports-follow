@@ -37,7 +37,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, case, delete, exists, func, literal, or_, select, union, update
+from sqlalchemy import ColumnElement, and_, case, delete, exists, func, or_, select, union, update
 from sqlalchemy.dialects.postgresql import array, insert
 from sqlalchemy.orm import Session, aliased
 
@@ -136,7 +136,8 @@ def ensure(db: Session, system: str, fixture: str, sport: str | None, status: st
     (each one closed by now left out), and those made before, by their place in it; each knowing every event key
     it's shown under and, where one's given, the event it's polled by. A game to come whose start moved has its
     first question's close move with it while it's open, and one whose board has other sides now its answers (_sides);
-    one closed stays closed (friends' picks may have shown). Returns the game's key and its questions."""
+    one closed stays closed (friends' picks may have shown), but one nobody picked, shut at a start that didn't come,
+    opens again till its new one (_shut). Returns the game's key and its questions."""
     now = now or _now()
     rules = _rules(sport, state)
     game = game_key(system, fixture, rules.question_board(state))
@@ -162,6 +163,9 @@ def ensure(db: Session, system: str, fixture: str, sport: str | None, status: st
         if start is not None and q.status in UNSETTLED and q.starts_at != start:
             q.starts_at = start
         ask = asks.get(q.ask)
+        if ask is not None and ask.first and start is not None and start > now and q.status in (CLOSED, VOIDED) and db.scalar(select(Question.id).where(Question.id == q.id, _shut())):
+            for column, value in _reopened(start).items():
+                setattr(q, column, value)
         if ask is not None and ask.first and start is not None and start > now and q.status == OPEN and q.locks_at != start:
             q.locks_at, q.reminded_at = start, None  # moved: reminded again before its new start
         if ask is not None and q.status == OPEN and {k for k, _ in ask.options} != {o["key"] for o in q.options or []}:
@@ -236,15 +240,16 @@ def prepare(now: datetime | None = None) -> list[tuple[str, str]]:
         picked = db.execute(select(Event.start_utc, Event.key, Event.sport).where(Event.id.in_(watched()), Event.status.in_(TO_COME), Event.id.not_in(_refreshed()),
                                                                                  Event.start_utc > now, Event.start_utc <= now + AHEAD)).all()
         unrefreshed = and_(Event.id == Question.event_id, Event.status.in_(TO_COME), Event.id.not_in(_refreshed()))
-        made = db.execute(select(Question.keys, Question.status, Question.starts_at, Question.event_id, Event.id, Event.start_utc).outerjoin(Event, unrefreshed)
+        made = db.execute(select(Question.keys, Question.status, Question.starts_at, Question.event_id, Event.id, Event.start_utc, _shut()).outerjoin(Event, unrefreshed)
                           .where(Question.keys.has_any(array([key for _, key, _ in big])))).all() if big else []
     # Each big game asked of: the starts held here that only a read of it moves (made). Its open questions' while
-    # nothing polls them; once a pick gives them an event to be polled by (pick), that event's while it's still to
-    # start and no followed player's or team's refresh moves it (structured.upsert_game), which is read anyway in
-    # the AHEAD before that start (picked).
+    # nothing polls them, and those shut with nothing to show (_shut: one nobody picked, shut at its old start while
+    # the game was put back), which a read of its new start opens again; once a pick gives them an event to be polled
+    # by (pick), that event's while it's still to start and no followed player's or team's refresh moves it
+    # (structured.upsert_game), which is read anyway in the AHEAD before that start (picked).
     held: dict[str, set[datetime | None]] = {}
-    for keys, status, starts_at, event_id, ours, event_start in made:
-        start = ([starts_at] if status == OPEN else []) if event_id is None else ([event_start] if ours is not None and status in UNSETTLED else [])
+    for keys, status, starts_at, event_id, ours, event_start, shut in made:
+        start = ([starts_at] if status == OPEN or shut else []) if event_id is None else ([event_start] if ours is not None and status in UNSETTLED else [])
         for key in keys or []:
             held.setdefault(key, set()).update(start)
     # A start the league's read and the game's own disagree on (an older league read) is read again every
@@ -328,7 +333,8 @@ def settle(db: Session, rows: list[Question], rules: sports.Sport, status: str |
 
 def score(db: Session, q: Question, answer: str, now: datetime) -> None:
     """Settle a question with its answer: each pick scored by how many of those that count made it (points), its
-    own too if it doesn't count; or, voided, none."""
+    own too if it doesn't count, or by all its picks where none count (each a fan's a request made up: BUG-314, a
+    right one scored 0); or, voided, none."""
     q.answer, q.settled_at, q.closed_at = answer, now, q.closed_at or now
     q.told_at = None  # settled again (a void a winner came for, a corrected result): its fans are told again
     if answer == sports.VOID:
@@ -336,16 +342,17 @@ def score(db: Session, q: Question, answer: str, now: datetime) -> None:
         db.execute(update(Pick).where(Pick.question_id == q.id).values(points=None))
         return
     q.status = SETTLED
-    counts = _counts(db, [q.id]).get(q.id, {})
+    counts = _counts(db, [q.id]).get(q.id) or _counts(db, [q.id], every=True).get(q.id, {})
     worth = points(counts.get(answer, 0), sum(counts.values()))
     db.execute(update(Pick).where(Pick.question_id == q.id).values(points=case((Pick.option == answer, worth), else_=0)))
 
 
-def moved(db: Session, event: Event, start: datetime | None, now: datetime | None = None) -> None:
+def moved(db: Session, event: Event, start: datetime | None, status: str | None = None, now: datetime | None = None) -> None:
     """A schedule read moved a game's start (structured.upsert_game), with no poll or read to make its questions
     again (ensure): those still to settle start then, so a game put back weeks isn't voided by the sweep three days
     after its old date, and a first one still open closes then (at once, for one brought forward to a time that's
-    passed). One closed stays closed (friends' picks may have shown)."""
+    passed). One closed stays closed (friends' picks may have shown), but one nobody picked, shut at a start that
+    didn't come, opens again till its new one, where the read (`status`) says the game's still to start (_shut)."""
     if start is None:
         return
     now = now or _now()
@@ -353,8 +360,23 @@ def moved(db: Session, event: Event, start: datetime | None, now: datetime | Non
     db.execute(update(Question).where(theirs, Question.status.in_(UNSETTLED), Question.starts_at.is_distinct_from(start)).values(starts_at=start))
     if start > now:
         db.execute(update(Question).where(theirs, Question.status == OPEN, Question.locks_at.is_not(None), Question.locks_at != start).values(locks_at=start, reminded_at=None))
+        if status in PRE_START and event.status in TO_COME:
+            db.execute(update(Question).where(theirs, _shut(), Question.locks_at.is_not(None)).values(**_reopened(start)))
     else:
         db.execute(update(Question).where(theirs, Question.status == OPEN, Question.locks_at > start).values(locks_at=start))
+
+
+def _shut() -> ColumnElement[bool]:
+    """A question shut with nothing to show for it: closed, or voided by the sweep (its answer left empty), and
+    picked by nobody, so closing it showed no friend's pick and no split. Shut by its start time though the game
+    didn't start then (put back with no word in time, or a big game nobody picked, which has no event to be held by),
+    it opens again at the game's new start (ensure, moved)."""
+    return and_(or_(Question.status == CLOSED, and_(Question.status == VOIDED, Question.answer.is_(None))), ~exists().where(Pick.question_id == Question.id))
+
+
+def _reopened(start: datetime) -> dict[str, Any]:
+    """A shut question's columns as it opens again (_shut), closing at its game's new start."""
+    return {"status": OPEN, "starts_at": start, "locks_at": start, "closed_at": None, "settled_at": None, "reminded_at": None, "told_at": None, "split": None}
 
 
 def sweep(db: Session, now: datetime) -> None:
@@ -425,6 +447,8 @@ def pick(db: Session, fan: str, question_id: int, option: str, now: datetime | N
         event = matches.event_for(db, system, fixture)
         if event is None:
             raise Refused(409, NO_POLL)
+        if event.status == "postponed":
+            raise Refused(409, POSTPONED)  # its game's put back, as its last read says: held, as one picked already is
         db.execute(update(Question).where(Question.game == q.game, Question.event_id.is_(None)).values(event_id=event.id))
     elif (db.scalar(select(Event.live_binding).where(Event.id == q.event_id)) or {}).get("adapter") not in ADAPTERS:
         raise Refused(409, NO_POLL)  # its source is off for now: a pick would never be settled
@@ -432,8 +456,10 @@ def pick(db: Session, fan: str, question_id: int, option: str, now: datetime | N
         raise Refused(409, STALE_BOARD)  # a later map of a game under way: only a fresh board says it hasn't begun
     if q.starts_at is None and not (_fresh(db, q, now) and _to_come(db, q)):
         raise Refused(409, NO_START)  # asked before a start was needed: nothing closes it, so only a fresh board can
+    # Made while it's open: it counts in leagues, whatever was moved in before it (merge's moved_late).
     made = insert(Pick).values(question_id=q.id, fan_id=fan, option=option, counted=counted)
-    db.execute(made.on_conflict_do_update(index_elements=["question_id", "fan_id"], set_={"option": option, "counted": Pick.counted | made.excluded.counted, "updated_at": func.now()}))
+    db.execute(made.on_conflict_do_update(index_elements=["question_id", "fan_id"], set_={"option": option, "counted": Pick.counted | made.excluded.counted,
+                                                                                           "moved_late": False, "updated_at": func.now()}))
     _refresh(db, q)
     return q
 
@@ -451,10 +477,12 @@ def _to_come(db: Session, q: Question) -> bool:
     return all(s is None or s in TO_COME for s in (status, polled, read))
 
 
-def _counts(db: Session, ids: list[int], unleagued: bool = False) -> dict[int, dict[str, int]]:
+def _counts(db: Session, ids: list[int], unleagued: bool = False, every: bool = False) -> dict[int, dict[str, int]]:
     """How many picks that count (Pick.counted) each answer of these questions has; `unleagued`, only those of fans
-    in no league (an open question's split: _refresh)."""
-    where = [Pick.question_id.in_(ids), Pick.counted]
+    in no league (an open question's split: _refresh); `every`, those that don't count too (score)."""
+    where: list[ColumnElement[bool]] = [Pick.question_id.in_(ids)]
+    if not every:
+        where.append(Pick.counted.is_(True))
     if unleagued:
         where.append(~exists().where(LeagueMember.fan_id == Pick.fan_id))
     out: dict[int, dict[str, int]] = {}
@@ -534,8 +562,8 @@ def shown(db: Session, fan: str | None, rows: list[Question], now: datetime) -> 
                         for o in q.options or []],
             "mine": own[0] if own else None,
             "points": own[1] if own else None,
-            # What their pick would score were it right now, while it's still to be settled.
-            "worth": points(c.get(own[0], 0), total) if own and q.status in UNSETTLED and split is not None else None,
+            # What their pick would score were it right now, while it's still to be settled; none while no pick counts.
+            "worth": points(c.get(own[0], 0), total) if own and q.status in UNSETTLED and split is not None and total else None,
         })
     return out
 
@@ -624,15 +652,25 @@ def _code() -> str:
 
 
 JOINERS = ("\u200c", "\u200d")  # zero-width (non-)joiners: Indic scripts and emoji are drawn with them
+# What's drawn as nothing, as ranges of code points: Unicode's default ignorables (the JOINERS, a grapheme joiner, the
+# variation selectors an emoji is drawn with, the Hangul fillers) and the blank Braille pattern. Those _name keeps tell
+# no two names apart (_same), and a name of nothing else is none.
+BLANKS = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F),
+          (0x202A, 0x202E), (0x2060, 0x206F), (0x2800, 0x2800), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF), (0xFFA0, 0xFFA0),
+          (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF))
+
+
+def _blank(c: str) -> bool:
+    return any(low <= ord(c) <= high for low, high in BLANKS)
 
 
 def _name(raw: Any, most: int, what: str) -> str:
     """A name as given, its spaces made single, with what can't be seen taken out (control and format characters,
     but the JOINERS, and halves of characters): Postgres keeps no NUL, and an invisible name, or one that turns the
-    text after it around, isn't a name. Raises Refused for one with nothing left to see, or too long."""
+    text after it around, isn't a name. Raises Refused for one with nothing left to see (BLANKS aside), or too long."""
     kept = "".join(c for c in str(raw or "") if c.isspace() or unicodedata.category(c) not in ("Cc", "Cf", "Cs") or c in JOINERS)
     name = " ".join(kept.split())
-    if not any(unicodedata.category(c)[0] in "LNPS" for c in name):
+    if not any(unicodedata.category(c)[0] in "LNPS" and not _blank(c) for c in name):
         raise Refused(400, f"Give {what}.")
     if len(name) > most:
         raise Refused(400, f"{what[0].upper()}{what[1:]} can be {most} characters at most.")
@@ -640,8 +678,10 @@ def _name(raw: Any, most: int, what: str) -> str:
 
 
 def _same(name: str) -> str:
-    """A name as two members' are told apart: "Asha", " asha " and "ASHA" with a joiner in it are one."""
-    return unicodedata.normalize("NFKC", "".join(c for c in name if c not in JOINERS)).casefold()
+    """A name as two members' are told apart: "Asha", " asha " and "ASHA" with a joiner, a variation selector or a
+    blank filler in it (BLANKS) are one."""
+    folded = unicodedata.normalize("NFKC", name).casefold()
+    return " ".join("".join(c for c in folded if not _blank(c)).split())
 
 
 def _room(db: Session, fan: str) -> None:
@@ -816,16 +856,22 @@ def merge(db: Session, anon: str, fan: str) -> None:
     points and how they went), marked moved_late: the fan sees them, but no league's table counts them, else a fan
     could call a game three ways on three browsers and sign in on the one that was right. Where the account picked
     one of those too, the device's stays where it was, in the split only. An anonymous fan is in no league: leagues
-    need an account."""
-    still = select(Question.id).where(Question.status == OPEN, or_(Question.locks_at.is_(None), Question.locks_at > func.now()))
+    need an account. A postponed game's (held), past its old start, is still to come: its picks come over as an open
+    one's do (BUG-312)."""
+    postponed = Question.event_id.in_(select(Event.id).where(Event.status == "postponed"))
+    still = select(Question.id).where(Question.status == OPEN, or_(Question.locks_at.is_(None), Question.locks_at > func.now(), postponed))
     late = ~Pick.question_id.in_(still)
-    # An account's pick counts (Pick.counted): one still open does from now; one closed as it did, its split shown.
-    moved = insert(Pick).from_select(["question_id", "fan_id", "option", "points", "counted", "moved_late", "created_at", "updated_at"],
-                                     select(Pick.question_id, literal(fan), Pick.option, Pick.points, or_(Pick.counted, ~late), or_(Pick.moved_late, late),
-                                            Pick.created_at, Pick.updated_at)
-                                     .where(Pick.fan_id == anon))
-    came = list(db.scalars(moved.on_conflict_do_nothing().returning(Pick.question_id)))
-    db.execute(delete(Pick).where(Pick.fan_id == anon, or_(Pick.question_id.in_(still), Pick.question_id.in_(came))))
+    # Taken from the device, then given to the account, those taken and only those (BUG-327): a copy, then a delete,
+    # deleted a pick the device made between the two, never copied. One it makes after is the straggler job's
+    # (accounts.adopt_later). The device's on a question closed that the account picked too stays where it was.
+    account = aliased(Pick)
+    taken = db.execute(delete(Pick).where(Pick.fan_id == anon, or_(Pick.question_id.in_(still), ~exists().where(account.fan_id == fan, account.question_id == Pick.question_id)))
+                       .returning(Pick.question_id, Pick.option, Pick.points, Pick.counted, Pick.moved_late, Pick.created_at, Pick.updated_at, late)).all()
+    if taken:
+        # An account's pick counts (Pick.counted): one still open does from now; one closed as it did, its split shown.
+        db.execute(insert(Pick).values([{"question_id": qid, "fan_id": fan, "option": option, "points": scored, "counted": counted or not after, "moved_late": moved_late or after,
+                                         "created_at": created_at, "updated_at": updated_at} for qid, option, scored, counted, moved_late, created_at, updated_at, after in taken])
+                   .on_conflict_do_nothing())
 
 
 def forget(db: Session, fan: str) -> None:

@@ -778,12 +778,13 @@ def upsert_game(db: Session, adapter: Adapter, sport: str, f: Fixture) -> Event:
 def reschedule(db: Session, event: Event, start: datetime | None, status: str, sport: str | None = None, next_up: bool = False) -> None:
     """An event's start and status as its source last said: a schedule read (upsert_game), or a read of the game
     itself for one no followed player's or team's refresh brings up to date (predictions.made). Put back (or brought
-    forward), its questions start then (predictions.moved); an armed one put back hours is disarmed (next_status).
+    forward), its questions start then (predictions.moved), as they do when it's given a start again (a source drops a
+    postponed game's date till it has a new one); an armed one put back hours is disarmed (next_status).
     One with no start time of its own is armed while its source says it's next (Fixture.next_up: a chess round set
     to start once the one before is over, a lobby with only its day), so its start is seen when it comes, and one with
     no start at all is disarmed once it isn't."""
-    if event.start_utc is not None and start is not None and start != event.start_utc:
-        predictions.moved(db, event, start)
+    if start is not None and start != event.start_utc and (event.start_utc is not None or event.status == "postponed"):
+        predictions.moved(db, event, start, status)
     event.start_utc = start
     later = start is not None and start > _now() + arm_before(event.sport or sport) + timedelta(hours=1)
     if status == "scheduled" and (next_up or start is None):
