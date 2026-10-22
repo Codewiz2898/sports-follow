@@ -27,7 +27,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import Select, and_, exists, or_, select, tuple_
+from sqlalchemy import Select, and_, exists, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from . import feed, news, notify, rank, registry, sports
@@ -323,15 +323,18 @@ def _facts(db: Session, fan: str, now: datetime) -> tuple[list[Row], list[Row]]:
     page names them. A fact opens their page here, or the source's athlete page if nobody
     follows them yet. Only the running sources' facts, and none about a player an operator removed."""
     since = now - timedelta(hours=FACT_HOURS)
-    spells = db.scalars(select(Sidelined).where(Sidelined.system.in_(list(ADAPTERS)), or_(Sidelined.out_at >= since, Sidelined.back_at >= since))).all()
+    recent = and_(Sidelined.system.in_(list(ADAPTERS)), or_(Sidelined.out_at >= since, Sidelined.back_at >= since))
+    spells = db.scalars(select(Sidelined).where(recent)).all()
     if not spells:
         return [], []
-    pairs = list({(s.system, s.athlete_id) for s in spells})
+    # The players bound by the spells' ids, joined in the query: a list of every spell's ids was more than the
+    # database would read once some thousands fell in the window (BUG-323).
+    listed = select(Sidelined.system, Sidelined.athlete_id).where(recent).distinct().subquery()
     held = {(system, xid): (player, followed) for system, xid, player, followed in db.execute(
         select(PlayerIdentity.system, PlayerIdentity.external_id, Player, Follow.id.is_not(None))
+        .join(listed, and_(listed.c.system == PlayerIdentity.system, listed.c.athlete_id == PlayerIdentity.external_id))
         .join(Player, Player.id == PlayerIdentity.player_id)
         .outerjoin(Follow, and_(Follow.player_id == Player.id, Follow.fan_id == fan))
-        .where(tuple_(PlayerIdentity.system, PlayerIdentity.external_id).in_(pairs))
     )}
     teams = {(system, xid) for system, xid in db.execute(select(Team.system, Team.external_id).join(TeamFollow, TeamFollow.team_id == Team.id).where(TeamFollow.fan_id == fan))}
     blocked = registry.blocked(db)

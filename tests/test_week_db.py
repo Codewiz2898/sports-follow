@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, insert, select, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import controls, feed, news, notify, pipeline, server, week
@@ -427,3 +427,14 @@ def test_the_wire_leaves_out_a_story_the_fan_hid_and_tells_the_players_next_best
     db.flush()
     assert wire("fan") == ["Salah starts on the bench", "Mandhana named captain"]  # his next best in its place
     assert wire("other") == told  # another fan's word is theirs alone
+
+
+def test_the_wire_reads_however_many_spells_fall_in_its_window(facts):
+    # BUG-323: each spell of the window was one more pair in a list the database had to read; at about 8,000 of them
+    # it gave up, and the Wire failed for every fan.
+    db = facts
+    db.execute(insert(Sidelined), [{"system": SM, "source_id": f"many{n}", "athlete_id": f"8{n}", "team_id": "2", "sport": "football", "name": f"Player {n}",
+                                    "team": "", "kind": "injury", "what": "Hamstring Injury", "fame": 0, "out_at": NOW - timedelta(hours=3), "seen_at": NOW}
+                                   for n in range(12_000)])  # fmt: skip
+    out(db, "173896", "M. Salah", hours=2)
+    assert [(r["text"], r["yours"]) for r in server.this_week("fan", db)["wire"]] == [("Mohamed Salah · hamstring injury", True)]
