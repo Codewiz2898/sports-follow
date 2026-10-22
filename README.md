@@ -270,13 +270,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   competition's (`?competition=`), a player's (`?player=`) or everyone's, newest first (`?before=` pages back).
   Only a publishing key's holder publishes, for now admins (`python -m sports_follow.clips key "<name>"`, or
   `POST /api/admin/clip-keys`; the key is shown once). The app sends `Authorization: Bearer slam_pk_…` to
-  `POST /api/clips` with the match page's address, the moment it read, length, size and source, and gets two
-  upload URLs signed for 15 minutes. It puts the video and its poster frame straight into the bucket (Cloudflare R2;
+  `POST /api/clips` with the match page's address, the moment it read, length, size, its poster's size and source,
+  and gets two upload URLs signed for 15 minutes, each for its file's type and size. It puts the video and its poster frame straight into the bucket (Cloudflare R2;
   the server never carries a video), then `POST /api/clips/<id>/done`: both files are checked and the clip goes
   live, served from the CDN domain. A clip recorded from a browser window (a broadcast, its organiser's production)
   is refused while Slam itself posts clips (`clips.RIGHTS`, BHA-369). Fans report a clip once each
   (`POST /api/clips/<id>/report`), which flags it for the admin panel (`/api/admin/clips?status=reported`) to hide
-  or take down; reports never hide a clip by themselves, as an anonymous fan is just a request without a cookie. Without the bucket's settings, publishing says it isn't set up and the feeds are empty.
+  or take down; reports never hide a clip by themselves, as an anonymous fan is just a request without a cookie.
+  A hidden clip's files are moved off their public address, to a name made with the bucket's secret (the CDN domain
+  serves every name), and back when it's put back; one taken down has them deleted, wherever they are. Without the bucket's settings, publishing says it isn't set up and the feeds are empty.
 - **Predictions with friends** (`sports_follow/predictions.py`, BHA-317): before a game, or a map of a series, a
   fan calls it in a tap; the app settles it from the board its poller reads anyway, and friends compare in small
   leagues joined by an invite link. Bragging rights only: no entry fee, no prize of any value (India's online gaming

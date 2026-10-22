@@ -166,6 +166,51 @@ def test_reports_flag_it_for_an_admin_and_never_hide_it(db, bucket, page):
         assert clips.report(s, slug, "fan-1") is True
 
 
+def test_a_hidden_clip_is_off_its_public_address_until_its_put_back(db, bucket, page, monkeypatch):
+    """BUG-126: hiding a clip took it off the app, but its video and poster stayed at their public address, so a link
+    to them still played it (one hidden over a rights complaint, say). Hidden, its files are kept at a name only the
+    store can work out; put back, they're where they were; removed, they're gone either way."""
+    key_id, _ = _key(db)
+    slug, _ = _publish(db, bucket, key_id)
+    video, poster = clips.video_key(slug), clips.poster_key(slug)
+    with db() as s:
+        assert clips.set_hidden(s, slug, True).status == "hidden"
+    assert bucket.size(video) is None and bucket.size(poster) is None  # nothing at bucket.public_url(video)
+    assert bucket.size(bucket.hidden(video)) == 1000 and slug not in bucket.hidden(video)
+    with db() as s:
+        clips.set_hidden(s, slug, True)  # hidden twice: nothing more to move
+        assert clips.set_hidden(s, slug, False).status == "live"
+    assert (bucket.size(video), bucket.size(poster), len(bucket.objects)) == (1000, 100, 2)
+    with db() as s:
+        clips.set_hidden(s, slug, True)
+    with db() as s:
+        assert clips.remove(s, slug)
+    assert bucket.objects == {}
+    # The bucket failing on it: refused, and the clip stays as it was.
+    other, _ = _publish(db, bucket, key_id)
+    monkeypatch.setattr(bucket, "copy", lambda source, key: (_ for _ in ()).throw(OSError("the bucket is down")))
+    with db() as s, pytest.raises(clips.Refused) as refused:
+        clips.set_hidden(s, other, True)
+    assert refused.value.status == 502
+    with db() as s:
+        assert clips.one(s, other) is not None and bucket.size(clips.video_key(other)) == 1000
+
+
+def test_the_poster_is_signed_for_the_size_the_app_says(db, bucket, page):
+    """BUG-126: the poster's upload URL was signed for its type alone, so a file of any size could be put there (its
+    2 MB was checked only at done). The app says its size, and the URL is signed for that, as the video's is."""
+    key_id, _ = _key(db)
+    body = {"source": "file", "seconds": 10.0, "bytes": 1000, "width": 640, "height": 360}
+    with db() as s:
+        key = s.get(clips.ClipKey, key_id)
+        assert clips.create(s, key, {**body, "poster_bytes": 500}).poster_put.endswith("signed-for=image/jpeg&length=500")
+        assert clips.create(s, key, body).poster_put.endswith("signed-for=image/jpeg")  # an app from before says nothing
+        for wrong in (clips.MAX_POSTER + 1, 0, True, "500"):
+            with pytest.raises(clips.Refused) as refused:
+                clips.create(s, key, {**body, "poster_bytes": wrong})
+            assert refused.value.status == 400
+
+
 def test_done_twice_is_fine(db, bucket, page):
     key_id, _ = _key(db)
     slug, _ = _publish(db, bucket, key_id)

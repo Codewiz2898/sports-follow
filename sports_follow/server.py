@@ -1787,9 +1787,14 @@ def admin_clips(status: str | None = None, db: Session = Depends(get_db)) -> dic
 
 @app.post("/api/admin/clips/{slug}", dependencies=AdminOnly)
 def admin_clip(slug: str, body: dict[str, Any] = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Hide a clip ({"hidden": true}), or put a hidden one back ({"hidden": false}; its reports start again)."""
+    """Hide a clip ({"hidden": true}: off the app, and its files off their public address), or put a hidden one back
+    ({"hidden": false}; its reports start again)."""
     hidden = _switch(body, "hidden")
-    clip = clips.set_hidden(db, slug, hidden)
+    try:
+        clip = clips.set_hidden(db, slug, hidden)
+    except clips.Refused as refused:
+        db.rollback()
+        raise HTTPException(refused.status, refused.message) from None
     if clip is None:
         raise HTTPException(404, "No live or hidden clip by that id.")
     db.commit()
