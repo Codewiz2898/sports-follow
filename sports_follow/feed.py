@@ -56,6 +56,7 @@ from sqlalchemy.orm import Session
 
 from . import controls, feedpool, rank, sports, titles
 from .adapters import VIDEOS, feed_source
+from .adapters import Mark as SourceMark
 from .config import FEED_LAYOUT, FEED_ZONES
 from .models import FeedCandidate, FeedFeedback, Follow, Moment, Player, PlayerCard
 
@@ -115,11 +116,29 @@ BIG_FOR = timedelta(hours=24)
 LAYOUTS = controls.FEED_LAYOUTS  # how the apps draw the fan's Feed: "edge", posts edge to edge, or "full", a video a screen (layout)
 
 
+class MarkPath(BaseModel):
+    fill: str  # its colour, as the source draws it
+    d: str  # an SVG path's drawing
+
+
+class Mark(BaseModel):
+    """The icon of the source a video is from (VideoSource.mark), which its card shows linked to the video where it
+    plays (item.url), so a fan can tell where it's from: its name, for the link's label, and its drawing in a
+    width x height box, at least min_height high."""
+
+    name: str
+    width: float
+    height: float
+    min_height: int
+    paths: list[MarkPath]
+
+
 class Video(BaseModel):
     youtube_id: str  # the player loads from youtube-nocookie.com, and only once a fan taps play
     duration: int | None = None  # seconds
     views: int | None = None
     upright: bool = False  # taller than it's wide (a Short): the apps frame and play it upright
+    mark: Mark | None = None  # its source's icon, linked to the video on the source's site (YouTube's III.F.2)
 
 
 class Post(BaseModel):
@@ -257,7 +276,8 @@ def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, 
                     embed = source.embed(r.external_id) if source else None
                     details = (r.candidate or {}).get("details")
                     picture = source.picture(r.external_id, details) if source else None
-                    c = _video(embed, source.name if source else "", r, now, picture, names, upright=bool(source and source.upright(details)))
+                    c = _video(embed, source.name if source else "", r, now, picture, names, upright=bool(source and source.upright(details)),
+                               mark=_mark(source.mark) if source and source.mark else None)
             except ValueError:  # pydantic's too: a row the fetch stored oddly is left out, not the feed
                 continue
             if c is not None:
@@ -276,12 +296,17 @@ def fade(published: datetime | None, now: datetime) -> float:
     return FADE_FLOOR + (1 - FADE_FLOOR) * 0.5 ** (max(age, timedelta(0)) / HALF_LIFE)
 
 
+def _mark(mark: SourceMark) -> Mark:
+    """A source's icon as the API sends it."""
+    return Mark(name=mark.name, width=mark.width, height=mark.height, min_height=mark.min_height, paths=[MarkPath(fill=f, d=d) for f, d in mark.paths])
+
+
 def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime, picture: str | None = None, names: Sequence[str] = (),
-           upright: bool = False) -> Candidate | None:
+           upright: bool = False, mark: Mark | None = None) -> Candidate | None:
     """A scored row as a video item, its score faded by age: an evergreen one keeps its own, and a pinned one
     fades only past its pin, so it leads however old, and is never put among the evergreen. Its title tidied
     (titles.tidy), keeping these names and its sport's title_words as they're written. upright: taller than it's
-    wide (VideoSource.upright)."""
+    wide (VideoSource.upright); mark: its source's icon (VideoSource.mark)."""
     if not embed:
         return None  # a video the app's player can't play
     kept, features, verdict = r.candidate or {}, r.features or {}, r.verdict or {}
@@ -296,7 +321,7 @@ def _video(embed: dict[str, str] | None, source: str, r: Any, now: datetime, pic
         id=item_id(r.url), kind="video", tag=rank.tag(verdict), title=title or "A video", url=r.url,
         source=channel_name, published_at=str(kept.get("published") or "") or None,
         reason=str(verdict.get("reason") or "").strip() or "A video from a channel this sport trusts.", picture=picture,
-        video=Video(**embed, duration=rank.whole(features.get("seconds")), views=rank.whole(features.get("views")), upright=upright),
+        video=Video(**embed, duration=rank.whole(features.get("seconds")), views=rank.whole(features.get("views")), upright=upright, mark=mark),
     )  # fmt: skip
     channel = str(kept.get("channel_id") or kept.get("channel") or r.url)
     return Candidate(item=item, moment_id=None if evergreen else r.moment_id, evergreen=evergreen, score=round(faded, 6), channel=channel, pinned=pinned,

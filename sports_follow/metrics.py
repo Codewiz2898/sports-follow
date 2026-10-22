@@ -182,7 +182,7 @@ FEED_STEPS = {
 }
 # Why a matched upload isn't kept (feedstats.reason): the hard filters' words, and the two ways it was seen already.
 # off_list: from a channel the player's sport doesn't list (candidates.on_list), dropped before YouTube is asked.
-REFUSALS = ("not_embeddable", "age_restricted", "blocked", "too_long", "too_short", "live", "private", "gone", "refused_before", "already_stored", "off_list")
+REFUSALS = ("not_embeddable", "age_restricted", "made_for_kids", "blocked", "too_long", "too_short", "live", "private", "gone", "refused_before", "already_stored", "off_list")
 # Why the judge couldn't answer (curate.CurateError.kind). "off" is the model turned off on purpose: no alert.
 JUDGE_ERRORS = ("out_of_credit", "timeout", "invalid_output", "declined", "unavailable", "off")
 _coverage: dict[str, tuple[int, int]] = {}  # sport: (followed players, those with a servable video this week)

@@ -183,14 +183,14 @@ def test_what_youtube_says_is_left_of_the_days_searches_counts_too(fake):
 
 def test_the_default_caps_are_inside_the_days_searches_and_their_reads_inside_its_units():
     """40 moment searches and the sweeps' 39 a day, and the pool sweep's 10 (BHA-382), are 89 of the 95 spendable
-    searches; the channel poll's worst day (every feed down, its playlists read instead, every half hour: 101
+    searches; the channel poll's day (each channel's uploads playlist read every half hour: 101
     channels, 4,848 units) and a videos.list read for each search's finds stay well inside the 9,000 spendable units."""
     from sports_follow import config
 
     channels = len({c for s in sports.ALL for c in s.video_channels})
-    poll_worst = channels * 48
+    poll = channels * 48  # every channel's uploads playlist, every half hour (curator.poll_channels)
     a_day = (config.FEED_MOMENT_SEARCHES + config.FEED_GAP_SEARCHES + config.FEED_WIDE_SEARCHES + -(-config.FEED_FAMOUS_SEARCHES // 7)
              + config.FEED_POOL_SEARCHES)
     assert config.FEED_MOMENT_SEARCHES == 40 and SOURCE.search_cost == 1 and a_day == 89
     assert a_day * SOURCE.search_cost <= youtube.SEARCHES_PER_DAY - youtube.SEARCH_MARGIN
-    assert poll_worst + a_day <= youtube.PER_DAY - youtube.MARGIN
+    assert poll + a_day <= youtube.PER_DAY - youtube.MARGIN

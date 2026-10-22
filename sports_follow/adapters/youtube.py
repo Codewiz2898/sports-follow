@@ -1,10 +1,11 @@
 """YouTube, for the feed (curator.py): the latest videos of the channels each sport trusts, and what the
-YouTube Data API v3 says of each one.
+YouTube Data API v3 says of each one. Everything it reads of YouTube comes through the Data API (its Developer
+Policies, III.I.14: no other way to get API data), never youtube.com's pages or its channels' public feeds.
 
-A channel's uploads come from its public feed (youtube.com/feeds/videos.xml), which costs no quota but often
-answers 404 or 500 for a while, for no reason it gives. When it doesn't answer and there's a key, the channel's
-uploads playlist is read from the API instead (playlistItems.list, 1 unit). What the feed's hard filters need
-(how long a video runs, whether it may be embedded, where it plays, whether it's age-restricted, its views and likes) comes from
+A channel's uploads come from its uploads playlist (playlistItems.list, 1 unit), read at most every UPLOADS_TTL:
+the curator polls each channel every half hour, 48 units a channel a day (the README counts the day's units). What
+the feed's hard filters need (how long a video runs, whether it may be embedded, where it plays, whether it's
+age-restricted or made for kids, its views and likes) comes from
 videos.list: 1 unit for up to 50 videos, whichever parts are asked for, so the same call also reads whether the
 maker declared paid promotion in it (paidProductPlacementDetails), which the judge takes as sponsored, and its
 shape (player, asked with maxWidth: the embedded player's size), which tells an upright video (a Short) from a wide
@@ -26,7 +27,8 @@ Redis (budget.py), from midnight Pacific; when YouTube says one is spent, nothin
 
 Terms (developers.google.com/youtube/terms): videos are shown in YouTube's own embedded player; data from the
 API is kept at most 30 days without being read again (the curator's weekly check reads every stored video
-again, and drops those gone).
+again, and drops those gone); a video made for kids (status.madeForKids) is never kept (III.E.4.j); and each card
+shows YouTube's icon (MARK) linked to the video on YouTube (III.F.2).
 """
 
 from __future__ import annotations
@@ -34,7 +36,6 @@ from __future__ import annotations
 import html
 import os
 import re
-import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -45,10 +46,9 @@ import httpx
 
 from ..config import USER_AGENT
 from . import budget, cache
-from .base import AdapterError, Provider, Upload, VideoFacts, VideoSource
+from .base import AdapterError, Mark, Provider, Upload, VideoFacts, VideoSource
 
 API = "https://www.googleapis.com/youtube/v3"
-FEEDS = "https://www.youtube.com/feeds/"
 KEY_FILE = Path(os.environ.get("SPORTS_FOLLOW_YOUTUBE_KEY_FILE", Path.home() / ".config" / "sports-follow" / "youtube-key"))
 PER_DAY = 10_000  # units; each request this module sends costs 1, but a search, which spends SEARCHES_PER_DAY instead
 SEARCHES_PER_DAY = 100  # search.list calls, 1 unit each in a quota of their own, whatever they find
@@ -65,12 +65,11 @@ PACIFIC = "America/Los_Angeles"  # where YouTube's quota day starts
 # Not "youtube" alone: that's also a platform players have accounts on (curate.py), not only this source.
 BUDGET = budget.Budget("youtube-data", windows=(budget.Window(86400, PER_DAY, margin=MARGIN, zone=PACIFIC),))
 SEARCH_BUDGET = budget.Budget("youtube-search", windows=(budget.Window(86400, SEARCHES_PER_DAY, margin=SEARCH_MARGIN, zone=PACIFIC),))
-FEED_BUDGET = budget.Budget("youtube-feeds", urls=(FEEDS,))  # the channels' public feeds: free, counted only
-FEED_TTL = 20 * 60  # a channel's latest uploads, read again after this: the curator polls every half hour
+UPLOADS_TTL = 20 * 60  # a channel's latest uploads, read again after this: the curator polls every half hour
+UPLOADS = 15  # the latest uploads a read lists (playlistItems.list's maxResults): a half hour's are a few at most
 
 VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 CHANNEL_ID = re.compile(r"UC[A-Za-z0-9_-]{22}")
-_NS = {"atom": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015", "media": "http://search.yahoo.com/mrss/"}
 # What videos.list is asked of each video: 1 unit a request whichever parts it names.
 PARTS = "snippet,contentDetails,statistics,status,paidProductPlacementDetails,player"
 # Asked with the parts: the player part then gives the embedded player's size at the video's own shape (embedWidth,
@@ -82,8 +81,20 @@ PROVIDER = Provider(
     name="YouTube",
     url="https://www.youtube.com",
     what="videos about players from channels each sport trusts, played in YouTube's own player.",
-    budgets=(BUDGET, SEARCH_BUDGET, FEED_BUDGET),
+    budgets=(BUDGET, SEARCH_BUDGET),
 )
+# YouTube's icon (the red play button), as YouTube draws it: each of its videos' cards shows it linked to the video on
+# YouTube (Developer Policies III.F.2.a; the branding guidelines: unaltered, 20 high at least, linking to YouTube).
+MARK = Mark(
+    name="YouTube", width=28.5701, height=20,
+    paths=(
+        ("#FF0000", "M27.9727 3.12324C27.6435 1.89323 26.6768 0.926623 25.4468 0.597366C23.2197 0 14.285 0 14.285 0C14.285 0 5.35042 0 3.12323"
+                    " 0.597366C1.89323 0.926623 0.926623 1.89323 0.597366 3.12324C0 5.35042 0 10 0 10C0 10 0 14.6496 0.597366 16.8768C0.926623 18.1068"
+                    " 1.89323 19.0734 3.12323 19.4026C5.35042 20 14.285 20 14.285 20C14.285 20 23.2197 20 25.4468 19.4026C26.6768 19.0734 27.6435 18.1068"
+                    " 27.9727 16.8768C28.5701 14.6496 28.5701 10 28.5701 10C28.5701 10 28.5677 5.35042 27.9727 3.12324Z"),
+        ("#FFFFFF", "M11.4253 14.2854L18.8477 10.0004L11.4253 5.71533V14.2854Z"),
+    ),
+)  # fmt: skip
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT}, timeout=20, follow_redirects=True)
 _cache = cache.Cache(BUDGET.name, size=500)
@@ -95,45 +106,6 @@ def key() -> str | None:
     if not value and KEY_FILE.is_file():
         value = KEY_FILE.read_text().strip()
     return value or None
-
-
-# ---------------------------------------------------------------- the channels' feeds
-
-
-def _feed(channel_id: str) -> str:
-    budget.take(FEED_BUDGET)
-    try:
-        res = _client.get(f"{FEEDS}videos.xml", params={"channel_id": channel_id})
-    except httpx.HTTPError as exc:
-        raise AdapterError(f"YouTube's feed unreachable: {exc}") from exc
-    if res.status_code != 200:
-        raise AdapterError(f"YouTube's feed answered HTTP {res.status_code} for {channel_id}")
-    return res.text
-
-
-def parse_feed(text: str) -> list[Upload]:
-    """A channel's public feed (Atom) as its uploads, newest first."""
-    try:
-        root = ET.fromstring(text)
-    except ET.ParseError as exc:
-        raise AdapterError(f"YouTube's feed isn't readable: {exc}") from exc
-    out = []
-    for entry in root.findall("atom:entry", _NS):
-        video_id = entry.findtext("yt:videoId", "", _NS).strip()
-        if not VIDEO_ID.fullmatch(video_id):
-            continue
-        thumb = entry.find("media:group/media:thumbnail", _NS)
-        out.append(Upload(
-            video_id=video_id,
-            channel_id=entry.findtext("yt:channelId", "", _NS).strip(),
-            channel=entry.findtext("atom:author/atom:name", "", _NS).strip(),
-            title=entry.findtext("atom:title", "", _NS).strip(),
-            description=entry.findtext("media:group/media:description", "", _NS).strip(),
-            url=f"https://www.youtube.com/watch?v={video_id}",  # whichever way it was found, the same (a Short's feed link differs)
-            published=_time(entry.findtext("atom:published", None, _NS)),
-            thumbnail=thumb.get("url") if thumb is not None else None,
-        ))
-    return out
 
 
 def _time(value: str | None) -> datetime | None:
@@ -192,11 +164,13 @@ def _get(path: str, params: dict[str, str], ttl: float) -> dict[str, Any]:
 
 
 def parse_playlist(data: dict[str, Any]) -> list[Upload]:
-    """playlistItems.list's items (a channel's uploads playlist) as uploads, newest first."""
+    """playlistItems.list's items (a channel's uploads playlist) as uploads, newest first. When it was published is
+    the video's own time (contentDetails.videoPublishedAt), not when it went into the playlist (snippet.publishedAt,
+    its upload, which a video made public later, or a Premiere, is long before)."""
     out = []
     for item in data.get("items") or []:
-        snippet = item.get("snippet") or {}
-        video_id = str((snippet.get("resourceId") or {}).get("videoId") or "")
+        snippet, details = item.get("snippet") or {}, item.get("contentDetails") or {}
+        video_id = str((snippet.get("resourceId") or {}).get("videoId") or details.get("videoId") or "")
         if not VIDEO_ID.fullmatch(video_id):
             continue
         thumbs = snippet.get("thumbnails") or {}
@@ -208,7 +182,7 @@ def parse_playlist(data: dict[str, Any]) -> list[Upload]:
             title=str(snippet.get("title") or ""),
             description=str(snippet.get("description") or ""),
             url=f"https://www.youtube.com/watch?v={video_id}",
-            published=_time(snippet.get("publishedAt")),
+            published=_time(details.get("videoPublishedAt")) or _time(snippet.get("publishedAt")),
             thumbnail=thumb,
         ))
     return out
@@ -284,6 +258,7 @@ def parse_videos(data: dict[str, Any]) -> dict[str, VideoFacts]:
             blocked=tuple(region.get("blocked") or ()),
             paid=placement.get("hasPaidProductPlacement") is True,
             age_restricted=(details.get("contentRating") or {}).get("ytRating") == "ytAgeRestricted",
+            made_for_kids=status.get("madeForKids") is True,
             raw={
                 "contentDetails": details,
                 "statistics": stats,
@@ -304,6 +279,7 @@ class YouTube(VideoSource):
     channel_pattern = CHANNEL_ID
     platform = "youtube"
     search_cost = SEARCH_COST
+    mark = MARK
 
     def search_budgets(self) -> tuple[budget.Budget, ...]:
         """search.list spends a quota of its own, not the 10,000 units."""
@@ -336,17 +312,12 @@ class YouTube(VideoSource):
         return bool(key())
 
     def uploads(self, channel_id: str) -> list[Upload]:
-        """A channel's latest uploads (15 or so), newest first: from its public feed, or, while that doesn't
-        answer, from its uploads playlist (1 unit)."""
+        """A channel's latest UPLOADS uploads, newest first: its uploads playlist (playlistItems.list, 1 unit, both
+        parts), from a read at most UPLOADS_TTL old."""
         if not CHANNEL_ID.fullmatch(channel_id):
             raise AdapterError(f"not a YouTube channel id: {channel_id!r}")
-        try:
-            return parse_feed(_cache.read(f"feed:{channel_id}", FEED_TTL, lambda: _feed(channel_id)))
-        except AdapterError:
-            if not key():
-                raise
         playlist = "UU" + channel_id[2:]  # every channel's uploads playlist
-        return parse_playlist(_get("playlistItems", {"part": "snippet", "playlistId": playlist, "maxResults": "15"}, FEED_TTL))
+        return parse_playlist(_get("playlistItems", {"part": "snippet,contentDetails", "playlistId": playlist, "maxResults": str(UPLOADS)}, UPLOADS_TTL))
 
     def facts(self, video_ids: list[str], max_age: float = 3600) -> dict[str, VideoFacts]:
         """What YouTube says of each video now, a request (1 unit) for each `batch` of them; a video it leaves

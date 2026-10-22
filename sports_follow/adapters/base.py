@@ -501,6 +501,20 @@ class Upload:
     thumbnail: str | None = None
 
 
+@dataclass(frozen=True)
+class Mark:
+    """A video source's own icon, which each of its videos' cards shows linked to the video on the source's site, so a
+    fan can tell where it's from (YouTube's API policies, III.F.2, and its branding guidelines): its name, said to a
+    screen reader and on hover, and its drawing as the source draws it, never recoloured or reshaped: paths in a
+    width x height box (an SVG's viewBox), each with its colour. The apps draw it min_height high at least."""
+
+    name: str
+    width: float
+    height: float
+    paths: tuple[tuple[str, str], ...]  # (fill, d): an SVG path's colour and its drawing, painted in order
+    min_height: int = 20  # the least the source's brand rules let it be drawn at, in CSS pixels (dp on Android)
+
+
 @dataclass
 class VideoFacts:
     """What a video source says of one video now (a video source's facts()): what the feed's hard filters
@@ -517,6 +531,7 @@ class VideoFacts:
     blocked: tuple[str, ...] = ()  # countries it doesn't play in
     paid: bool = False  # its maker declared paid promotion in it (YouTube's "Includes paid promotion")
     age_restricted: bool = False  # only a signed-in adult may watch it, on the source's own site: no embedded player plays it
+    made_for_kids: bool = False  # its maker or the source says it's for children: the feed leaves it out (YouTube's III.E.4.j)
     raw: dict[str, Any] = field(default_factory=dict)  # the parts the source sent, as it sent them
 
     def plays_in(self, country: str) -> bool:
@@ -530,7 +545,7 @@ class VideoSource:
     Like an adapter it describes itself, so nothing else names it: adding one is its module plus one entry in
     adapters.VIDEOS.
 
-    uploads(channel_id) lists a channel's latest videos, cheaply (the source's public feed), and facts(ids)
+    uploads(channel_id) lists a channel's latest videos, and facts(ids)
     what the source says of each of up to `batch` videos now; a video it leaves out is gone (removed, made
     private). A source that can search (search_cost set) finds videos from any channel too, for a moment's search
     (searches.py), and a player's with nothing to watch, or their most watched ever (sweeps.py). Each raises AdapterError when the source can't be read, and budget.RateLimited when its
@@ -545,6 +560,7 @@ class VideoSource:
     platform = "other"  # where its videos are, as the Feed's judge knows platforms (curate.Source)
     kind = "video"  # what its rows are, as the Feed's judge knows kinds (curate.Kind)
     batch = 50  # the most videos one facts() call asks about
+    mark: Mark | None = None  # its icon, which each of its videos' cards shows, linked to the video where it plays
     search_cost: int | None = None  # what one search() spends of each of its search_budgets(); None: it can't search
 
     def embed(self, video_id: str) -> dict[str, str] | None:

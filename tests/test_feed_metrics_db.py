@@ -10,7 +10,7 @@ from typing import Any
 from sports_follow import db as db_module
 from sports_follow import candidates, feedstats
 from sports_follow.models import FeedCandidate
-from tests.test_feed_fetch import CHANNEL, NOW, feed, video
+from tests.test_feed_fetch import CHANNEL, NOW, uploads, video
 from tests.test_feed_fetch_db import pytestmark, player, world  # noqa: F401  (the marker and the fixture)
 from tests.test_feed_metrics import Redis, counts
 from tests.test_metrics import measured  # noqa: F401  (the fixture)
@@ -34,7 +34,7 @@ def test_a_polls_funnel_counts_each_player_and_video_once(world, measured):  # n
     world.redis = Both()
     player("Virat Kohli")
     player("Jasprit Bumrah")
-    world.feeds[CHANNEL] = feed(
+    world.uploads[CHANNEL] = uploads(
         ("kohlibumrah", "Kohli and Bumrah on the tour", "Analysis"),
         ("kohlishort0", "Kohli's best shot", "#shorts"),
         ("bumrahblock", "Bumrah's yorkers", ""),
