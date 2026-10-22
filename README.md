@@ -650,7 +650,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   costs 1 unit); keeps those whose title or description's opening (up to its first blank line or link, 300
   characters at most: not the related-video or podcast links under it) names a followed player of that sport, or one
   of its pool (below) (their full name or a hashtag of it, a nickname fans typed, or their surname when no other
-  such player of the sport has it); one that names none of them but names a team they play for ("Falcons vs
+  such player of the sport has it: the last word of their name, or of an alias that shares a word with it, and the
+  given name of one written as FIDE does, "Gukesh" for "Gukesh D"; never an initial); one that names none of them but names a team they play for ("Falcons vs
   Vitality", "Liverpool v City": the team as its sport's titles write it, `Sport.team_names`, without the words its
   titles leave off, `team_affixes`; not "India Women" for India, `other_sides`) is kept for the team's followed
   players and 3 of its pool players, marked `about: team`, which the judge reads as a share about the team
@@ -664,10 +665,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   the Data API doesn't say (embeddable, no region rule). Only the player knows: YouTube's IFrame Player API
   says so (error 101 or 150, or 100 for one gone), and the apps then show "This one plays only on YouTube"
   with the way there, and tell the server once (`POST /api/players/<id>/feed/<item>/unplayable`, so many an
-  hour from a fan, an address and everyone). It marks every row of the video (`unplayable_at`), no Feed serves
-  it again, and a fetch that finds it for another player keeps the mark. The admin panel's Feed tab shows the
-  mark, and approving or pinning the video there says it plays after all, which no app's word overrides. (Whether 101/150 can also mean a
-  block in the viewer's country alone isn't known; if it can, one fan abroad hides it from India too.)
+  hour from a fan, an address and everyone, each count taken before the report is acted on). It leaves that fan's
+  Feed at once, and it's their network's vote (an IPv6 one's /48, kept a month in Redis) on whether it leaves
+  everyone's: once three networks have said so (`feed.UNPLAYABLE_VOTES`), the server marks every row of the video
+  (`unplayable_at`), no Feed serves it again, and a fetch that finds it for another player keeps the mark. One fan,
+  or a script with new cookies, takes it from their own Feed alone. The admin panel's Feed tab shows the mark, and
+  approving or pinning the video there says it plays after all, which no app's word overrides. (Whether 101/150 can
+  also mean a block in the viewer's country alone isn't known; if it can, fans abroad on three networks hide it
+  from India too.)
   After each poll the judge (below) reads the new rows and `sports_follow/rank.py` scores every judged one:
   the judge's interest, how widely it's watched for its age (log views a day since it was published, as its
   latest read counted them, so the score is age-fair and stays put as days pass) and its like ratio, times its
@@ -751,8 +756,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   of their own name and the aliases with fewer words than it, the shortest that still names them and no other
   followed player of their sport, sharing a word with their own name (never a namesake's slug, "mohamed salah
   football"): "Jasprit Bumrah" for the registry's "Jasprit Jasbirsingh Bumrah", "MS
-  Dhoni" for "Mahendra Singh Dhoni", never "Bumrah" or "Boom Boom" alone, and their own name when two followed
-  players share the rest. Matching stays as it was: any of their names. And each search lists 50 results (25 before:
+  Dhoni" for "Mahendra Singh Dhoni", never "Bumrah" or "Boom Boom" alone, but "Gukesh" for FIDE's "Gukesh D" (their
+  own name without the initial it ends in), and their own name when two followed players share the rest. Matching stays as it was: any of their names. And each search lists 50 results (25 before:
   the same one search, and one `videos.list` read either way) and leaves out what's tagged `#shorts` (`q` ends
   `-#shorts`, YouTube's NOT): most watched first, results are mostly Shorts, and those under a minute are refused
   for length. `videoDuration` can't do it: its `short` is anything under 4 minutes, where 1-4 minute highlight
@@ -940,7 +945,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   through the gateway (`SPORTS_FOLLOW_CURATE_MODEL`), with the sport's `content_hints`, and what the rules settled
   stands over what it says. The judge is a pure function, with no database and no fetching, and `judge_many`
   runs the model's calls side by side; a candidate the model can't judge now (or with `SPORTS_FOLLOW_CURATE_AI=0`)
-  is left unjudged, to try again. To tune it, label candidates by hand and run
+  is left unjudged, to try again: at the next run when the gateway was down or out of credit, but days later when
+  the model declined it or answered off the schema (2 days, then 4), and after 3 such tries it's held back for good
+  (`rank.JUDGE_TRIES`: a verdict whose stage is `held`, never served unless an admin approves it), so no row is
+  paid for at every run. `feed_candidates` keeps each row's tries, last failure and when it may be asked again
+  (`judge_tries`, `judge_error`, `judge_after`); `curator rescore --rejudge` asks every row again. To tune it, label candidates by hand and run
   `python -m sports_follow.curate candidates.jsonl --labels labels.jsonl`: it prints the verdicts as JSONL and how
   often each field agrees with the labels, then each disagreement (`--rules-only` makes no model calls).
   `tests/fixtures/curate_*.jsonl` are 41 made-up ones across cricket, football, chess and esports, among them a

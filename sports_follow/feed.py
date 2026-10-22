@@ -63,9 +63,18 @@ log = logging.getLogger("sports_follow.feed")
 
 # What a fan can say about an item from its "…" sheet. Each hides it from them; the judge reads all three later.
 VERDICTS = ("not_interested", "not_about_player", "report")
-# Videos a fan's app may say in an hour won't play inside it (unplayable), from one fan, one address and everyone:
-# a video it says so of goes from everyone's Feed, so one app (or a script) can't empty the Feed in an hour.
+# What's kept for a video a fan's app said won't play inside it (said_unplayable): it's hidden from them, as their
+# words from the sheet are, and the judge doesn't read it (rank.FEEDBACK).
+UNPLAYABLE = "unplayable"
+# Videos a fan's app may say in an hour won't play inside it (said_unplayable), from one fan, one address and
+# everyone: each is a vote on whether the video leaves everyone's Feed, so one app (or a script) can't cast many.
 UNPLAYABLE_PER_FAN, UNPLAYABLE_PER_ADDRESS, UNPLAYABLE_PER_HOUR = 10, 30, 200
+# Networks whose apps must say a video won't play inside them before it leaves every fan's Feed (unplayable); until
+# then it leaves only the Feeds of the fans who said so. One fan, or one network with any number of new cookies,
+# can't take a video from anyone else, while one that really won't play does so for every fan who tries it, so it's
+# soon gone for all. Three: a fan has a home and a phone network at most, and with the few fans there are now, a video
+# that won't play isn't shown for long. A network's word is kept for UNPLAYABLE_VOTES_FOR seconds (a month).
+UNPLAYABLE_VOTES, UNPLAYABLE_VOTES_FOR = 3, 30 * 24 * 3600
 ITEM_ID = re.compile(r"[0-9a-f]{16}")
 YOUTUBE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 WEEK = timedelta(days=7)
@@ -677,13 +686,42 @@ def feedback(db: Session, fan: str, player_id: int, item: str, verdict: str) -> 
     db.execute(row.on_conflict_do_update(index_elements=["fan_id", "player_id", "item_id"], set_={"verdict": verdict}))
 
 
+def said_unplayable(db: Session, fan: str, player_id: int, item: str) -> str | None:
+    """A fan's app said this video of the player's feed won't play inside it: its source's player refused it. It
+    leaves this fan's Feed at once (UNPLAYABLE, kept as their words from the sheet are; said again, nothing changes),
+    and the video comes back as "source:id", for their network's vote on whether it leaves everyone's
+    (UNPLAYABLE_VOTES, then unplayable). None, and nothing kept, when an admin approved or pinned it: their word
+    that it plays stands over any app's. ValueError for an item id this never makes; LookupError for no such video
+    of the player's."""
+    found, vouched = _video_of(db, player_id, item)
+    if vouched:
+        return None
+    said = insert(FeedFeedback).values(fan_id=fan, player_id=player_id, item_id=item, verdict=UNPLAYABLE)
+    db.execute(said.on_conflict_do_nothing(index_elements=["fan_id", "player_id", "item_id"]))  # their words from the sheet stand
+    return f"{found[0]}:{found[1]}"
+
+
 def unplayable(db: Session, player_id: int, item: str, now: datetime | None = None) -> bool:
-    """A fan's app said this video of the player's feed won't play inside it: its source's player refused it (its
-    owner keeps it off other sites, which the source's facts didn't say). It's marked on every player's row of it,
-    so no Feed serves it again, and a fetch that finds it again for someone else keeps the mark (candidates.keep).
-    An admin's approving or pinning it stands over that (rank.review): such a video is never marked. True when this
-    marked it, False when it was already or an admin vouched for it. ValueError for an item id this never makes;
-    LookupError for no such video of the player's."""
+    """Enough fans' apps said this video of the player's feed won't play inside it (UNPLAYABLE_VOTES): its source's
+    player refused it (its owner keeps it off other sites, which the source's facts didn't say). It's marked on every
+    player's row of it, so no Feed serves it again, and a fetch that finds it again for someone else keeps the mark
+    (candidates.keep). An admin's approving or pinning it stands over that (rank.review): such a video is never
+    marked. True when this marked it, False when it was already or an admin vouched for it. ValueError for an item
+    id this never makes; LookupError for no such video of the player's."""
+    found, vouched = _video_of(db, player_id, item)
+    if vouched:
+        return False
+    video = (FeedCandidate.source == found[0]) & (FeedCandidate.external_id == found[1])
+    marked = db.execute(update(FeedCandidate).where(video, FeedCandidate.unplayable_at.is_(None))
+                        .values(unplayable_at=now or datetime.now(timezone.utc)).returning(FeedCandidate.id)).all()  # fmt: skip
+    if marked:
+        log.info("feed: %s %s won't play inside the app, fans' apps said: no longer served (%d row(s))", found[0], found[1], len(marked))
+    return bool(marked)
+
+
+def _video_of(db: Session, player_id: int, item: str) -> tuple[tuple[str, str], bool]:
+    """The video (source, its id) an item of the player's feed is, and whether an admin approved or pinned it.
+    ValueError for an item id this never makes; LookupError for no such video of the player's."""
     if not ITEM_ID.fullmatch(item):
         raise ValueError("No such item.")
     rows = db.execute(select(FeedCandidate.source, FeedCandidate.external_id, FeedCandidate.url)
@@ -692,13 +730,7 @@ def unplayable(db: Session, player_id: int, item: str, now: datetime | None = No
     if found is None:
         raise LookupError("That video isn't in this player's feed.")
     video = (FeedCandidate.source == found[0]) & (FeedCandidate.external_id == found[1])
-    if db.scalar(select(func.count()).where(video, FeedCandidate.review.in_(("approved", "pinned")))):
-        return False
-    marked = db.execute(update(FeedCandidate).where(video, FeedCandidate.unplayable_at.is_(None))
-                        .values(unplayable_at=now or datetime.now(timezone.utc)).returning(FeedCandidate.id)).all()  # fmt: skip
-    if marked:
-        log.info("feed: %s %s won't play inside the app, a fan's app said: no longer served (%d row(s))", found[0], found[1], len(marked))
-    return bool(marked)
+    return found, bool(db.scalar(select(func.count()).where(video, FeedCandidate.review.in_(("approved", "pinned")))))
 
 
 # ---------------------------------------------------------------- inside

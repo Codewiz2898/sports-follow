@@ -446,12 +446,17 @@ class FeedCandidate(Base):
     # The ranking's number (rank.py), from the verdict, the features and the channel's trust; NULL: never served.
     score: Mapped[float | None] = mapped_column(Float)
     judged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # What the judge couldn't do with it (rank.judge): how many times the model declined it or answered off the schema,
+    # the last failure's kind (curate.CurateError.kind), and when it may be asked again; held back after rank.JUDGE_TRIES.
+    judge_tries: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    judge_error: Mapped[str | None] = mapped_column(String(20))
+    judge_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # The player's moment it's about (published within two days after it), so the Feed groups it there.
     moment_id: Mapped[int | None] = mapped_column(ForeignKey("moment.id", ondelete="SET NULL"))
     # An admin's word on it (rank.REVIEWS: approved, hidden, pinned), which stands over the judge's.
     review: Mapped[str | None] = mapped_column(String(10))
-    # When a fan's app said its source's player won't play it inside the app (feed.unplayable): its owner keeps it
-    # off other sites, which the source's facts didn't say. Never served after, whatever the judge or an admin said.
+    # When enough fans' apps said its source's player won't play it inside the app (feed.unplayable): its owner keeps
+    # it off other sites, which the source's facts didn't say. Never served after, whatever the judge or an admin said.
     unplayable_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     @classmethod

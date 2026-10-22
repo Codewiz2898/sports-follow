@@ -393,6 +393,42 @@ def test_each_upload_is_matched_once_for_each_player_it_names():
     assert [(f.player_id, f.name) for f in found] == [(1, "kohli"), (7, "bumrah")]
 
 
+# FIDE writes a player's name as "Given Initial"; titles write the given name alone, or the name their aliases end in.
+GUKESH = Followed(20, "chess", "Gukesh D", ["gukesh d", "D Gukesh", "Dommaraju Gukesh"])
+CARLSEN = Followed(21, "chess", "Magnus Carlsen", ["magnus carlsen"])
+PRAGG = Followed(22, "chess", "Praggnanandhaa R", ["R Praggnanandhaa", "Rameshbabu Praggnanandhaa"])
+VAISHALI = Followed(23, "chess", "Vaishali R", ["R Vaishali", "Vaishali Rameshbabu"])
+DRAVID = Followed(24, "cricket", "Rahul Dravid", ["The Wall"])
+BOOM = Followed(25, "cricket", "Jasprit Jasbirsingh Bumrah", ["Jasprit Bumrah", "Boom Boom"])
+
+
+def test_a_name_initial_player_is_named_by_their_name_alone_and_an_aliass_last_word_by_itself():
+    """BHA-437: "Gukesh D" is "Gukesh" in titles: a name ending in an initial is named by the word before it, and the
+    last word of each of their aliases that's a form of their name names them too, while it's theirs alone among
+    those followed. An initial never names anyone, and neither does a nickname's last word ("The Wall")."""
+    group = [GUKESH, CARLSEN, PRAGG, VAISHALI, DRAVID, BOOM]
+    names = candidates.phrases(group)
+
+    def who(title: str) -> list[tuple[int, str]]:
+        return [(f.player_id, f.name) for f in candidates.match([up(title)], group, names)]
+
+    assert who("Gukesh vs Sindarov | Game 5 | World Championship Match") == [(20, "gukesh")]
+    assert who("Gukesh beats Magnus Carlsen in Norway Chess 2026") == [(20, "gukesh"), (21, "magnus carlsen")]
+    assert who("Magnus Carlsen loses to Gukesh") == [(20, "gukesh"), (21, "magnus carlsen")]
+    assert who("D Gukesh wins Round 5") == [(20, "d gukesh")]
+    assert who("Praggnanandhaa holds Firouzja") == [(22, "praggnanandhaa")]
+    assert who("Vaishali's road to the Candidates") == [(23, "vaishali")]
+    # A word two of them have names neither (the siblings' father's name); a first name ending nothing doesn't either.
+    assert who("The Rameshbabu family at the Olympiad") == [] and who("Magnus effect, explained") == []
+    # A nickname's last word isn't one of their name's words: it never names them by itself.
+    assert who("Inside the Great Wall of China") == [] and who("Boom! What a finish") == []
+    assert who("Behind the wall with Rahul Dravid") == [(24, "rahul dravid")]
+    # Another followed player has the word in their name: "Gukesh" alone names neither.
+    names = candidates.phrases([GUKESH, Followed(26, "chess", "Gukesh Kumar")])
+    assert candidates.named(up("Gukesh wins again"), names[20]) is None and candidates.named(up("Gukesh D wins again"), names[20]) == ("gukesh d", "title")
+    assert not any(len(phrase) == 1 and len(phrase[0]) == 1 for phrase in candidates.phrases(group)[20])  # no initial alone
+
+
 # ---------------------------------------------------------------- what a row keeps
 
 

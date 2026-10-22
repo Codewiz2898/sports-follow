@@ -53,7 +53,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast, get_args
 
 from pydantic import ValidationError
-from sqlalchemy import not_, select, update
+from sqlalchemy import not_, or_, select, update
 from sqlalchemy.orm import Session
 
 from . import candidates, controls, curate, db, metrics, naming, news, shutdown, sports
@@ -66,6 +66,13 @@ log = logging.getLogger("sports_follow.rank")
 JUDGE_PER_RUN = 300  # candidates sent to the judge a run: what a poll finds is far fewer; a backlog clears in a few
 JUDGE_FOR = 12 * 60  # seconds a run of the judge may take: well inside the poll's lock (curator.POLL_LOCK)
 JUDGE_CHUNK = curate.WORKERS * 2  # judged side by side and stored together, so a run cut short keeps what it did
+# A row the model declined, or answered off the schema for (SPOILT), would get the same answer at the next run, paid
+# for each time, and the judge runs after every poll, over a hundred times a day: it waits JUDGE_WAIT before it's
+# asked again, twice that after its second try, and after JUDGE_TRIES it's held back for good (held). Any other
+# failure (the gateway down or out of credit, the model off) isn't the row's: it's asked again at the next run.
+SPOILT = ("declined", "invalid_output")
+JUDGE_TRIES = 3
+JUDGE_WAIT = timedelta(days=2)
 INTEREST, POPULAR, LIKES = 0.45, 0.35, 0.20  # the score's weights; trust multiplies the sum
 # Views a day since it was published that count as the most a video can be watched (popular_part), on a log scale:
 # 1,000 a day is half of it, 30 a day a quarter. A read in its first hours counts that long as MIN_AGE: an hour's
@@ -368,8 +375,10 @@ def players(session: Session, ids: Iterable[int]) -> dict[int, curate.PlayerCont
 
 def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again: bool = False, within: float | None = JUDGE_FOR) -> dict[str, int]:
     """Send unjudged rows (every row, with again) to the judge, newest first, and keep its verdicts, a chunk at a
-    time. A row the judge couldn't answer for now stays as it was, for the next run; so do the rows left when
-    the run has taken `within` seconds or the curator is stopping.
+    time. A row the judge couldn't answer for now is unjudged still: the model declined it or answered off the
+    schema, and it waits days before it's asked again, then is held back for good (SPOILT); for any other reason,
+    it's asked again at the next run. So are the rows left when the run has taken `within` seconds or the curator
+    is stopping. With again, every row is asked, held back or waiting.
 
     A video found for several players as their team's (about_team) is one share about the team: the judge reads it
     once, for the first of them, and its verdict is theirs too; one judged so before (not again) is theirs as it is."""
@@ -377,9 +386,9 @@ def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again:
     started = time.monotonic()
     with db.session() as session:
         query = select(FeedCandidate.id, FeedCandidate.player_id, FeedCandidate.source, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate,
-                       FeedCandidate.features)  # fmt: skip
+                       FeedCandidate.features, FeedCandidate.judge_tries)  # fmt: skip
         if not again:
-            query = query.where(FeedCandidate.verdict.is_(None))
+            query = query.where(FeedCandidate.verdict.is_(None), or_(FeedCandidate.judge_after.is_(None), FeedCandidate.judge_after <= now))
         rows = session.execute(query.order_by(FeedCandidate.fetched_at.desc(), FeedCandidate.id).limit(limit)).all()
         who = players(session, (r.player_id for r in rows))
         rows = [r for r in rows if r.player_id in who]
@@ -402,27 +411,47 @@ def judge(now: datetime | None = None, limit: int | None = JUDGE_PER_RUN, again:
     if known:
         with db.session() as session:
             session.execute(update(FeedCandidate), known)
-    judged = len(known)
+    judged, held_back = len(known), 0
     for i in range(0, len(leaders), JUDGE_CHUNK):
         if shutdown.stopping.is_set() or (within is not None and time.monotonic() - started > within):
             log.info("feed: the judge stopped with %d candidate(s) left for the next run", len(leaders) - i)
             break
         part = leaders[i:i + JUDGE_CHUNK]
         verdicts = curate.judge_many(as_candidate(r.source, r.url, r.candidate or {}, r.features or {}, who[r.player_id]) for r in part)
-        done = []
+        done, gave_up, waiting = [], [], []
         for r, v in zip(part, verdicts):
-            if v is None:
+            if isinstance(v, curate.CurateError):
+                tries = r.judge_tries + (v.kind in SPOILT)
+                for each in [r, *shared.get(_team_share(r) or ("", "", ""), [])]:
+                    if tries >= JUDGE_TRIES:
+                        gave_up.append({"id": each.id, "verdict": held(v.kind, tries), "judged_at": now, "judge_tries": tries, "judge_error": v.kind})
+                    else:
+                        after = now + JUDGE_WAIT * 2 ** (tries - 1) if v.kind in SPOILT else None
+                        waiting.append({"id": each.id, "judge_tries": tries, "judge_error": v.kind, "judge_after": after})
+                if tries >= JUDGE_TRIES:
+                    log.warning("feed: the judge gave up on %s after %d tries (%s): held back", r.url, tries, v.kind)
                 continue
             said = v.model_dump(mode="json")
             for each in [r, *shared.get(_team_share(r) or ("", "", ""), [])]:
                 done.append({"id": each.id, "verdict": said if each is r else _for_teammate(said, about_team(r.candidate)), "judged_at": now})
                 for step in ("judged", "passed") if passes(done[-1]["verdict"]) else ("judged",):
                     metrics.feed_step(step, stream(each.source, each.candidate), [who[each.player_id].sport])
-        if done:
+        if done or gave_up or waiting:
             with db.session() as session:
-                session.execute(update(FeedCandidate), done)
+                for changes in (done, gave_up, waiting):  # each list's rows have the same columns
+                    if changes:
+                        session.execute(update(FeedCandidate), changes)
         judged += len(done)
-    return {"judged": judged, "unjudged": len(rows) - judged}
+        held_back += len(gave_up)
+    return {"judged": judged, "unjudged": len(rows) - judged - held_back}
+
+
+def held(kind: str, tries: int) -> dict[str, Any]:
+    """The verdict on a row the judge gave up on (SPOILT, JUDGE_TRIES): in a verdict's shape, as the admin panel shows
+    one, and never served (passes: not about the player), unless an admin approves it. Its reason is a fan's, so
+    none: what happened is in held and stage."""
+    return {"about_player": "no", "by": "unknown", "kind": "other", "interest": 0.0, "risks": [], "sponsored": False, "reason": "",
+            "stage": "held", "held": f"{kind.replace('_', ' ')}, {tries} times"}  # fmt: skip
 
 
 def _team_share(r: Any) -> tuple[str, str, str] | None:

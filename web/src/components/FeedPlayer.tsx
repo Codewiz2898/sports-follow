@@ -8,7 +8,8 @@ import { holdSound, mayPlayAloud, setSound, useSound } from '../sound'
  * YouTube's no-cookie player for a Feed video, playing in the picture's place, with YouTube's IFrame Player API
  * listening to it (BHA-380). A video YouTube won't play here (its owner keeps it off other sites, which YouTube's
  * Data API doesn't say: feed.refusedHere) says so where its player was, with the way to it on YouTube, and the server
- * is told, once, so no fan's Feed serves it again (feedUnplayable). Its sound is the fan's (sound.ts, BHA-381):
+ * is told, once, so this fan's Feed doesn't serve it again, nor anyone's once enough networks have said so
+ * (feedUnplayable). Its sound is the fan's (sound.ts, BHA-381):
  * turned on and off where it plays, through the API, and YouTube's own sound button turns it on or off for the videos
  * after it too. One that should have its sound but may not yet (the page not tapped: the browser's rule) starts muted
  * with its sound held back, as does one the browser won't start aloud, and the fan's next tap on the page lets it

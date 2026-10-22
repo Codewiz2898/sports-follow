@@ -53,6 +53,19 @@ def test_a_search_never_asks_by_a_name_another_followed_player_shares():
     assert named([candidates.Followed(9, "football", "Pedri", ["pedri football"]), candidates.Followed(10, "football", "Pedri Gonzalez")]) == ["Pedri", "Pedri Gonzalez"]
 
 
+def test_a_name_initial_players_search_asks_for_their_name_without_the_initial():
+    """BHA-437: FIDE's "Gukesh D" is "Gukesh" to fans and titles: the search asks for that, while it's his alone among
+    those followed. A leading initial stays ("MS Dhoni" is how titles write him)."""
+    gukesh = candidates.Followed(1, "chess", "Gukesh D", ["gukesh d", "D Gukesh", "Dommaraju Gukesh"])
+    pragg = candidates.Followed(2, "chess", "Praggnanandhaa R", ["R Praggnanandhaa", "Rameshbabu Praggnanandhaa"])
+    carlsen = candidates.Followed(3, "chess", "Magnus Carlsen")
+    assert named([gukesh, pragg, carlsen]) == ["Gukesh", "Praggnanandhaa", "Magnus Carlsen"]
+    assert sweeps.query(gukesh, candidates.phrases([gukesh, pragg])) == "Gukesh chess"
+    # Another followed Gukesh: the name alone isn't his, so his own as it is.
+    assert named([gukesh, candidates.Followed(4, "chess", "Gukesh Kumar")]) == ["Gukesh D", "Gukesh Kumar"]
+    assert named([candidates.Followed(5, "cricket", "M S Dhoni")]) == ["M S Dhoni"]
+
+
 def test_the_famous_sweep_asks_for_the_most_watched_ever(fake):  # noqa: F811
     fake.found["Shreyas Iyer cricket"] = [hit("iyerfamous1", "Shreyas Iyer's best knock")]
     [up] = SOURCE.search("Shreyas Iyer cricket", None, "IN")
