@@ -335,6 +335,10 @@ class PubgEsports(Adapter):
     lag_note = "PUBG lobbies update after each match ends."
     INDEX_AGE = 3600  # how old a tournament's match list may be when finding a player's lobbies
     LIVE_AGE = 90  # …and when polling a live lobby
+    # A lobby is listed only once its first match is over: first looked at this soon after it began, its start and
+    # its matches so far are told (structured.opened_live). It's found within about an hour of its first match
+    # ending (the index is read every 10 minutes, a followed player's lobbies every 30).
+    listed_after_start = timedelta(minutes=90)
 
     def __init__(self) -> None:
         self._index: tuple[float, list[dict[str, Any]]] = (0.0, [])

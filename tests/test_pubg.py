@@ -19,7 +19,9 @@ from sports_follow.adapters import pubg, pubg_esports as pe
 from sports_follow.adapters import KNOWN, PlayerRef, budget
 from sports_follow.models import Event, EventPlayer, Player, PlayerCard, SourceBinding
 
+from .test_liquipedia import PollSession
 from .test_pipeline import FakeRedis as FakeBus
+from .test_structured import redis  # noqa: F401 (the fixture)
 
 T0 = datetime(2026, 10, 13, 6, 30, tzinfo=timezone.utc)
 TEAMS = ["4AM", "DNS", "TWIS", "AT", "FLC", "VP", "GEN", "S8UL"]  # a lobby of 8, the fewest that counts
@@ -154,6 +156,42 @@ def test_a_chicken_dinner_and_the_lobby_result_reach_the_player():
     over = pe.parse_lobby(_lobby(GAME1, GAME2), T0 + timedelta(hours=6))
     [final] = moments.detect("PUBG", "TGLTN", PRO, seen(two), seen(over))
     assert final.title == "TGLTN: 4AM finish 2nd · 21 pts"
+
+
+def _told(monkeypatch, event_id: int, began: datetime, *polls: tuple[dict, ...]) -> list[moments.Found]:
+    """What TGLTN's fans are told as the poller reads a lobby that began then, once after each set of its matches
+    (apply_poll's own path, as the lane runs it, with its rows kept in memory)."""
+    db = PollSession(Event(id=event_id, status="live", start_utc=began), Player(id=7, name="TGLTN", sport="PUBG"), ["4AM"])
+    told: dict[str, moments.Found] = {}
+
+    def record(db, player_id, event_id, found):
+        for f in found:
+            told.setdefault(f"{f.kind}:{f.detail}", f)  # one per key, as notify.record stores them
+        return []
+
+    monkeypatch.setattr(structured, "session", lambda: db)
+    monkeypatch.setattr(structured.notify, "record", record)
+    monkeypatch.setattr(structured.notify, "told", lambda db, player_id, event_id: [])
+    monkeypatch.setattr(structured.notify, "dispatch", lambda ids: None)
+    binding = {"adapter": "pubg_esports", "locator": {"tournament": "as-pgsc4t", "day": began.date().isoformat(), "n": 1}, "cadence": pe.PubgEsports.live_cadence}
+    for docs in polls:
+        structured.apply_poll(event_id, binding, pe.PubgEsports(), [(7, PRO)], pe.parse_lobby(_lobby(*docs)))
+    return list(told.values())
+
+
+def test_a_lobbys_first_match_and_its_start_are_told(monkeypatch, redis):
+    # BUG-201: PUBG lists a lobby only once its first match is over, so the poller's first look had nothing before it
+    # to be compared with: the first match's chicken dinner and "TGLTN is playing" were never told.
+    now = datetime.now(timezone.utc)
+    first = _doc("m1", now - timedelta(minutes=75), GAME1_PLACES, GAME1_KILLS)  # 4AM's chicken dinner
+    second = _doc("m2", now - timedelta(minutes=35), GAME2_PLACES, GAME2_KILLS)
+    told = _told(monkeypatch, 1, now - timedelta(minutes=75), (first,), (first, second))
+    assert [(f.kind, f.title) for f in told] == [("start", "TGLTN is playing"), ("dinner", "Chicken dinner: 4AM"), ("game", "TGLTN: 4AM 4th in match 2")]
+    assert told[0].body == "Day 1 · 1 match · PUBG"
+    # A lobby first looked at long after it began (a follow, or the poller, starting mid-lobby): what happened
+    # earlier is old news, as for any game.
+    earlier = [_doc(f"e{i}", now - timedelta(minutes=200 - 40 * i), GAME1_PLACES, GAME1_KILLS) for i in range(4)]
+    assert _told(monkeypatch, 2, now - timedelta(minutes=200), tuple(earlier)) == []
 
 
 # ---------------------------------------------------------------- the adapter's index
