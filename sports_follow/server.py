@@ -2611,6 +2611,9 @@ async def refresh(player_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any
         raise HTTPException(403, "Follow this player to refresh them.")
     if row.status != "ready":
         return {"queued": False, "reason": "The player's first card is still being built."}
+    if not sports.on(((row.card or {}).get("player") or {}).get("sport")):
+        # Turned off in the admin panel: its source isn't read for it, though it may run for another sport (BUG-176).
+        return {"queued": False, "reason": "This sport is turned off for now, so its players aren't read again."}
     if await in_db(structured.binding, player_id) is not None:
         # A bound player's live score is already polled; a refresh re-reads fixtures and stats.
         if bus.is_locked(f"structured:{player_id}"):

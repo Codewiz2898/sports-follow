@@ -117,7 +117,8 @@ def lane(monkeypatch):
 
     monkeypatch.setattr(bus, "_sync", redis)
     monkeypatch.setattr(history, "session", lambda: nullcontext(db))
-    monkeypatch.setattr(history, "_missing_scorecards", lambda waiting=None: Waiting(waiting))
+    monkeypatch.setattr(history, "_missing_scorecards", lambda waiting=None, off=None: Waiting(waiting))
+    monkeypatch.setattr(history, "_off", lambda db_: [])  # every sport runs (tests/test_history_db.py turns one off)
     monkeypatch.setattr(structured, "upsert_event", lambda db_, adapter, player, f: games.append((player.id, f.source_id)) or SimpleNamespace(id=len(games), key=f"{adapter.system}:{f.source_id}"))
     monkeypatch.setattr(structured, "keep_result", lambda *args, **kwargs: None)
     monkeypatch.setattr(structured, "add_scorecard", add_scorecard)

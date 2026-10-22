@@ -460,7 +460,8 @@ def refresh(player_id: int) -> None:
     finds nobody isn't retried for BIND_RETRY seconds, and a moving player keeps the old source till then.
     A source down to what its live games need isn't read (spare), nor one whose share for this lane is spent
     for now (budget.RateLimited): both are tried at the next tick, and neither is a failure. A failure is noted
-    in the binding's health, which the scheduler waits on before the next try (retry_at).
+    in the binding's health, which the scheduler waits on before the next try (retry_at). A player of a sport
+    turned off isn't read at all, though their source runs for another sport (an esports game).
     """
     lock = f"structured:{player_id}"
     token = bus.try_lock(lock, REFRESH_LOCK)
@@ -469,8 +470,12 @@ def refresh(player_id: int) -> None:
     try:
         with session() as db:
             row = binding(db, player_id)
-            preferred = for_sport(db.scalar(select(Player.sport).where(Player.id == player_id)))
+            sport = db.scalar(select(Player.sport).where(Player.id == player_id))
+            preferred = for_sport(sport)
             current = row.adapter if row else None
+        if not sports.on(sport):
+            log.info("refresh %s: %s is turned off; not read", player_id, sport)
+            return
         reading = ADAPTERS.get(current) if current else preferred
         if reading is not None and not spare(reading):
             log.info("refresh %s: %s is down to what live games need; next tick", player_id, reading.system)

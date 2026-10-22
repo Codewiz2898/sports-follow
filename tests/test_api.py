@@ -577,6 +577,27 @@ def test_only_a_follower_can_refresh_and_only_once_a_minute_per_player(api, monk
     assert len(api.queue.jobs) == 2
 
 
+def test_a_player_of_a_sport_turned_off_isnt_refreshed(api, monkeypatch, admin_controls):
+    # BUG-176: the Refresh button queued a read of a CS2 player's source while CS2 was turned off in the admin panel
+    # (PandaScore still runs for the other games, on a paid allowance).
+    from sports_follow import controls
+
+    monkeypatch.setattr(structured, "binding", lambda db, player_id: object())
+    monkeypatch.setattr(bus, "is_locked", lambda name: False)
+    shown = Db.get
+    monkeypatch.setattr(Db, "get", lambda self, model, key: SimpleNamespace(player_id=1, status="ready", card={"player": {"sport": "CS2"}})
+                        if model is PlayerCard and key == 1 else shown(self, model, key))
+    api.follows.add(("fan-a", 1))
+    admin_controls.rows[controls.SPORTS_OFF] = ["cs2"]
+    controls.load()
+    answer = api.call("POST", "/api/players/1/refresh", fan="fan-a")
+    assert answer.status_code == 200 and answer.json()["queued"] is False and "turned off" in answer.json()["reason"]
+    assert api.queue.jobs == [] and "refresh:1" not in api.redis.data  # nothing asked of the source, and nothing counted
+    admin_controls.rows[controls.SPORTS_OFF] = []
+    controls.load()
+    assert api.call("POST", "/api/players/1/refresh", fan="fan-a").json() == {"queued": True}
+
+
 # ---------------------------------------------------------------- the request log (BHA-192)
 
 
