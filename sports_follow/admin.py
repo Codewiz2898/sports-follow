@@ -572,8 +572,9 @@ def channels_view(db: Session) -> list[dict[str, Any]]:
 
 def review_candidate(row_id: int, said: str | None) -> dict[str, Any] | None:
     """Approve, hide or pin a candidate (rank.REVIEWS; a hide is the video's, every player's row of it), or take that
-    back (None), and rank the video's rows again at once: the candidate as the Feed tab lists it, or None for no such
-    candidate. ValueError for a word that isn't one."""
+    back (None), and rank the video's rows again at once; a story's goes on or off the cards of the players it's
+    about at once too (rank.cards), not at the curator's next run. Returns the candidate as the Feed tab lists it, or
+    None for no such candidate. ValueError for a word that isn't one."""
     from . import db
 
     with db.session() as session:
@@ -581,6 +582,10 @@ def review_candidate(row_id: int, said: str | None) -> dict[str, Any] | None:
         if video is None:
             return None
     rank.rescore(video=video)
+    if rank.is_story(video[0]):
+        with db.session() as session:
+            about = list(session.scalars(select(FeedCandidate.player_id).where(FeedCandidate.source == video[0], FeedCandidate.external_id == video[1])))
+        rank.cards(players=about)
     with db.session() as session:
         found = session.execute(select(FeedCandidate, Player.name, Player.sport).join(Player, Player.id == FeedCandidate.player_id).where(FeedCandidate.id == row_id)).first()
         return _candidate_row(*found) if found else None

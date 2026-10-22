@@ -342,6 +342,39 @@ def test_a_story_an_admin_hid_is_kept_hidden_for_a_player_found_in_it_later(worl
         assert {pid: review for pid, review in s.execute(select(FeedCandidate.player_id, FeedCandidate.review))} == {asha: "hidden", rao: "hidden"}
 
 
+def test_an_admins_hide_takes_the_story_off_every_card_it_was_on_at_once(world, monkeypatch):
+    # BUG-286: Hide reranked the story's rows but left it on the players' cards (their page's news, Today's tile) until
+    # the curator's next run, up to half an hour on.
+    from sports_follow import admin
+
+    _, feeds = world
+    asha, kiran = player("Asha Verma", ["Riverside XI"], card=CARD), player("Kiran Rao", ["Eastern Stars"], card=CARD)
+    other = player("Dev Smith", ["Riverside XI"], card=CARD)
+    feeds[WICKET] = rss(("Asha Verma and Kiran Rao in a row over a no-ball", "https://wicket.example.com/r/1", "Words after the game.", 2),
+                        ("Dev Smith hits a fifty", "https://wicket.example.com/r/2", "His first of the season.", 2))  # fmt: skip
+    feeds[GAZETTE] = rss()
+    news.poll(NOW)
+    monkeypatch.setattr(curate, "judge_many", lambda cands: [curate.Verdict.model_validate(said()) for _ in cands])
+    rank.judge(NOW)
+    rank.rescore(NOW)
+    sent: dict[int, dict] = {}
+    monkeypatch.setattr(bus, "store_card", sent.__setitem__)
+    assert rank.cards(NOW) == {"cards": 3}
+
+    def stories(pid: int) -> list[str]:
+        with db_module.session() as s:
+            card = s.get(PlayerCard, pid)
+            return [st["url"] for st in (card.card if card else {}).get("stories", [])]
+
+    with db_module.session() as s:
+        row = s.scalar(select(FeedCandidate.id).where(FeedCandidate.player_id == asha))
+    sent.clear()
+    assert admin.review_candidate(row, "hidden")  # whoever's row it's hidden on, it's every player's
+    assert stories(asha) == stories(kiran) == [] and set(sent) == {asha, kiran} and all("stories" not in c for c in sent.values())
+    assert stories(other) == ["https://wicket.example.com/r/2"]  # another's card is left as it was
+    assert admin.review_candidate(row, None) and stories(asha) == stories(kiran) == ["https://wicket.example.com/r/1"]  # taken back: on them again
+
+
 def test_a_bound_players_card_loses_the_agents_old_news_at_the_curators_next_run(world, monkeypatch):
     # BUG-247: a player bound to a live source after the research agent wrote their page kept its news for good (the
     # agent never runs for them again), so their Today tile read an October story as their status. The curator's
