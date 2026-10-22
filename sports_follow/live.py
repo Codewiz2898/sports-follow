@@ -15,6 +15,9 @@ a game, and the games of the biggest events first (where the source rates them: 
 with the most followed, then the best known, players, at most GAMES a sport. Each game says
 which of Sports Follow's events it is (event_ids, by the source's fixture ids), so Today shows a game a fan's
 player is in once, as theirs.
+
+That ranking is the same for every fan: each API process makes it once for every SHARED seconds of looks (and
+again at once when a source's read changes), and a fan's look adds only which of its players they follow.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from sqlalchemy.orm import Session
 from . import bus, matches, registry, search, sports
 from .adapters import ADAPTERS, Adapter, LiveGame, PlayerRef
 from .db import session
-from .models import Athlete, Event
+from .models import Athlete, Event, Follow
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +45,10 @@ GAMES = 6  # the most games a sport shows
 PLAYERS = 4  # and the most players a game offers
 KEPT = 3 * PLAYERS  # players kept a game by a read: room for those on Sports Follow to come first
 READ_GAMES = 30  # games kept a read, the biggest events' first, then the best known
+SHARED = 5  # seconds of looks one ranking serves, in each API process (offer)
+
+# This process's last ranking: {"last": (what it was made from, (sports, stale))}.
+_shared: dict[str, Any] = {}
 
 
 def sources() -> list[Adapter]:
@@ -119,13 +126,17 @@ def read(system: str, now: datetime | None = None) -> int:
     return len(games)
 
 
-def last_read(system: str) -> dict[str, Any] | None:
-    """A source's last read ({"as_of", "games"}), or None: never read, dropped, or Redis can't say."""
+def _raw(system: str) -> str | None:
     try:
-        raw = cast(str | None, bus.sync_redis().get(_key(system)))  # a sync client: never awaitable
+        return cast(str | None, bus.sync_redis().get(_key(system)))  # a sync client: never awaitable
     except Exception:
         log.warning("live: %s's games couldn't be read", system, exc_info=True)
         return None
+
+
+def last_read(system: str) -> dict[str, Any] | None:
+    """A source's last read ({"as_of", "games"}), or None: never read, dropped, or Redis can't say."""
+    raw = _raw(system)
     return json.loads(raw) if raw else None
 
 
@@ -144,12 +155,28 @@ def offer(db: Session, fan: str | None, now: datetime | None = None) -> tuple[li
     esports game's group is "esports"),
     each with the players this fan can follow from it and the ids of the events it is here (a followed
     player's live card names its game by one); and the sources whose last read is over FRESH old, for the
-    caller to ask a read of."""
+    caller to ask a read of. The ranking is every fan's (_ranking), made once for SHARED seconds of looks, or
+    again when a source's read changes; only whom this fan follows is theirs (BUG-268)."""
     now = now or datetime.now(timezone.utc)
+    reads = [(adapter, _raw(adapter.system)) for adapter in sources()]
+    key = (int(now.timestamp()) // SHARED, tuple(s.key for s in sports.ENABLED), tuple((a.system, raw) for a, raw in reads))
+    made, shared = _shared.get("last") or (None, None)
+    if made != key or shared is None:
+        shared = _ranking(db, reads, now)
+        _shared["last"] = (key, shared)  # one assignment: a look on another thread sees one ranking or the other
+    ranked, stale = shared
+    ids = {p["player_id"] for sport in ranked for g in sport["games"] for p in g["players"] if p.get("player_id")}
+    mine = set(db.scalars(select(Follow.player_id).where(Follow.fan_id == fan, Follow.player_id.in_(ids)))) if fan and ids else set()
+    out = [{**sport, "games": [{**g, "players": [{**p, "following": p.get("player_id") in mine} for p in g["players"]]} for g in sport["games"]]} for sport in ranked]
+    return out, list(stale)
+
+
+def _ranking(db: Session, reads: list[tuple[Adapter, str | None]], now: datetime) -> tuple[list[dict[str, Any]], list[str]]:
+    """offer, for no fan: every running sport's games and their players, from these reads of the sources."""
     stale: list[str] = []
     by_sport: dict[str, list[tuple[str, dict[str, Any]]]] = {}
-    for adapter in sources():
-        read_ = last_read(adapter.system)
+    for adapter, raw in reads:
+        read_ = json.loads(raw) if raw else None
         age = _age(read_, now)
         if age > FRESH:
             stale.append(adapter.system)
@@ -167,7 +194,7 @@ def offer(db: Session, fan: str | None, now: datetime | None = None) -> tuple[li
         candidates = ranked[sport.key]
         refs = [(i, PlayerRef(system=system, athlete_id=p["athlete_id"], name=p["name"], team_ids=[], team_names=[p.get("team") or ""], league=p.get("league")))
                 for i, (system, game) in enumerate(candidates) for p in game.get("players") or [] if (system, p["athlete_id"]) not in blocked]
-        rows = search.offered_refs(db, sport.label, [r for _, r in refs], fan)  # one lookup of who's on Sports Follow for the sport
+        rows = search.offered_refs(db, sport.label, [r for _, r in refs], None)  # one lookup of who's on Sports Follow for the sport
         games = []
         for i, (system, game) in enumerate(candidates):
             mine = [row for (j, _), row in zip(refs, rows) if j == i]
