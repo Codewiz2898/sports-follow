@@ -7,7 +7,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import Constants from 'expo-constants'
 import { Image } from 'expo-image'
-import { router } from 'expo-router'
+import { router, useIsFocused } from 'expo-router'
 import { useEffect, useMemo, useState } from 'react'
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
 import { AHEAD_DAYS, comingUp, FEW, followedLive, latestIn, leagueComingUp, liveGames, notTheirs, results, resultsDay, TAIL, teamsLive, theirEvents, type TeamGame } from '../../../web/src/today'
@@ -142,14 +142,16 @@ export default function TodayScreen() {
   const now = useNow()
   const sports = useSports()
   const welcomed = useWelcomed()
+  const focused = useIsFocused()
   const [refreshing, setRefreshing] = useState(false)
 
   // A fan who follows only games by themselves, or only teams, has a Today of their own too.
   const nobody = loaded && matchesLoaded && cards.length === 0 && matches.length === 0 && teams.length === 0
-  // A new fan: the welcome first, once.
+  // A new fan: the welcome first, once; not while Today is under a page opened straight from a link (_layout.tsx's
+  // initialRouteName), which the welcome would replace: a campaign's.
   useEffect(() => {
-    if (nobody && welcomed === false) router.replace('/welcome')
-  }, [nobody, welcomed])
+    if (nobody && welcomed === false && focused) router.replace('/welcome')
+  }, [nobody, welcomed, focused])
 
   const refresh = async () => {
     setRefreshing(true)

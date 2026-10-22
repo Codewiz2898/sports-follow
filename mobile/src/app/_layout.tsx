@@ -19,6 +19,10 @@ import { PageError } from '../ui'
 /** What's around the pages failing (a provider, the tab bar) shows PageError instead of closing the app. */
 export { PageError as ErrorBoundary }
 
+/** A page opened straight from a notification or a link has Today under it, so Android's Back goes there, as the
+ * pages' own back buttons do, rather than closing the app (BUG-158). */
+export const unstable_settings = { initialRouteName: 'index' }
+
 /** Notifications on this phone (push.ts): registered as this fan once their players, teams and games are known
  * (it asks the first time there are some: a fan of a team alone has its moments and live cards too), and a tapped
  * one's page opened. After the stack, so a tap that started the app opens over a mounted navigator. */
