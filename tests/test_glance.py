@@ -82,11 +82,12 @@ def test_chess_shows_white_and_black_with_their_points_and_the_move():
         Glance([("Gukesh D", ""), ("Magnus Carlsen", "")], "Move 34")
     assert sports.of("chess").glance(chess(result="½-½"), "", "Draw", "final", []) == Glance([("Gukesh D", "½"), ("Magnus Carlsen", "½")], "½–½")
     assert sports.of("chess").glance(chess(result="0-1"), "", "", "final", []).sides == [("Gukesh D", "0"), ("Magnus Carlsen", "1")]
-    # A mini-match's score is from the side its score line names first: here Black's.
-    match = chess(result=None, match={"games": 2, "score": "1½–½"})
-    seen = sports.of("chess").glance(match, "Magnus Carlsen 1½–½ Gukesh D", "Game 3 · move 34", "live", [])
-    assert seen == Glance([("Gukesh D", "½"), ("Magnus Carlsen", "1½")], "Game 3 · move 34")
-    assert sports.of("chess").glance(match, "Gukesh D 1½–½ Magnus Carlsen", "", "final", []) == Glance([("Gukesh D", "1½"), ("Magnus Carlsen", "½")], "Final")
+    # A mini-match's game is a game of its own (BHA-675): its own points, and which game of the match it is.
+    game3 = {"game": 3, "label": "Game 3", "games": 2, "score": "1½–½", "ahead": "2"}
+    seen = sports.of("chess").glance(chess(result=None, mini_match=game3), "Gukesh D vs Magnus Carlsen", "Move 34 · White to play", "live", [])
+    assert seen == Glance([("Gukesh D", ""), ("Magnus Carlsen", "")], "Game 3 · move 34")
+    decided = chess(result="1-0", mini_match={**game3, "label": "Armageddon", "games": 3, "score": "1½–1½", "ahead": None})
+    assert sports.of("chess").glance(decided, "Gukesh D 1–0 Magnus Carlsen", "Gukesh D won", "final", []) == Glance([("Gukesh D", "1"), ("Magnus Carlsen", "0")], "Armageddon · 1–0")
     assert sports.of("chess").glance({"kind": "chess", "round": "Round 3"}, "", "Pairings not published yet", "scheduled", []) == Glance([], "Pairings not published yet")
 
 

@@ -191,67 +191,79 @@ def test_fide_names_resolve_with_initials_and_order():
     assert lichess_chess.display_name("Carlsen, Magnus") == "Magnus Carlsen"
 
 
-def test_chess_knockout_round_is_a_match():
-    # The Esports World Cup grand final is one broadcast round holding eight Carlsen–Lazavik games.
+def test_each_game_of_a_mini_match_is_a_game_of_its_own():
+    # BHA-675: the Esports World Cup grand final is one broadcast round holding eight Carlsen–Lazavik games. Each is a
+    # game of its own, numbered in the pair's games there, with its own result, and the match's score as it leaves it.
     data = load("lichess/round-final")
-    assert len(lichess_chess.games_of(data, CARLSEN)) == 8
-    snap = lichess_chess.parse_board(data, CARLSEN)
-    assert snap.status == "final"
-    assert snap.score_label == "Magnus Carlsen 6–2 Denis Lazavik"
-    assert snap.clock_label == "Magnus Carlsen won the match (8 games)"
-    assert snap.state["match"] == {"games": 8, "score": "6–2", "first": "mJnv1YBU", "ahead": CARLSEN}  # its first game, and who's ahead whoever's board it is
-    assert snap.state["fen"]  # the board shown is the last game's
-    assert snap.lines[CARLSEN].headline == "Won the match 6–2 vs Denis Lazavik"
-    assert snap.lines[LAZAVIK].headline == "Lost the match 2–6 vs Magnus Carlsen"
+    assert [g["n"] for g in lichess_chess.games_of(data, CARLSEN)] == [1, 2, 3, 4, 5, 6, 7, 8]
+    first = lichess_chess.parse_board(data, CARLSEN)
+    assert (first.status, first.score_label, first.clock_label) == ("final", "Magnus Carlsen 1–0 Denis Lazavik", "Magnus Carlsen won")
+    assert (first.state["game_id"], first.lines[CARLSEN].headline) == ("mJnv1YBU", "Won with White vs Denis Lazavik")
+    assert first.state["mini_match"] == {"game": 1, "label": "Game 1", "games": 1, "score": "1–0", "ahead": CARLSEN}
+    second = lichess_chess.parse_board(data, LAZAVIK, game=2)  # drawn, Lazavik with White
+    assert (second.score_label, second.clock_label, second.lines[LAZAVIK].headline) == ("Denis Lazavik ½–½ Magnus Carlsen", "Draw", "Drew with White vs Magnus Carlsen")
+    assert second.state["mini_match"] == {"game": 2, "label": "Game 2", "games": 2, "score": "1½–½", "ahead": CARLSEN}  # who leads, whoever's board it is
+    assert {"label": "Match", "value": "½–1½"} in second.lines[LAZAVIK].stats  # the match from the player's side
+    last = lichess_chess.parse_board(data, LAZAVIK, game=8)
+    assert (last.state["game_id"], last.lines[LAZAVIK].headline, last.state["mini_match"]["score"]) == ("ZU7HwJyD", "Lost with Black vs Magnus Carlsen", "6–2")
+    assert lichess_chess.parse_board(data, CARLSEN, game=9).status == "postponed"  # no ninth: the round long over, it never came
 
 
-def test_chess_fixture_and_result_label_from_each_side():
-    from datetime import datetime, timezone
-
+def test_a_mini_matchs_games_are_each_a_fixture_with_its_own_result():
     data = load("lichess/round-final")
     now = datetime(2026, 9, 29, tzinfo=timezone.utc)
-    mine = lichess_chess.fixture_for(data["tour"], data["round"], lichess_chess.games_of(data, CARLSEN), CARLSEN, now)
-    assert mine.source_id == f"{data['round']['id']}-{CARLSEN}"
-    assert mine.title == "Magnus Carlsen vs Denis Lazavik"
-    assert mine.status == "final"
-    assert lichess_chess.result_label(mine, [CARLSEN]) == "Won 6–2"
-    theirs = lichess_chess.fixture_for(data["tour"], data["round"], lichess_chess.games_of(data, LAZAVIK), LAZAVIK, now)
-    assert lichess_chess.result_label(theirs, [LAZAVIK]) == "Lost 2–6"
+    rnd = data["round"]["id"]
+    mine = lichess_chess.round_fixtures(data["tour"], data["round"], data, lichess_chess.games_of(data, CARLSEN), CARLSEN, now)
+    assert [f.source_id for f in mine] == [f"{rnd}-{CARLSEN}", *(f"{rnd}-{CARLSEN}-{n}" for n in range(2, 9))]  # game 1's is the round's, as before
+    assert [f.locator["game"] for f in mine] == list(range(1, 9)) and {f.status for f in mine} == {"final"} and not any(f.unlisted for f in mine)
+    assert (mine[0].title, mine[0].detail, mine[1].title, mine[1].detail) == ("Magnus Carlsen vs Denis Lazavik", "Grand Final · Game 1", "Denis Lazavik vs Magnus Carlsen", "Grand Final · Game 2")
+    assert [f.board for f in mine[:2]] == ["mJnv1YBU", "1UDI2Flj"]
+    assert [lichess_chess.result_label(f, [CARLSEN]) for f in mine] == ["Won 1–0", "Drew ½–½", "Drew ½–½", "Won 0–1", "Won 0–1", "Drew ½–½", "Drew ½–½", "Won 1–0"]
+    theirs = lichess_chess.round_fixtures(data["tour"], data["round"], data, lichess_chess.games_of(data, LAZAVIK), LAZAVIK, now)
+    assert [lichess_chess.result_label(f, [LAZAVIK]) for f in theirs][:4] == ["Lost 1–0", "Drew ½–½", "Drew ½–½", "Lost 0–1"]
     assert lichess_chess.fmt_points(2.5) == "2½" and lichess_chess.fmt_points(0.5) == "½" and lichess_chess.fmt_points(0) == "0"
 
 
 def test_a_chess_games_result_is_the_boards_own_white_first():
     # BUG-144: a game's result was put from the player's side, so Lazavik's loss with Black read "Lost 0–1", which in
-    # chess (White's points first) says Black won. A game's result is the board's own, from either side; a match's
-    # stays the player's, as colours change through it.
+    # chess (White's points first) says Black won. A game's result is the board's own, from either side, a mini-match's
+    # game's too (BHA-675).
     data = load("lichess/round-final")
     now = datetime(2026, 9, 29, tzinfo=timezone.utc)
     first, second = data["games"][0], data["games"][1]  # Carlsen won game 1 with White; game 2 was drawn
-    labels = lambda games: [lichess_chess.result_label(lichess_chess.fixture_for(data["tour"], data["round"], lichess_chess.games_of({"games": games}, fide), fide, now), [fide])  # noqa: E731
-                            for fide in (CARLSEN, LAZAVIK)]
+
+    def labels(games: list[dict], n: int = 1) -> list[str]:
+        return [lichess_chess.result_label(lichess_chess.fixture_for(data["tour"], data["round"], lichess_chess.games_of({"games": games}, fide)[n - 1], fide, now), [fide])
+                for fide in (CARLSEN, LAZAVIK)]
+
     assert labels([first]) == ["Won 1–0", "Lost 1–0"]
     assert labels([{**first, "players": first["players"][::-1], "status": "0-1"}]) == ["Won 0–1", "Lost 0–1"]  # Carlsen's win with Black
     assert labels([second]) == ["Drew ½–½", "Drew ½–½"]
-    assert labels([first, second]) == ["Won 1½–½", "Lost ½–1½"]  # a mini-match: the player's points first
+    assert labels([first, second], 2) == ["Drew ½–½", "Drew ½–½"]  # a mini-match's game: its own
 
 
 def test_chess_match_page_is_one_players_board_with_both_players():
     data = load("lichess/round-final")
     rnd = data["round"]["id"]
-    game = lichess_chess.parse_game(data, LAZAVIK, "lichess_chess")
-    assert game is not None and game.source_id == f"{rnd}-{LAZAVIK}"
-    # Both players, white first in the board shown, each with the fixture their own card has it under.
+    game = lichess_chess.parse_game(data, LAZAVIK, "lichess_chess", game=8)
+    assert game is not None and game.source_id == f"{rnd}-{LAZAVIK}-8"
+    # Both players, white first in the board shown, each with the fixture their own card has that game under.
     assert {(p.athlete_id, p.name) for p in game.players} == {(CARLSEN, "Magnus Carlsen"), (LAZAVIK, "Denis Lazavik")}
-    assert sorted(game.fixtures) == sorted(f"{rnd}-{p}" for p in (CARLSEN, LAZAVIK))
-    assert game.snapshot.state["match"] == {"games": 8, "score": "2–6", "first": "mJnv1YBU", "ahead": CARLSEN} and game.snapshot.status == "final"
+    assert sorted(game.fixtures) == sorted(f"{rnd}-{p}-8" for p in (CARLSEN, LAZAVIK))
+    assert game.snapshot.state["mini_match"] == {"game": 8, "label": "Game 8", "games": 8, "score": "6–2", "ahead": CARLSEN} and game.snapshot.status == "final"
+    assert lichess_chess.parse_game(data, LAZAVIK, "lichess_chess").source_id == f"{rnd}-{LAZAVIK}"  # type: ignore[union-attr]  # game 1: the round's address
     assert lichess_chess.parse_game(data, "1", "lichess_chess") is None  # not paired in this round
-    assert lichess_chess.LichessChess.fixture_pattern.fullmatch(f"{rnd}-{CARLSEN}") and not lichess_chess.LichessChess.fixture_pattern.fullmatch(f"{rnd}:abc")
+    assert lichess_chess.parse_game(data, LAZAVIK, "lichess_chess", game=9) is None  # no ninth game
+    chess = lichess_chess.LichessChess()
+    assert chess.locator(f"{rnd}-{CARLSEN}") == {"round": rnd, "fide": CARLSEN, "game": 1}
+    assert chess.locator(f"{rnd}-{CARLSEN}-8") == {"round": rnd, "fide": CARLSEN, "game": 8}
+    assert [chess.locator(x) for x in (f"{rnd}:abc", f"{rnd}-{CARLSEN}-1", f"{rnd}-{CARLSEN}-0", f"{rnd}-{CARLSEN}-")] == [None] * 4  # game 1 has one address
 
 
 def test_an_armageddon_drawn_is_blacks_win(monkeypatch):
     # BUG-212 (H17 arm1): Norway Chess's form, a classical draw then an armageddon in the same round, drawn with Gukesh
-    # as Black. A draw in an armageddon is Black's win, but it was scored ½ each: "Drew the match 1–1", "Match drawn",
-    # a draw in form, no Win poster, and Call it settled Draw.
+    # as Black. A draw in an armageddon is Black's win, but it was scored ½ each: a draw in form, no Win poster, and Call
+    # it settled Draw. Each is a game of its own (BHA-675): the classical one the round's, a draw; the armageddon his win.
     from sports_follow import sports
 
     now = datetime.now(timezone.utc)
@@ -264,18 +276,21 @@ def test_an_armageddon_drawn_is_blacks_win(monkeypatch):
     armageddon = {"id": "game0002", "name": "Sindarov, Javokhir - Gukesh, D (Armageddon)", "players": [sindarov, gukesh], "fen": end, "status": "½-½"}
     data = {"round": rnd, "tour": tour, "games": [classical, armageddon]}
     g, s = str(gukesh["fideId"]), str(sindarov["fideId"])
-    snap = lichess_chess.parse_board(data, g, now)
-    assert (snap.status, snap.score_label, snap.clock_label) == ("final", "D Gukesh 1½–½ Javokhir Sindarov", "D Gukesh won on armageddon (2 games)")
-    assert snap.lines[g].headline == "Won the match 1½–½ vs Javokhir Sindarov on armageddon"
-    assert snap.lines[s].headline == "Lost the match ½–1½ vs D Gukesh on armageddon"
-    assert snap.state["match"]["ahead"] == g and sports.get("chess").answer("result", "final", snap.state) == g  # Call it: Gukesh
+    drawn = lichess_chess.parse_board(data, g, now)
+    assert (drawn.status, drawn.clock_label, drawn.lines[g].headline, drawn.state.get("mini_match")) == ("final", "Draw", "Drew with White vs Javokhir Sindarov", None)
+    snap = lichess_chess.parse_board(data, g, now, game=2)
+    assert (snap.status, snap.score_label, snap.clock_label) == ("final", "Javokhir Sindarov ½–½ D Gukesh", "D Gukesh won on armageddon")
+    assert snap.lines[g].headline == "Won with Black vs Javokhir Sindarov on armageddon"
+    assert snap.lines[s].headline == "Lost with White vs D Gukesh on armageddon"
+    assert snap.state["mini_match"] == {"game": 2, "label": "Armageddon", "games": 2, "score": "1½–½", "ahead": g}
+    assert sports.get("chess").answer("result", "final", snap.state) == g  # Call it: Gukesh
     assert sports.get("chess").finished_poster({"headline": snap.lines[g].headline}, "", "") is not None  # his Win poster
-    mine, theirs = (lichess_chess.fixture_for(tour, rnd, lichess_chess.games_of(data, fide), fide, now) for fide in (g, s))
-    assert (lichess_chess.result_label(mine, [g]), lichess_chess.result_label(theirs, [s])) == ("Won 1½–½ on armageddon", "Lost ½–1½ on armageddon")
+    mine, theirs = (lichess_chess.fixture_for(tour, rnd, lichess_chess.games_of(data, fide)[1], fide, now, "Armageddon") for fide in (g, s))
+    assert (mine.detail, lichess_chess.result_label(mine, [g]), lichess_chess.result_label(theirs, [s])) == ("Round 3 · Armageddon", "Won 0–1 on armageddon", "Lost 0–1 on armageddon")
     # A round of its own for the armageddon, or one whose scoring gives Black more for a draw (Lichess's custom scoring).
     alone = {"round": {**rnd, "name": "Round 3 Armageddon"}, "tour": tour, "games": [{**armageddon, "name": "Sindarov, Javokhir - Gukesh, D"}]}
     one = lichess_chess.parse_board(alone, g, now)
-    assert (one.clock_label, one.lines[g].headline) == ("D Gukesh won on armageddon", "Won with Black vs Javokhir Sindarov on armageddon")
+    assert (one.clock_label, one.lines[g].headline, one.state.get("mini_match")) == ("D Gukesh won on armageddon", "Won with Black vs Javokhir Sindarov on armageddon", None)
     assert sports.get("chess").answer("result", "final", one.state) == g
     scored = {**alone, "round": {**rnd, "customScoring": {"white": {"win": 1, "draw": 0}, "black": {"win": 1, "draw": 1}}}}
     assert lichess_chess.parse_board(scored, s, now).lines[s].headline == "Lost with White vs D Gukesh on armageddon"
@@ -295,7 +310,7 @@ def test_chess_single_game_round():
     assert snap.score_label == "Magnus Carlsen 1–0 Denis Lazavik"
     assert snap.clock_label == "Magnus Carlsen won"
     assert snap.lines[CARLSEN].headline == "Won with White vs Denis Lazavik"
-    assert snap.state["match"] is None
+    assert "mini_match" not in snap.state
 
 
 def test_a_finished_chess_games_match_page_has_its_moves(monkeypatch):
@@ -313,6 +328,7 @@ def test_a_finished_chess_games_match_page_has_its_moves(monkeypatch):
         return pgn if url.endswith(".pgn") else single
 
     monkeypatch.setattr(lichess_chess, "get_json", get_json)
+    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: Kept())
     game = lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}")
     assert asked == [f"{lichess_chess.API}broadcast/-/-/{rnd}", f"{lichess_chess.API}study/{rnd}/{game_id}.pgn"]  # the round, then the board's moves
     assert game is not None and game.snapshot.status == "final" and not game.partial  # its round is over and its moves read: whole
@@ -323,26 +339,27 @@ def test_a_finished_chess_games_match_page_has_its_moves(monkeypatch):
     page = chess.match_page(state, [], {}, {})
     assert (page["moves"][0], page["moves"][-1], len(page["moves"]), page["game"]) == ("1. d4 Nf6", "86. Ke6", 86, None)
     assert chess.verdict(state, game.snapshot.score_label, game.snapshot.clock_label) == "Magnus Carlsen won"
+    # A mini-match's game: its number in the match, beside its moves.
+    whole = {**data, "games": data["games"][:2]}
+    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: pgn if url.endswith(".pgn") else whole)
+    second = lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}-2")
+    assert second is not None and chess.match_page(second.snapshot.state, [], {}, {})["game"] == 2
 
     # A game still being played: its moves so far, from its PGN without clocks (never the finished game's copy), as
     # the page's detail, not as a finished game's moves.
     asked.clear()
     playing = {**single, "games": [{**data["games"][0], "status": "*"}], "round": {**data["round"], "finished": False, "ongoing": True}}
-    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: Kept())
     monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: asked.append(url) or (pgn if ".pgn" in url else playing))
-    live = lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}").snapshot.state
+    live = lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}").snapshot.state  # type: ignore[union-attr]
     assert "moves" not in live and len(live["page_detail"]["moves"]) == 86 and asked[1].endswith(f"{game_id}.pgn?clocks=false&comments=false&variations=false")
 
-    # A decided game while its round is still on (a mini-match's next game may follow it, BUG-210): live till GRACE
-    # after it was first seen over; then over, and partial while Lichess doesn't say the round is.
+    # A decided game while its round is still on (a mini-match's next game may follow it): over at once, its own
+    # result (BHA-675), and partial while Lichess doesn't say the round is: its page learns which game of a match it is
+    # once the next comes.
     on = {**single, "round": {**data["round"], "finished": False, "ongoing": True}}
-    kept = Kept()
-    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: kept)
     monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: pgn if ".pgn" in url else on)
-    assert lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}").snapshot.status == "live"  # type: ignore[union-attr]
-    kept[f"lichess:over:{game_id}"] = str(time.time() - lichess_chess.GRACE)
     decided = lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}")
-    assert decided.snapshot.status == "final" and decided.partial
+    assert decided is not None and decided.snapshot.status == "final" and decided.partial
 
     # Its moves not read (Lichess timed out, or answered 5xx): partial, to be read again; refused, the read fails.
     def failing(url, ttl, text=False):
@@ -378,45 +395,50 @@ def tiebreak(*results: str, to_come: bool = False, finished: bool = False, ago: 
     return {**data, "tour": tour, "round": rnd, "games": [{**g, "status": r} for g, r in zip(data["games"], results, strict=False)]}
 
 
-def test_a_tiebreak_rounds_first_game_over_isnt_the_end_of_its_round(monkeypatch):
-    # Game 1 won by Carlsen with White, game 2's chapter not out yet (BUG-210): the round may hold a mini-match, so
-    # the board stays live (no "Won with White", polling goes on), and a refresh reading the round says so too.
+def test_a_tiebreaks_game_over_is_over_and_the_next_is_armed_unlisted_till_it_comes(monkeypatch):
+    # BHA-675 (was BUG-210): a tiebreak's games show one at a time, each game's chapter made as it starts. Game 1 won by
+    # Carlsen with White is a game over, told and scored as one; the round may hold more, so a fixture of game 2 is
+    # armed (polled, its start seen when it comes) but shown nowhere till then, and off GRACE after game 1 with none.
     round_now: dict = {}
 
     def get_json(url, ttl, text=False):
         if ".pgn" in url:
             return LIVE_PGN  # the moves so far, for the match page
-        return {"tour": round_now["tour"], "rounds": [round_now["round"]]} if url.endswith("broadcast/WorldCh1") else round_now
+        return {"tour": round_now["tour"], "rounds": [round_now["round"]]} if url.endswith(f"broadcast/{round_now['tour']['id']}") else round_now
 
     monkeypatch.setattr(lichess_chess, "get_json", get_json)
     kept = Kept()
     monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: kept)
+    monkeypatch.setattr(lichess_chess.LichessChess, "_tours", lambda self, ref, now: [round_now["tour"]])
     chess = lichess_chess.LichessChess()
     rnd = load("lichess/round-final")["round"]["id"]
-    locator = {"round": rnd, "fide": CARLSEN}
+    carlsen = PlayerRef("lichess_chess", CARLSEN, "Magnus Carlsen", [CARLSEN], ["Magnus Carlsen"])
     round_now.update(tiebreak("1-0"))
-    round_now["tour"]["id"] = "WorldCh1"
-    snap = chess.snapshot(locator)
-    assert snap.status == "live" and snap.lines[CARLSEN].headline == "White vs Denis Lazavik"  # not "Won with White"
-    assert chess.snapshot({"round": rnd, "fide": LAZAVIK}).status == "live"
-    assert chess.match(f"{rnd}-{CARLSEN}").snapshot.status == "live"  # type: ignore[union-attr]
-    monkeypatch.setattr(lichess_chess.LichessChess, "_tours", lambda self, ref, now: [round_now["tour"]])
-    [fixture] = chess.fixtures(PlayerRef("lichess_chess", CARLSEN, "Magnus Carlsen", [CARLSEN], ["Magnus Carlsen"]))
-    assert fixture.status == "live" and fixture.result is None  # a refresh doesn't call it over
-    # Game 2 out and won by Lazavik, game 3 too, and the round's over: the match, 1–2, once.
-    round_now.update(tiebreak("1-0", "1-0", "*"))
-    assert chess.snapshot(locator).status == "live"
-    round_now.update(tiebreak("1-0", "1-0", "0-1", finished=True))
-    done = chess.snapshot(locator)
-    assert (done.status, done.lines[CARLSEN].headline, done.clock_label) == ("final", "Lost the match 1–2 vs Denis Lazavik", "Denis Lazavik won the match (3 games)")
-    assert done.state["match"]["ahead"] == LAZAVIK  # who won it, whichever player's fixture is read
-    # Lichess never saying the round's over and no game 2 coming, game 1 is over GRACE after it was first seen so.
-    round_now.update(tiebreak("1-0"))
-    assert chess.snapshot(locator).status == "live"
-    kept[f"lichess:over:{round_now['games'][0]['id']}"] = str(time.time() - lichess_chess.GRACE)
-    assert chess.snapshot(locator).status == "final"
+    snap = chess.snapshot({"round": rnd, "fide": CARLSEN})
+    assert (snap.status, snap.lines[CARLSEN].headline, snap.clock_label) == ("final", "Won with White vs Denis Lazavik", "Magnus Carlsen won")
+    game1, game2 = chess.fixtures(carlsen)
+    assert (game1.source_id, game1.status, lichess_chess.result_label(game1, [CARLSEN]), game1.unlisted) == (f"{rnd}-{CARLSEN}", "final", "Won 1–0", False)
+    assert (game2.source_id, game2.status, game2.next_up, game2.unlisted, game2.locator) == (f"{rnd}-{CARLSEN}-2", "scheduled", True, True, {"round": rnd, "fide": CARLSEN, "game": 2})
+    assert (game2.title, game2.detail, game2.board) == ("Denis Lazavik vs Magnus Carlsen", "Tiebreaks · Game 2", "")  # colours changed, as a match's games go
+    to_come = chess.snapshot(game2.locator)
+    assert (to_come.status, to_come.clock_label) == ("scheduled", "Game 2, if it's played")
+    # Game 2 under way: its fixture's poll finds it, live, with the match's score; game 1's board says which it was.
+    round_now.update(tiebreak("1-0", "*"))
+    on = chess.snapshot(game2.locator)
+    assert (on.status, on.state["game_id"], on.lines[CARLSEN].headline) == ("live", round_now["games"][1]["id"], "Black vs Denis Lazavik")
+    assert on.state["mini_match"] == {"game": 2, "label": "Game 2", "games": 1, "score": "1–0", "ahead": CARLSEN}
+    assert chess.snapshot({"round": rnd, "fide": CARLSEN}).state["mini_match"]["label"] == "Game 1"
+    assert chess.match(f"{rnd}-{LAZAVIK}-2").snapshot.status == "live"  # type: ignore[union-attr]
+    assert [(f.source_id, f.status, f.unlisted) for f in chess.fixtures(carlsen)] == [(f"{rnd}-{CARLSEN}", "final", False), (f"{rnd}-{CARLSEN}-2", "live", False)]
+    # Carlsen wins game 2 too, and no game 3 comes in GRACE: game 3's fixture is off, shown nowhere, and not listed again.
+    round_now.update(tiebreak("1-0", "0-1"))
+    game3 = chess.fixtures(carlsen)[-1]
+    assert (game3.source_id, game3.unlisted, chess.snapshot(game3.locator).status) == (f"{rnd}-{CARLSEN}-3", True, "scheduled")
+    kept[f"lichess:over:{round_now['games'][1]['id']}"] = str(time.time() - lichess_chess.GRACE)
+    assert chess.snapshot(game3.locator).status == "postponed"
+    assert [f.source_id for f in chess.fixtures(carlsen)] == [f"{rnd}-{CARLSEN}", f"{rnd}-{CARLSEN}-2"]
 
-    # In a round robin's round (other pairings in it, no knockout in its names), a game over is over at once, as before.
+    # In a round robin's round (other pairings in it, no knockout in its names), a game over is over, and none follows.
     other = {"id": "otherbrd", "status": "*", "fen": "", "players": [{"name": "Caruana, Fabiano", "fideId": 2020009}, {"name": "So, Wesley", "fideId": 5202213}]}
     robin = tiebreak("1-0")
     robin.update(round={**robin["round"], "name": "Round 5"}, tour={**robin["tour"], "name": "Tata Steel Masters 2027", "info": {"format": "14-player round robin"}},
@@ -504,17 +526,19 @@ def as_pgn(data: dict) -> str:
     return "\n".join(out)
 
 
-def test_a_tiebreak_round_lichess_calls_finished_between_its_games_is_on_till_its_match_is_won(monkeypatch):
-    # BUG-210 reopened (R4): Lichess calls a round finished as soon as every game in it has a result, and on again as
-    # the next game's first moves come, so a tiebreak's round says it's finished between its games. The World
-    # Championship's, as Lichess serves it: Gukesh wins game 1 with White, Sindarov games 2 and 3. Between games the
-    # board is on, by its polls and a refresh alike: no "Won with White" after game 1, no "Match drawn" at 1–1. Once
-    # no game has followed the last for GRACE, the match, 1–2, from either side.
+def test_a_tiebreak_lichess_calls_finished_between_its_games_has_each_game_and_the_next_armed(monkeypatch):
+    # BHA-675 (was BUG-210 reopened, R4): Lichess calls a round finished as soon as every game in it has a result, and
+    # on again as the next game's first moves come. The World Championship's tiebreak as Lichess serves it: Gukesh wins
+    # game 1 with White, Sindarov games 2 and 3. Each game is over as it's decided, by its polls and a refresh alike, and
+    # between games the next one's fixture is armed, unlisted, by the refresh that first sees the last over (reading the
+    # round's own games, not the event's PGN). No game 4 in GRACE: it's off, and the match is 2–1 to Sindarov.
     round_now: dict = {}
+    asked: list[str] = []
 
     def get_json(url, ttl, text=False):
+        asked.append(url)
         if url.endswith(".pgn"):
-            return as_pgn(round_now)  # a finished round's games, for a refresh
+            return as_pgn(round_now)
         return {"tour": round_now["tour"], "rounds": [round_now["round"]]} if url.endswith(f"broadcast/{WCH['id']}") else round_now
 
     monkeypatch.setattr(lichess_chess, "get_json", get_json)
@@ -522,40 +546,37 @@ def test_a_tiebreak_round_lichess_calls_finished_between_its_games_is_on_till_it
     monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: kept)
     monkeypatch.setattr(lichess_chess.LichessChess, "_tours", lambda self, ref, now: [round_now["tour"]])
     chess = lichess_chess.LichessChess()
+    gukesh = PlayerRef("lichess_chess", GUKESH, "Gukesh D", [GUKESH], ["Gukesh D"])
 
-    def look(*results: str, finished_ago: float | None = None) -> list[tuple[str, str, str, str, str]]:
-        """Each player's board as a poll reads it and their fixture as a refresh does: the board's status, their line
-        and its clock; the fixture's status and result."""
+    def look(*results: str, finished_ago: float | None = None) -> list[tuple[str, str, str, str]]:
+        """Gukesh's fixtures as a refresh reads them: each one's address after the round's and his, its status, its
+        result, and whether it's unlisted ("u")."""
         round_now.clear()
         round_now.update(wch_tiebreak(*results, finished_ago=finished_ago))
-        out = []
-        for fide, name in ((GUKESH, "Gukesh D"), (SINDAROV, "Javokhir Sindarov")):
-            snap = chess.snapshot({"round": WCH_TIEBREAKS, "fide": fide})
-            [fixture] = chess.fixtures(PlayerRef("lichess_chess", fide, name, [fide], [name]))
-            out.append((snap.status, snap.lines[fide].headline, snap.clock_label, fixture.status, lichess_chess.result_label(fixture, [fide])))
-        return out
+        return [(f.source_id.removeprefix(f"{WCH_TIEBREAKS}-{GUKESH}"), f.status, lichess_chess.result_label(f, [GUKESH]), "u" if f.unlisted else "") for f in chess.fixtures(gukesh)]
 
-    assert look("*") == [("live", "White vs Javokhir Sindarov", "Move 1 · Black to play", "live", ""), ("live", "Black vs D Gukesh", "Move 1 · Black to play", "live", "")]
-    # Game 1 over: Lichess calls the round finished till game 2's first moves.
-    assert [(status, line, refreshed) for status, line, _, refreshed, _ in look("1-0", finished_ago=0)] == [("live", "White vs Javokhir Sindarov", "live"), ("live", "Black vs D Gukesh", "live")]
-    assert {s[0] for s in look("1-0", "*")} == {"live"}  # game 2 under way: on again
-    assert look("1-0", "1-0", finished_ago=0) == [("live", "Black vs Javokhir Sindarov", "Game 2 done", "live", ""), ("live", "White vs D Gukesh", "Game 2 done", "live", "")]
-    assert {s[0] for s in look("1-0", "1-0", "*")} == {"live"}
-    assert {(s[0], s[3]) for s in look("1-0", "1-0", "0-1", finished_ago=0)} == {("live", "live")}  # game 3 over: a game 4 may follow
-    # No game 4, GRACE on: the match is over, as its polls read it; a refresh says so once its copies' age is past too.
-    over = [("final", "Lost the match 1–2 vs Javokhir Sindarov", "Javokhir Sindarov won the match (3 games)"),
-            ("final", "Won the match 2–1 vs D Gukesh", "Javokhir Sindarov won the match (3 games)")]
-    assert [(s[:3], s[3]) for s in look("1-0", "1-0", "0-1", finished_ago=lichess_chess.GRACE)] == [(over[0], "live"), (over[1], "live")]
-    assert look("1-0", "1-0", "0-1", finished_ago=lichess_chess.GRACE + lichess_chess.ROUNDS_TTL) == [(*over[0], "final", "Lost 1–2"), (*over[1], "final", "Won 2–1")]
+    assert look("*") == [("", "live", "", "")]
+    assert look("1-0", finished_ago=0) == [("", "final", "Won 1–0", ""), ("-2", "scheduled", "", "u")]
+    assert not [url for url in asked if url.endswith(".pgn")]  # a round just over is read from its own games
+    assert look("1-0", "*") == [("", "final", "Won 1–0", ""), ("-2", "live", "", "")]
+    assert look("1-0", "1-0", finished_ago=0) == [("", "final", "Won 1–0", ""), ("-2", "final", "Lost 1–0", ""), ("-3", "scheduled", "", "u")]
+    assert look("1-0", "1-0", "0-1", finished_ago=0)[-2:] == [("-3", "final", "Lost 0–1", ""), ("-4", "scheduled", "", "u")]
+    # Game 3's board: Sindarov's win with Black, the match 2–1 to him, said alike from either side.
+    for fide in (GUKESH, SINDAROV):
+        snap = chess.snapshot({"round": WCH_TIEBREAKS, "fide": fide, "game": 3})
+        assert (snap.status, snap.clock_label, snap.state["mini_match"]) == ("final", "Javokhir Sindarov won", {"game": 3, "label": "Game 3", "games": 3, "score": "2–1", "ahead": SINDAROV})
+    assert chess.snapshot({"round": WCH_TIEBREAKS, "fide": GUKESH, "game": 4}).status == "scheduled"
+    # No game 4, GRACE on: off, as its poll reads it, and a refresh lists the three games played.
+    assert [f[:3] for f in look("1-0", "1-0", "0-1", finished_ago=lichess_chess.GRACE)] == [("", "final", "Won 1–0"), ("-2", "final", "Lost 1–0"), ("-3", "final", "Lost 0–1")]
+    assert chess.snapshot({"round": WCH_TIEBREAKS, "fide": GUKESH, "game": 4}).status == "postponed"
 
 
-def test_a_refresh_calls_a_tiebreak_over_no_sooner_than_its_polls_and_from_its_games_as_they_ended(monkeypatch):
-    # A refresh's copies of a tournament's rounds and PGN may be older than a poll's round (kept ten minutes; the PGN a
-    # day once every round is finished), and a refresh calling a board over that its polls have live closes it with
-    # nothing told (structured.finish). The World Championship's tiebreak is its event's last round: game 3 over,
-    # Lichess calls every round finished, and the PGN copy at hand is from while game 3 was played. The refresh has
-    # the board live, as its polls do, and the PGN isn't kept a day while the round's last games may be missing from
-    # it. Its copies past their age and GRACE on, it's over: 1–2, not the "Drew 1–1" of the old copy.
+def test_a_refresh_just_after_a_tiebreaks_game_reads_the_rounds_own_games_not_an_older_pgn(monkeypatch):
+    # A refresh's copy of a tournament's PGN may be older than its round's games (kept ten minutes; a day once every
+    # round is finished). The World Championship's tiebreak is its event's last round: game 3 over, Lichess calls every
+    # round finished, and the PGN copy at hand is from while game 3 was played. A round over less than GRACE (and its
+    # rounds' copy's age) ago is read from its own games, as its polls read them: game 3 is over, and game 4's fixture
+    # armed, by the refresh that first sees it so (BHA-675). Past that, from the PGN, a copy read after it ended.
     copy = {"pgn": wch_tiebreak("1-0", "1-0", "*")}  # the PGN as last read: game 3 being played
     round_now = wch_tiebreak("1-0", "1-0", "0-1", finished_ago=0)
     asked: list[tuple[str, float]] = []
@@ -571,14 +592,11 @@ def test_a_refresh_calls_a_tiebreak_over_no_sooner_than_its_polls_and_from_its_g
     monkeypatch.setattr(lichess_chess.LichessChess, "_tours", lambda self, ref, now: [WCH])
     chess = lichess_chess.LichessChess()
     gukesh = PlayerRef("lichess_chess", GUKESH, "Gukesh D", [GUKESH], ["Gukesh D"])
-    [fixture] = chess.fixtures(gukesh)
-    assert (fixture.status, fixture.result) == ("live", None)
-    assert [ttl for url, ttl in asked if url.endswith(".pgn")] == [lichess_chess.ROUNDS_TTL]  # not a day's copy
+    assert [(f.status, lichess_chess.result_label(f, [GUKESH]), f.unlisted) for f in chess.fixtures(gukesh)[2:]] == [("final", "Lost 0–1", False), ("scheduled", "", True)]
+    assert not [url for url, _ in asked if url.endswith(".pgn")]
     copy["pgn"] = round_now
-    for ago, status, result in ((lichess_chess.GRACE, "live", ""), (lichess_chess.GRACE + lichess_chess.ROUNDS_TTL, "final", "Lost 1–2")):
-        round_now.update(wch_tiebreak("1-0", "1-0", "0-1", finished_ago=ago))
-        [fixture] = chess.fixtures(gukesh)
-        assert (fixture.status, lichess_chess.result_label(fixture, [GUKESH])) == (status, result), ago
+    round_now.update(wch_tiebreak("1-0", "1-0", "0-1", finished_ago=lichess_chess.GRACE + lichess_chess.ROUNDS_TTL))
+    assert [(f.status, lichess_chess.result_label(f, [GUKESH])) for f in chess.fixtures(gukesh)] == [("final", "Won 1–0"), ("final", "Lost 1–0"), ("final", "Lost 0–1")]
     # The event over: a copy is taken if it was read after its last round ended, up to a day old.
     url, ttl = asked[-1]
     assert url == f"{lichess_chess.API}broadcast/{WCH['id']}.pgn" and abs(ttl - lichess_chess.GRACE) < 5  # ended GRACE + ROUNDS_TTL ago
@@ -591,8 +609,8 @@ def test_a_refresh_long_after_a_tiebreak_ended_doesnt_take_a_pgn_copy_from_befor
     # The reviewer's case, through the source cache itself: the World Championship's tiebreak, its event's last round. A
     # refresh read the event's PGN five minutes before game 3 ended, game 3 still being played; the next comes 45
     # minutes after the round ended (a tick skipped, a 429, a restart). Every round over long enough, a day-old copy
-    # would do, and that one said "Drew 1–1", final, kept a day. A copy is taken only if it was read after the round
-    # ended (and its rounds' copy, ROUNDS_TTL old at most, could say so): this one is read again, and the match is 1–2.
+    # would do, and that one had game 3 unfinished, kept a day. A copy is taken only if it was read after the round
+    # ended (and its rounds' copy, ROUNDS_TTL old at most, could say so): this one is read again, and game 3 is over.
     clock = {"now": time.time()}
     monkeypatch.setattr(cache, "time", SimpleNamespace(time=lambda: clock["now"]))
     monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: Kept())
@@ -606,84 +624,93 @@ def test_a_refresh_long_after_a_tiebreak_ended_doesnt_take_a_pgn_copy_from_befor
     lichess_chess.get_json(pgn_url, ttl=lichess_chess.ROUNDS_TTL, text=True)  # the copy a refresh read, game 3 on
     clock["now"] += ended + 5 * 60
     answers[pgn_url] = httpx.Response(200, text=as_pgn(wch_tiebreak("1-0", "1-0", "0-1")))
-    [fixture] = lichess_chess.LichessChess().fixtures(PlayerRef("lichess_chess", GUKESH, "Gukesh D", [GUKESH], ["Gukesh D"]))
-    assert (fixture.status, lichess_chess.result_label(fixture, [GUKESH])) == ("final", "Lost 1–2")
+    fixtures = lichess_chess.LichessChess().fixtures(PlayerRef("lichess_chess", GUKESH, "Gukesh D", [GUKESH], ["Gukesh D"]))
+    assert [(f.status, lichess_chess.result_label(f, [GUKESH])) for f in fixtures] == [("final", "Won 1–0"), ("final", "Lost 1–0"), ("final", "Lost 0–1")]
 
 
-def test_the_recorded_grand_finals_board_between_its_sets_isnt_won(monkeypatch):
-    # BUG-210 reopened (R4): the Esports World Cup's grand final, sets of 4, 4 and 2 games in one round. After set 1
-    # (Carlsen 3–1) every game in the round had a result, so Lichess called the round finished till set 2's first move,
-    # and the board read "Magnus Carlsen won the match (4 games)"; he won it 6–2. It's on between sets, by a poll and a
-    # refresh alike; the whole final, finished long since, is over, and nothing waits on it.
+def test_the_recorded_grand_finals_next_set_is_armed_between_sets(monkeypatch):
+    # BUG-210 reopened (R4), BHA-675: the Esports World Cup's grand final, sets of 4, 4 and 2 games in one round. After
+    # set 1 (Carlsen 3–1) every game in the round had a result, so Lichess called the round finished till set 2's first
+    # move. Game 4 is over, its own result, and game 5's fixture armed, unlisted, by a poll and a refresh alike; it's
+    # live once set 2 starts. The whole final, finished long since, has no game to follow, and no clock is started.
     data = load("lichess/round-final")
     now = datetime.now(timezone.utc)
     kept = Kept()
     monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: kept)
     set1 = {**data, "round": {**data["round"], "finishedAt": int(now.timestamp() * 1000)}, "games": data["games"][:4]}
     for fide in (CARLSEN, LAZAVIK):
-        mine = lichess_chess.games_of(set1, fide)
-        snap = lichess_chess.parse_board(set1, fide, now, lichess_chess.LichessChess._waited(set1, fide))
-        fixture = lichess_chess.fixture_for(set1["tour"], set1["round"], mine, fide, now, lichess_chess.may_follow(set1, mine), lichess_chess.LichessChess._waited(set1, fide))
-        assert (snap.status, snap.clock_label, fixture.status, fixture.result) == ("live", "Game 4 done", "live", None)
+        waited = lichess_chess.LichessChess._waited(set1, fide)
+        fixtures = lichess_chess.round_fixtures(set1["tour"], set1["round"], set1, lichess_chess.games_of(set1, fide), fide, now, waited)
+        assert [(f.locator["game"], f.status, f.unlisted) for f in fixtures] == [(1, "final", False), (2, "final", False), (3, "final", False), (4, "final", False), (5, "scheduled", True)]
+        assert lichess_chess.parse_board(set1, fide, now, waited, game=5).status == "scheduled"
+        assert lichess_chess.parse_board(set1, fide, now, waited, game=4).state["mini_match"]["score"] == "3–1"
     on = {**data, "round": {**{k: v for k, v in data["round"].items() if k not in ("finished", "finishedAt")}, "ongoing": True},
           "games": [*data["games"][:4], {**data["games"][4], "status": "*"}]}
-    assert lichess_chess.parse_board(on, CARLSEN, now).status == "live"  # set 2 under way
+    assert lichess_chess.parse_board(on, CARLSEN, now, game=5).status == "live"  # set 2 under way
     kept.clear()
-    whole = lichess_chess.parse_board(data, CARLSEN, now, lichess_chess.LichessChess._waited(data, CARLSEN))
-    assert (whole.status, whole.score_label, whole.clock_label) == ("final", "Magnus Carlsen 6–2 Denis Lazavik", "Magnus Carlsen won the match (8 games)")
+    assert lichess_chess.next_game(data, lichess_chess.games_of(data, CARLSEN), now, lichess_chess.LichessChess._waited(data, CARLSEN)) is None
     assert kept == {}  # no clock started for a round Lichess says ended long since
 
 
-def test_a_mini_match_won_while_its_round_plays_on_is_over_grace_after_its_last_game(monkeypatch):
-    # BUG-274 (R4): a knockout's quarterfinal round of two pairings. Carlsen beats Lazavik 2–0 while Nakamura and
-    # Firouzja play on: his board stayed live ("Game 2 done") till the whole round ended, hours on, holding its result.
-    # A mini-match is over GRACE after its last game with no next one, as one game is; the board being played is live.
+def test_a_mini_matchs_game_is_over_at_once_while_its_round_plays_on(monkeypatch):
+    # BUG-274 (R4), BHA-675: a knockout's quarterfinal round of two pairings. Carlsen beats Lazavik 2–0 while Nakamura and
+    # Firouzja play on: his game 2 is over as it's decided, not when the round ends, and game 3's fixture waits GRACE.
     tour = {"id": "EwcPo026", "name": "Esports World Cup 2026 | Playoffs", "info": {"format": "8-player Knockout"}}
     round_now = lichess_round("EwcQf001", "Quarterfinals", tour, [board_of("qf000001", C, L, "1-0"), board_of("qf000002", L, C, "0-1"), board_of("qf000003", N, F, "*")])
     monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: round_now)
     kept = Kept()
     monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: kept)
     chess = lichess_chess.LichessChess()
-    snap = chess.snapshot({"round": "EwcQf001", "fide": CARLSEN})
-    assert (snap.status, snap.clock_label) == ("live", "Game 2 done")  # a game 3 may follow
+    snap = chess.snapshot({"round": "EwcQf001", "fide": LAZAVIK, "game": 2})
+    assert (snap.status, snap.clock_label, snap.lines[LAZAVIK].headline) == ("final", "Magnus Carlsen won", "Lost with White vs Magnus Carlsen")
+    assert snap.state["mini_match"] == {"game": 2, "label": "Game 2", "games": 2, "score": "2–0", "ahead": CARLSEN}
+    assert chess.snapshot({"round": "EwcQf001", "fide": CARLSEN, "game": 3}).status == "scheduled"  # a game 3 may follow
     kept["lichess:over:qf000002"] = str(time.time() - lichess_chess.GRACE)  # none has, GRACE on
-    snap = chess.snapshot({"round": "EwcQf001", "fide": LAZAVIK})
-    assert (snap.status, snap.clock_label, snap.lines[LAZAVIK].headline) == ("final", "Magnus Carlsen won the match (2 games)", "Lost the match 0–2 vs Magnus Carlsen")
+    assert chess.snapshot({"round": "EwcQf001", "fide": CARLSEN, "game": 3}).status == "postponed"
     assert chess.snapshot({"round": "EwcQf001", "fide": NAKAMURA}).status == "live"
 
     # A next game's board made ahead, no move yet, is no game under way, though Lichess then says the round's finished
-    # (each game in it has a result or hasn't started): Nakamura and Firouzja at 1–1, their armageddon's board out. On
-    # till it starts and while it's played; decided, over at once (an armageddon decides).
+    # (each game in it has a result or hasn't started): Nakamura and Firouzja at 1–1, their armageddon's board out. It's
+    # the next game, armed, unlisted, called so; decided, over at once, and nothing follows an armageddon.
     armageddon = board_of("qf000006", F, N, "*", moved=False, name="Firouzja, Alireza - Nakamura, Hikaru (Armageddon)")
     pair = [board_of("qf000003", N, F, "1-0"), board_of("qf000004", F, N, "1-0")]
     round_now.update(lichess_round("EwcQf001", "Quarterfinals", tour, [*round_now["games"][:2], *pair, armageddon], finished_ago=0))
-    assert chess.snapshot({"round": "EwcQf001", "fide": NAKAMURA}).status == "live"
+    now = datetime.now(timezone.utc)
+    fixtures = lichess_chess.round_fixtures(tour, round_now["round"], round_now, lichess_chess.games_of(round_now, NAKAMURA), NAKAMURA, now, chess._waited(round_now, NAKAMURA))
+    assert [(f.locator["game"], f.status, f.unlisted, f.board, f.detail) for f in fixtures] == [
+        (1, "final", False, "qf000003", "Quarterfinals · Game 1"), (2, "final", False, "qf000004", "Quarterfinals · Game 2"), (3, "scheduled", True, "qf000006", "Quarterfinals · Armageddon")]
+    assert chess.snapshot({"round": "EwcQf001", "fide": NAKAMURA, "game": 3}).status == "scheduled"
     round_now.update(lichess_round("EwcQf001", "Quarterfinals", tour, [*round_now["games"][:4], {**armageddon, "status": "½-½", "fen": PLAYED, "lastMove": "e2e3"}], finished_ago=0))
-    snap = chess.snapshot({"round": "EwcQf001", "fide": NAKAMURA})
-    assert (snap.status, snap.clock_label) == ("final", "Hikaru Nakamura won on armageddon (3 games)")
-    # And one made ahead that wasn't needed: Nakamura 2–0, GRACE on, over, its board the last game played.
+    snap = chess.snapshot({"round": "EwcQf001", "fide": NAKAMURA, "game": 3})
+    assert (snap.status, snap.clock_label) == ("final", "Hikaru Nakamura won on armageddon")
+    assert snap.state["mini_match"] == {"game": 3, "label": "Armageddon", "games": 3, "score": "2–1", "ahead": NAKAMURA}
+    assert lichess_chess.next_game(round_now, lichess_chess.games_of(round_now, NAKAMURA), now) is None
+    # And one made ahead that wasn't needed: Nakamura 2–0, GRACE on: off, and not one of his games.
     round_now.update(lichess_round("EwcQf001", "Quarterfinals", tour, [*round_now["games"][:2], pair[0], {**pair[1], "status": "0-1"}, armageddon], finished_ago=lichess_chess.GRACE))
-    snap = chess.snapshot({"round": "EwcQf001", "fide": NAKAMURA})
-    assert (snap.status, snap.clock_label, snap.state["game_id"]) == ("final", "Hikaru Nakamura won the match (2 games)", "qf000004")
+    assert chess.snapshot({"round": "EwcQf001", "fide": NAKAMURA, "game": 3}).status == "postponed"
+    later = datetime.now(timezone.utc)
+    assert [f.locator["game"] for f in lichess_chess.round_fixtures(tour, round_now["round"], round_now, lichess_chess.games_of(round_now, NAKAMURA), NAKAMURA, later)] == [1, 2]
 
 
 def test_a_round_robins_decided_game_isnt_held_for_an_armageddon_that_wont_follow():
     # R4's cross-talk on BUG-274: Norway Chess, a round robin whose drawn games go to an armageddon in the same round,
-    # says so in its format, which was taken for a knockout's: a decisive classical game was held live GRACE (30
-    # minutes) for an armageddon that never follows a win. It's over at once; a draw waits for its armageddon, and the
-    # armageddon, which decides, is over at once.
+    # says so in its format, which was taken for a knockout's. A decisive classical game has no armageddon to follow;
+    # a draw is over too (BHA-675), and its armageddon may follow; the armageddon, which decides, is a game of its own.
     tour = {"id": "NorChs27", "name": "Norway Chess 2027", "info": {"format": "6-player double round robin, Armageddon after a draw"}}
     classical = [board_of("nc000001", G, S, "1-0"), board_of("nc000002", C, N, "½-½"), board_of("nc000003", L, F, "*")]  # the third still on
     data = lichess_round("NorRnd03", "Round 3", tour, classical)
+    now = datetime.now(timezone.utc)
     won = lichess_chess.parse_board(data, GUKESH)
     assert (won.status, won.lines[GUKESH].headline) == ("final", "Won with White vs Javokhir Sindarov")
-    assert not lichess_chess.may_follow(data, lichess_chess.games_of(data, GUKESH))
-    assert lichess_chess.parse_board(data, CARLSEN).status == "live" and lichess_chess.may_follow(data, lichess_chess.games_of(data, CARLSEN))
+    assert not lichess_chess.may_follow(data, lichess_chess.games_of(data, GUKESH)) and lichess_chess.next_game(data, lichess_chess.games_of(data, GUKESH), now) is None
+    assert lichess_chess.parse_board(data, CARLSEN).status == "final" and lichess_chess.next_game(data, lichess_chess.games_of(data, CARLSEN), now) == 2
     armageddon = board_of("nc000004", N, C, "*", name="Nakamura, Hikaru - Carlsen, Magnus (Armageddon)")
-    assert lichess_chess.parse_board(lichess_round("NorRnd03", "Round 3", tour, [*classical, armageddon]), CARLSEN).status == "live"
+    with_it = lichess_round("NorRnd03", "Round 3", tour, [*classical, armageddon])
+    assert lichess_chess.parse_board(with_it, CARLSEN, game=2).status == "live"
+    assert "mini_match" not in lichess_chess.parse_board(with_it, CARLSEN).state  # the classical game is its round's
     decided = lichess_round("NorRnd03", "Round 3", tour, [*classical, {**armageddon, "status": "½-½", "fen": PLAYED}])
-    snap = lichess_chess.parse_board(decided, CARLSEN)
-    assert (snap.status, snap.clock_label) == ("final", "Magnus Carlsen won on armageddon (2 games)")  # a draw, Black's win
+    snap = lichess_chess.parse_board(decided, CARLSEN, game=2)
+    assert (snap.status, snap.clock_label, snap.state["mini_match"]["label"]) == ("final", "Magnus Carlsen won on armageddon", "Armageddon")  # a draw, Black's win
 
 
 def test_a_swiss_game_and_a_matchs_classical_game_are_over_once_decided_whatever_the_round_says():
@@ -1257,15 +1284,15 @@ def test_tournament_pgn_gives_every_round_in_one_read():
 def test_an_unplayed_chess_game_isnt_a_game():
     # BUG-214: the recorded Esports World Cup third-place match. Nakamura won it 3–1 after four games, and the
     # broadcast lists a fifth, "1-0" with no move and Termination "Unplayed": it was scored as his win, "Won 4–1"
-    # (5 games), and in form.
+    # (5 games), and in form. Four games, each its own (BHA-675).
     with gzip.open(FIXTURES / "lichess/tour-ewc-playoffs.pgn.gz", "rt") as f:
         games = lichess_chess.parse_pgn_rounds(f.read())["Py6uVlbB"]
     nakamura, firouzja = "2016192", "12573981"
     now = datetime(2026, 9, 29, tzinfo=timezone.utc)
     rnd, tour = {"id": "Py6uVlbB", "name": "3rd Place Match", "finished": True}, {"name": "Esports World Cup 2026 | Playoffs"}
-    mine, theirs = (lichess_chess.fixture_for(tour, rnd, lichess_chess.games_of({"games": games}, fide), fide, now) for fide in (nakamura, firouzja))
-    assert (lichess_chess.result_label(mine, [nakamura]), lichess_chess.result_label(theirs, [firouzja])) == ("Won 3–1", "Lost 1–3")
-    assert mine.result["games"] == 4
+    whole = {"round": rnd, "tour": tour, "games": games}
+    mine, theirs = (lichess_chess.round_fixtures(tour, rnd, whole, lichess_chess.games_of(whole, fide), fide, now) for fide in (nakamura, firouzja))
+    assert (len(mine), sum(f.result["points"] for f in mine), sum(f.result["points"] for f in theirs)) == (4, 3, 1)  # type: ignore[index]
     # A game with a result and no move (a forfeit) wasn't played either, whatever its Termination says; one with a move was.
     forfeit = ('[White "A"]\n[Black "B"]\n[Result "1-0"]\n[WhiteFideId "1"]\n[BlackFideId "2"]\n[Termination "forfeit"]\n'
                '[GameURL "https://lichess.org/broadcast/t/r/abcdefgh/ijklmnop"]\n\n 1-0\n\n'
@@ -1278,9 +1305,22 @@ def test_an_unplayed_chess_game_isnt_a_game():
     played = [{**g, "fen": "8/8/4k3/8/8/4K3/8/8 w - - 0 50", "lastMove": "e2e3"} for g in games if g["status"] != "1-0"]
     data = {"round": {**rnd, "url": "https://lichess.org/broadcast/x/y/Py6uVlbB"}, "tour": tour,
             "games": [*played, {"id": "Q3GR2FUs", "players": games[-1]["players"], "fen": start, "status": "1-0"}]}
-    snap = lichess_chess.parse_board(data, nakamura, now)
-    assert (snap.clock_label, snap.lines[nakamura].headline) == ("Hikaru Nakamura won the match (4 games)", "Won the match 3–1 vs Alireza Firouzja")
-    assert snap.state["match"]["games"] == 4 and snap.state["game_id"] == played[-1]["id"]  # the board shown is the last game played
+    snap = lichess_chess.parse_board(data, nakamura, now, game=4)
+    assert (snap.state["game_id"], snap.state["mini_match"]["score"], snap.state["mini_match"]["ahead"]) == (played[-1]["id"], "3–1", nakamura)
+    assert lichess_chess.parse_board(data, nakamura, now, game=5).status == "postponed"  # the unplayed fifth is no game
+
+
+def test_chess_live_now_shows_a_mini_matchs_game_as_its_own(monkeypatch):
+    # BHA-675: Bharath's So v Caruana, the U.S. Championship's playoff: game 1 drawn, game 2 under way. Live now shows the
+    # game being played, under each player's fixture of that game, which game of the match it is in its competition, and
+    # its own clock, not "Match ½–½".
+    so, caruana = fide_player("So, Wesley", "5202213", 2750), fide_player("Caruana, Fabiano", "2020009", 2795)
+    tour = {"id": "Bkg9PAup", "name": "U.S. Chess Championships 2026 | Open", "info": {"format": "12-player Round Robin"}}
+    round_now = lichess_round("NjR9Q2b2", "Playoff | Rapid", tour, [board_of("Grfje7nH", caruana, so, "½-½"), board_of("lCdzfmUe", so, caruana, "*")])
+    [game] = lichess_chess.live_boards(round_now, "lichess_chess")
+    assert (game.source_id, game.fixtures) == ("NjR9Q2b2:lCdzfmUe", ["NjR9Q2b2-5202213-2", "NjR9Q2b2-2020009-2"])
+    assert (game.competition, game.snapshot.status, game.snapshot.clock_label) == ("U.S. Chess Championships 2026 | Open · Playoff | Rapid · Game 2", "live", "Move 1 · Black to play")
+    assert game.snapshot.state["mini_match"] == {"game": 2, "label": "Game 2", "games": 1, "score": "½–½", "ahead": None}
 
 
 def test_tournament_pgn_reads_tags_with_escaped_quotes():

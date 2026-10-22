@@ -96,9 +96,9 @@ def test_a_sport_without_sections_lists_the_key_events_and_a_chess_board_says_it
 def test_a_live_chess_game_lists_its_moves_so_far_and_those_added_since():
     # Its read's moves (the PGN's) under whichever board is newest, and the moves added since as the board gave them.
     told = {"game_id": "g3", "moves": [[1, "d4", "Nf6"], [2, "c4", "e6"]], "more": ["g1f3", 7], "opening": "Indian"}
-    state = {"kind": "chess", "game_id": "g3", "fen": "x", "match": {"games": 2, "score": "1½–½"}, "page_detail": told}
+    state = {"kind": "chess", "game_id": "g3", "fen": "x", "mini_match": {"game": 3, "label": "Game 3", "games": 2, "score": "1½–½"}, "page_detail": told}
     assert sports.get("chess").match_page(state, [], {}, {}) == {"moves": ["1. d4 Nf6", "2. c4 e6"], "more": ["g1f3"], "opening": "Indian", "ending": None, "game": 3}
-    # A newer board of the mini-match's next game doesn't take the last game's moves.
+    # A board of another game doesn't take this game's moves.
     assert sports.get("chess").match_page({**state, "game_id": "g4"}, [], {}, {}) == {}
     # Once it's over, the finished game's own moves stand, not a live read's.
     over = {"kind": "chess", "moves": [[1, "d4", "Nf6"], [2, "c4", "e6"], [3, "Nf3", "d5"]], "opening": "QGD", "ending": "resigned", "page_detail": told}
@@ -107,7 +107,7 @@ def test_a_live_chess_game_lists_its_moves_so_far_and_those_added_since():
 
 def test_a_finished_chess_game_lists_its_moves_in_pairs_with_its_opening():
     state = {"kind": "chess", "moves": [[1, "d4", "Nf6"], [2, "c4", "e6"], [3, "Nf3", None]], "opening": "Queen's Gambit Declined", "ending": "resigned",
-             "match": {"games": 8, "score": "6–2"}}
+             "mini_match": {"game": 8, "label": "Game 8", "games": 8, "score": "6–2"}}
     assert sports.get("chess").match_page(state, [], {}, {}) == {"moves": ["1. d4 Nf6", "2. c4 e6", "3. Nf3"], "opening": "Queen's Gambit Declined", "ending": "resigned", "game": 8}
     black_first = {"kind": "chess", "moves": [[12, None, "e5"], [13, "Nf3", "Nc6"], "junk", [14, None, None]]}  # a game set up with Black to move
     assert sports.get("chess").match_page(black_first, [], {}, {})["moves"] == ["12... e5", "13. Nf3 Nc6"]
@@ -120,7 +120,7 @@ def test_a_finished_chess_game_lists_its_moves_in_pairs_with_its_opening():
     ("cricket", {"kind": "cricket"}, "India won by 57 runs", "India won by 57 runs"),
     ("cricket", {"kind": "cricket"}, "Match tied (India won the Super Over)", "Match tied (India won the Super Over)"),
     ("cricket", {"kind": "cricket"}, "Result", ""),  # the source's summary still to come: the league's line says it, or nothing
-    ("chess", {"kind": "chess"}, "Magnus Carlsen won the match (8 games)", "Magnus Carlsen won the match (8 games)"),
+    ("chess", {"kind": "chess"}, "Magnus Carlsen won on armageddon", "Magnus Carlsen won on armageddon"),
     ("Valorant", {"kind": "esports", "teams": [{"id": "1", "name": "Sentinels", "score": 2, "winner": True}, {"id": "2", "name": "NRG", "score": 1, "winner": False}]}, "Final", "Sentinels won 2–1"),
     ("Valorant", {"kind": "esports", "forfeit": True, "teams": [{"id": "1", "name": "Sentinels", "score": 0}, {"id": "2", "name": "NRG", "score": 0, "winner": True}]}, "Forfeit", "NRG won by forfeit"),
     ("BGMI", {"kind": "battle_royale", "standings": [{"name": "Soul", "place": 2}, {"name": "GodLike", "place": 1}]}, "", "GodLike won the lobby"),

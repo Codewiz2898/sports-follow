@@ -98,8 +98,7 @@ def board_key(key: str | None, board: str) -> str | None:
 @dataclass
 class Fixtures:
     """A game under several fixtures (a chess board is one of each player's, each polled as an event of its own), as
-    one of them knows it: the players on it here by their ids in its source, and each one's fixture of it, the same
-    all through a mini-match's games."""
+    one of them knows it: the players on it here by their ids in its source, and each one's fixture of it."""
 
     players: dict[str, int]
     events: dict[int, int]  # player id: their fixture's event
@@ -582,7 +581,7 @@ def _refresh(player_id: int) -> None:
         kind = sports.BY_KEY.get(adapter.sport_of(ref))
         if kind and kind.group and sports.get(player.sport) is not kind:
             player.sport = kind.label  # an esports pro's sport is their game (bound as "Esports", or changed games)
-        events = {f.source_id: upsert_event(db, adapter, player, f) for f in [*finals_all, *ahead]}
+        events = {f.source_id: upsert_event(db, adapter, player, f) for f in [*finals_all, *ahead, *waiting(fixtures)]}
         dropped = unpicked(db, adapter, player_id, fixtures)
         for f, snap in recent:
             if snap:
@@ -649,9 +648,17 @@ def unpicked(db: Session, adapter: Adapter, player_id: int, fixtures: list[Fixtu
 def upcoming(fixtures: list[Fixture], now: datetime) -> list[Fixture]:
     """The games still to come or under way, at most UPCOMING_LIMIT. A "scheduled" game long past its
     start is one the source never updated, and a postponed one long past is off (or waits for a new
-    date): both are left out. Not one its source says is next (Fixture.next_up), whose start is only its day."""
+    date): both are left out. Not one its source says is next (Fixture.next_up), whose start is only its day.
+    Nor one not shown till it starts (Fixture.unlisted: waiting)."""
     stale = now - timedelta(hours=12)
-    return [f for f in fixtures if f.status != "final" and not (f.status in ("scheduled", "postponed") and f.start_utc and f.start_utc < stale and not f.next_up)][:UPCOMING_LIMIT]
+    return [f for f in fixtures if f.status != "final" and not f.unlisted
+            and not (f.status in ("scheduled", "postponed") and f.start_utc and f.start_utc < stale and not f.next_up)][:UPCOMING_LIMIT]
+
+
+def waiting(fixtures: list[Fixture]) -> list[Fixture]:
+    """The games that may follow, not shown till they start (Fixture.unlisted): their events are made and armed with
+    the rest, so their start is seen when it comes, but they're left out of Coming up (upcoming)."""
+    return [f for f in fixtures if f.unlisted and f.status != "final"]
 
 
 def finish(unfinished: dict[int, Snapshot | None]) -> None:
@@ -1092,7 +1099,7 @@ def _evaluate(rules: sports.Sport, db: Session, event_id: int, snap: Snapshot, l
     follower wants to hear about swings, and put the game's latest evaluation (engine.py) into the state,
     settled by the sport once for the board (each followed player's event of it takes the same). A game
     with its result is evaluated no more: the engine lets go of it, and its last evaluation stays as it
-    was, so nothing turns after the result (a mini-match stays live after its game is decided)."""
+    was, so nothing turns after the result (a source slow to call a decided game over)."""
     state = snap.state
     game, fen = state.get("game_id"), state.get("fen")
     if not (game and fen and engine.enabled()):

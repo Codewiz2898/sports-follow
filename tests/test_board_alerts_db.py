@@ -77,8 +77,29 @@ def db(monkeypatch):
     engine_.dispose()
 
 
-def binding(fide: str) -> dict:
-    return {"adapter": "lichess_chess", "locator": {"round": ROUND, "fide": fide}, "cadence": 15}
+def binding(fide: str, game: int = 1) -> dict:
+    """A player's fixture's live binding: of the board's game, or of a mini-match's nth (fixture_id's "-<n>")."""
+    return {"adapter": "lichess_chess", "locator": {"round": ROUND, "fide": fide, **({"game": game} if game > 1 else {})}, "cadence": 15}
+
+
+def next_games(db, game: int, first_id: int) -> dict[int, tuple[int, str, int]]:
+    """Each player's fixture of the mini-match's nth game, armed as a refresh arms one that may follow (unlisted), as
+    events first_id (Carlsen's) and first_id + 1; by event, (player, FIDE id, game) as polls_of takes them."""
+    out = {}
+    for event_id, (player_id, fide) in zip((first_id, first_id + 1), SIDES.values(), strict=True):
+        db.add(Event(id=event_id, key=f"lichess_chess:{ROUND}-{fide}-{game}", sport="Chess", title="Magnus Carlsen vs Denis Lazavik", competition="Esports World Cup 2026",
+                     start_utc=db.get(Event, 1).start_utc, status="armed", live_binding=binding(fide, game)))
+        db.flush()
+        db.add(EventPlayer(event_id=event_id, player_id=player_id))
+        out[event_id] = (player_id, fide, game)
+    db.commit()
+    return out
+
+
+def polls_of(chess: lichess_chess.LichessChess, fixtures: dict[int, tuple[int, str, int]]) -> None:
+    """A poll of each of these fixtures, by the source's own read of its game."""
+    for event_id, (player_id, fide, game) in fixtures.items():
+        structured.apply_poll(event_id, binding(fide, game), SOURCE, [(player_id, fide)], chess.snapshot(binding(fide, game)["locator"]))
 
 
 class Redis(Store):
@@ -391,100 +412,108 @@ def test_a_moment_whose_tellers_fixture_has_stopped_polling_still_arrives(db, po
     assert polls.toasts[-1]["title"] == "Denis Lazavik is in trouble" and "voice" not in polls.toasts[-1]  # an open app shows it too
 
 
-def test_a_mini_match_is_one_notification_through_its_games(db, polls):
-    # A knockout's mini-match is several games on one board, each with an id of its own; its fixtures, one a player,
-    # last the whole match, and so does its notification.
-    def match(event_id: int, played: int, status: str = "live") -> Snapshot:
+def test_each_game_of_a_mini_match_is_a_notification_of_its_own(db, polls):
+    # BHA-675: a knockout's mini-match is several games, each with an id of its own and a fixture of each player's: a
+    # game's moments are on its own notification, the next game's on another, as any two games are.
+    def match(game: int, fide: str, status: str = "live") -> Snapshot:
         data = load("lichess/round-final")
-        games = [*data["games"][:played], {**data["games"][played], "status": "*"}]
+        games = [*data["games"][:game - 1], {**data["games"][game - 1], "status": "*"}]
         to_come = status == "scheduled"
         rnd = {**data["round"], "finished": False, "ongoing": not to_come, "startsAt": int((NOW + timedelta(days=1 if to_come else -1)).timestamp() * 1000)}
-        return lichess_chess.parse_board({**data, "round": rnd, "games": games}, SIDES[event_id][1], NOW)
+        return lichess_chess.parse_board({**data, "round": rnd, "games": games}, fide, NOW, game=game)
+
+    def poll_game(fixtures: dict[int, tuple[int, str, int]], status: str = "live", band: int | None = None, order: tuple[int, ...] = ()) -> None:
+        for event_id in order or fixtures:
+            player_id, fide, game = fixtures[event_id]
+            snap = match(game, fide, status)
+            if band is not None:
+                snap.state["eval"] = {"cp": band * 200, "band": band, "raw": band, "told": band if abs(band) == 2 else 0, "move": 41, "at": 41}
+            structured.apply_poll(event_id, binding(fide, game), SOURCE, [(player_id, fide)], snap)
 
     phones(db)
-    for event_id in (1, 2):
-        poll(event_id, match(event_id, 0, "scheduled"))
-        poll(event_id, match(event_id, 0), band=0)
-    poll(1, match(1, 0), band=2, move=41)  # game 1: Carlsen, with White, pulls ahead
-    poll(2, match(2, 0), band=2, move=41)
-    for event_id in (1, 2):
-        poll(event_id, match(event_id, 1), band=0)  # game 2 starts: a new board id
-    # Game 2: Lazavik, with White now, pulls ahead at the same move: the same band from White's side as game 1's,
-    # another game's swing all the same.
-    poll(2, match(2, 1), band=2, move=41)
-    poll(1, match(1, 1), band=2, move=41)
-    tags = {(fan, title): tag for fan, title, tag, _ in polls.pushed}
-    assert {tags[("carlsen", "Magnus Carlsen is winning")], tags[("lazavik", "Denis Lazavik is winning")], tags[("both", "Denis Lazavik is winning")]} == {"e1"}
-    assert [title for fan, title, *_ in polls.pushed if fan == "both"] == ["Magnus Carlsen is playing", "Magnus Carlsen is winning", "Denis Lazavik is winning"]
-    assert [title for fan, title, *_ in polls.pushed if fan == "carlsen"] == ["Magnus Carlsen is playing", "Magnus Carlsen is winning", "Magnus Carlsen is in trouble"]
-    assert len({tag for *_, tag, _ in polls.pushed}) == 1  # every push of the match, either side's, on one notification
+    first = {event_id: (player_id, fide, 1) for event_id, (player_id, fide) in SIDES.items()}
+    second = next_games(db, 2, 3)
+    poll_game(first, "scheduled")
+    poll_game(first, band=0)
+    poll_game(first, band=2)  # game 1: Carlsen, with White, pulls ahead
+    poll_game(second, "scheduled")
+    poll_game(second, band=0)  # game 2 starts
+    poll_game(second, band=2, order=(4, 3))  # Lazavik, with White now, pulls ahead at the same move: another game's swing
+    tags = {(fan, title, tag) for fan, title, tag, _ in polls.pushed}
+    assert {("both", "Magnus Carlsen is playing", "e1"), ("both", "Magnus Carlsen is winning", "e1"), ("both", "Denis Lazavik is playing", "e3"),
+            ("both", "Denis Lazavik is winning", "e3")} <= tags
+    assert [title for fan, title, *_ in polls.pushed if fan == "carlsen"] == ["Magnus Carlsen is playing", "Magnus Carlsen is winning", "Magnus Carlsen is playing", "Magnus Carlsen is in trouble"]
+    assert {tag for *_, tag, _ in polls.pushed} == {"e1", "e3"}  # a notification a game
 
 
-def test_a_tiebreak_round_tells_who_won_its_match_once_its_over_not_its_first_game(db, polls, monkeypatch):
-    # A World Championship's tiebreak round, its games shown one at a time (BUG-210): Carlsen wins game 1 with White,
-    # Lazavik games 2 and 3. Through the source's own reads: game 1 over with game 2 not out yet tells nothing and the
-    # board is still polled; once the round's over, each fan hears the match, 1–2, once, and so does a fan following
-    # the game itself.
+def test_a_tiebreaks_games_are_each_told_with_the_match_as_it_stands(db, polls, monkeypatch):
+    # A World Championship's tiebreak round, its games shown one at a time (BUG-210), each a game of its own (BHA-675):
+    # Carlsen wins game 1 with White, Lazavik game 2 with White. Through the source's own reads: game 1's result is told
+    # as soon as it's over, to fans of either player, of both, and of the game itself; game 2's fixtures, armed while it
+    # may come, tell its start once it's on and its result with the match as it leaves it, level; the fan who followed
+    # game 1 by itself isn't told game 2 (Bharath's call).
     round_now: dict = {}
     monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: round_now)
     chess = lichess_chess.LichessChess()
     db.add_all([MatchFollow(fan_id="watcher", event_id=1, alert_rules={}, keys=[]),
                 PushSubscription(fan_id="watcher", endpoint="https://fcm.googleapis.com/fcm/send/watcher", p256dh="k", auth="a")])
     phones(db)
+    first = {event_id: (player_id, fide, 1) for event_id, (player_id, fide) in SIDES.items()}
+    second = next_games(db, 2, 3)
+    said: dict[str, tuple[str, str]] = {}  # the last look's pushes, each fan's title and its body's first line (the game's story so far under it)
 
-    def look(*results: str, **when: bool) -> None:
+    def look(*results: str, **when: bool) -> dict[str, list[str]]:
         round_now.clear()
         round_now.update(tiebreak(*results, **when))
-        for event_id in (1, 2):
-            poll(event_id, chess.snapshot({"round": ROUND, "fide": SIDES[event_id][1]}))
-
-    look("*", to_come=True)
-    look("*")
-    polls.pushed.clear()  # the start
-    look("1-0")
-    assert heard(polls.pushed) == {} and {db.get(Event, e).status for e in (1, 2)} == {"live"}  # type: ignore[union-attr]
-    look("1-0", "*")
-    look("1-0", "1-0")
-    assert heard(polls.pushed) == {}
-    look("1-0", "1-0", "0-1", finished=True)
-    db.expire_all()
-    assert {db.get(Event, e).status for e in (1, 2)} == {"final"}  # type: ignore[union-attr]
-    assert heard(polls.pushed) == {"carlsen": ["Magnus Carlsen: Lost the match 1–2 vs Denis Lazavik"], "lazavik": ["Denis Lazavik: Won the match 2–1 vs Magnus Carlsen"],
-                                   "both": ["Denis Lazavik: Won the match 2–1 vs Magnus Carlsen"], "watcher": ["Magnus Carlsen vs Denis Lazavik: Denis Lazavik won the match (3 games)"]}
-
-
-def test_a_tiebreak_round_lichess_calls_finished_between_its_games_tells_only_its_match(db, polls, monkeypatch):
-    # BUG-210 reopened (R4): Lichess calls a round finished as soon as every game in it has a result, and on again as the
-    # next game's first moves come. The World Championship's tiebreak in that shape (the recording's players: Carlsen
-    # wins game 1 with White, Lazavik games 2 and 3), through the source's own reads and the poller: nothing told between
-    # games, neither "Won with White" after game 1 nor "Match drawn" at 1–1, and both events still polled; GRACE after
-    # game 3 with no game 4, each fan hears the match, 2–1, once, and so does a fan following the game itself.
-    round_now: dict = {}
-    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: round_now)
-    chess = lichess_chess.LichessChess()
-    db.add_all([MatchFollow(fan_id="watcher", event_id=1, alert_rules={}, keys=[]),
-                PushSubscription(fan_id="watcher", endpoint="https://fcm.googleapis.com/fcm/send/watcher", p256dh="k", auth="a")])
-    phones(db)
-
-    def look(*results: str, **when) -> set[str]:
-        round_now.clear()
-        round_now.update(tiebreak(*results, **when))
-        for event_id in (1, 2):
-            poll(event_id, chess.snapshot({"round": ROUND, "fide": SIDES[event_id][1]}))
+        polls_of(chess, {**first, **second})
         db.expire_all()
-        return {db.get(Event, e).status for e in (1, 2)}  # type: ignore[union-attr]
+        said.clear()
+        said.update({fan: (title, body.split("\n")[0]) for fan, title, _, body in polls.pushed})
+        return heard(polls.pushed)
+
+    look("*", to_come=True)
+    look("*")  # the start
+    assert look("1-0") == {"carlsen": ["Magnus Carlsen: Won with White vs Denis Lazavik"], "lazavik": ["Denis Lazavik: Lost with Black vs Magnus Carlsen"],
+                           "both": ["Magnus Carlsen: Won with White vs Denis Lazavik"], "watcher": ["Magnus Carlsen vs Denis Lazavik: Magnus Carlsen won"]}
+    assert [db.get(Event, e).status for e in (1, 2, 3, 4)] == ["final", "final", "armed", "armed"]  # type: ignore[union-attr]  # game 2 may follow
+    started = look("1-0", "*")
+    # Once to a fan of both, from the side whose poll found it first: before its start neither side had a board to say
+    # it was being polled (told_lately).
+    assert (started["carlsen"], started["lazavik"], len(started["both"]), "watcher" in started) == (["Magnus Carlsen is playing"], ["Denis Lazavik is playing"], 1, False)
+    look("1-0", "1-0")
+    assert said == {"carlsen": ("Magnus Carlsen: Lost with Black vs Denis Lazavik", "Denis Lazavik 1–0 Magnus Carlsen · Match level 1–1"),
+                    "lazavik": ("Denis Lazavik: Won with White vs Magnus Carlsen", "Denis Lazavik 1–0 Magnus Carlsen · Match level 1–1"),
+                    "both": ("Denis Lazavik: Won with White vs Magnus Carlsen", "Denis Lazavik 1–0 Magnus Carlsen · Match level 1–1")}
+    assert [db.get(Event, e).status for e in (3, 4)] == ["final", "final"]  # type: ignore[union-attr]
+
+
+def test_a_tiebreak_lichess_calls_finished_between_its_games_tells_each_game_and_a_game_that_never_comes_nothing(db, polls, monkeypatch):
+    # BUG-210 reopened (R4), BHA-675: Lichess calls a round finished as soon as every game in it has a result, and on
+    # again as the next game's first moves come. The World Championship's tiebreak in that shape: Carlsen wins game 1
+    # with White, and no game 2 comes. Game 1 is told as it's over; game 2's fixtures, armed, tell nothing while it may
+    # come, and GRACE on with none, they're put off, polled no more, with nothing told.
+    round_now: dict = {}
+    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: round_now)
+    chess = lichess_chess.LichessChess()
+    phones(db)
+    first = {event_id: (player_id, fide, 1) for event_id, (player_id, fide) in SIDES.items()}
+    second = next_games(db, 2, 3)
+
+    def look(*results: str, **when) -> list[str]:
+        round_now.clear()
+        round_now.update(tiebreak(*results, **when))
+        polls_of(chess, {**first, **second})
+        db.expire_all()
+        return [db.get(Event, e).status for e in (1, 2, 3, 4)]  # type: ignore[union-attr]
 
     look("*", to_come=True)
     look("*")
     polls.pushed.clear()  # the start
-    assert look("1-0", finished=True, ago=0) == {"live"} and heard(polls.pushed) == {}  # game 1 over, the round "finished"
-    assert look("1-0", "*") == {"live"}
-    assert look("1-0", "1-0", finished=True, ago=0) == {"live"} and heard(polls.pushed) == {}  # 1–1
-    assert look("1-0", "1-0", "*") == {"live"}
-    assert look("1-0", "1-0", "0-1", finished=True, ago=0) == {"live"} and heard(polls.pushed) == {}
-    assert look("1-0", "1-0", "0-1", finished=True, ago=lichess_chess.GRACE) == {"final"}
-    assert heard(polls.pushed) == {"carlsen": ["Magnus Carlsen: Lost the match 1–2 vs Denis Lazavik"], "lazavik": ["Denis Lazavik: Won the match 2–1 vs Magnus Carlsen"],
-                                   "both": ["Denis Lazavik: Won the match 2–1 vs Magnus Carlsen"], "watcher": ["Magnus Carlsen vs Denis Lazavik: Denis Lazavik won the match (3 games)"]}
+    assert look("1-0", finished=True, ago=0) == ["final", "final", "armed", "armed"]  # game 1 over, the round "finished"
+    assert heard(polls.pushed) == {"carlsen": ["Magnus Carlsen: Won with White vs Denis Lazavik"], "lazavik": ["Denis Lazavik: Lost with Black vs Magnus Carlsen"],
+                                   "both": ["Magnus Carlsen: Won with White vs Denis Lazavik"]}
+    assert look("1-0", finished=True, ago=lichess_chess.GRACE) == ["final", "final", "postponed", "postponed"]
+    assert heard(polls.pushed) == {}
 
 
 def test_the_same_two_meeting_again_later_are_another_game(db, polls):

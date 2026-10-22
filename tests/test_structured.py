@@ -154,13 +154,29 @@ def test_a_chess_board_to_come_is_one_game_under_each_players_fixture(monkeypatc
     # A round not paired yet is the same game under both too, as every round read paired the two of them: a match's
     # (BUG-215; a round robin's stays each player's own: test_new_adapters).
     assert [u["game_key"] for u in unpaired] == ["lichess_chess:round:Rnd2Late"] * 2
-    # A knockout round's mini-match too: its fixture says the board parse_board shows, the last game once it's over.
-    final = lichess_chess.fixture_for(data["tour"], data["round"], lichess_chess.games_of(data, CARLSEN), CARLSEN, NOW)
-    assert structured.board_key(f"lichess_chess:{final.source_id}", final.board) == structured.game_key(f"lichess_chess:{final.source_id}", lichess_chess.parse_board(data, CARLSEN, NOW).state)
+    # A mini-match's games too, each a game of its own (BHA-675): each one's fixture says the board parse_board shows.
+    games = lichess_chess.games_of(data, CARLSEN)
+    for n in (1, 8):
+        each = lichess_chess.fixture_for(data["tour"], data["round"], games[n - 1], CARLSEN, NOW)
+        assert structured.board_key(f"lichess_chess:{each.source_id}", each.board) == structured.game_key(f"lichess_chess:{each.source_id}", lichess_chess.parse_board(data, CARLSEN, NOW, game=n).state)
     # Where the fixture is the game (a football match, one for both sides), its event says it: no key of its own.
     ref = PlayerRef("sportmonks_football", "7", "Bukayo Saka", ["19"], ["Arsenal"], None)
     match = Fixture(source_id="556", title="Chelsea vs Arsenal", competition="Premier League", start_utc=NOW, venue=None, status="scheduled", team_ids=["18", "19"], locator={})
     assert structured._upcoming_item(match, Event(id=6, key="sportmonks_football:556", title=match.title, status="scheduled"), ref)["game_key"] is None
+
+
+def test_a_game_that_may_follow_is_made_and_armed_but_not_shown_till_it_starts():
+    # BHA-675: a chess mini-match's next game, which its source shows only once it's under way and which may never be
+    # played: its event is made and armed with the player's other games (waiting), so its start is seen when it comes,
+    # but Coming up leaves it out (upcoming), where a game that never comes would sit.
+    now = datetime.now(timezone.utc)
+    over = Fixture(source_id="r1-1", title="A vs B", competition="Cup", start_utc=now - timedelta(minutes=40), venue=None, status="final", team_ids=["1"], locator={})
+    follows = Fixture(source_id="r1-1-2", title="B vs A", competition="Cup", start_utc=now - timedelta(minutes=40), venue=None, status="scheduled", team_ids=["1"],
+                      locator={}, next_up=True, unlisted=True)
+    later = Fixture(source_id="r2-1", title="A vs C", competition="Cup", start_utc=now + timedelta(days=1), venue=None, status="scheduled", team_ids=["1"], locator={})
+    assert structured.upcoming([over, follows, later], now) == [later]
+    assert structured.waiting([over, follows, later]) == [follows]
+    assert structured.waiting([over, replace(follows, status="final"), later]) == []  # once it's a game over, it's a result
 
 
 def test_final_snapshot_moves_the_game_from_upcoming_to_results():

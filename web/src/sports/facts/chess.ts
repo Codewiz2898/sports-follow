@@ -13,9 +13,12 @@ export interface ChessState {
   turn?: 'white' | 'black'
   move?: number | null
   result?: string | null
-  // Knockout rounds: several games between the same two players. Its score is from the side of the player whose
-  // fixture it was read under (the page's), and `ahead` the id of who leads it, if anyone does.
-  match?: { games: number; score: string; ahead?: string | null; first?: string } | null
+  armageddon?: boolean
+  // A mini-match's game (a knockout's tiebreak, an armageddon after a draw): each is a game of its own, and this its
+  // place in the match: its number, what it's called ("Game 2", "Armageddon"), and the match's score as it stands
+  // over the games decided up to it (this one's too once it's decided), the leader's points first, `ahead` the id of
+  // who leads (none while level).
+  mini_match?: { game: number; label: string; games: number; score: string; ahead?: string | null } | null
   eval?: ChessEval | null  // only while a follower wants to hear about swings: the engine looks at no other game
 }
 export type ChessColour = 'white' | 'black'
@@ -25,7 +28,7 @@ export type ChessColour = 'white' | 'black'
 export interface ChessEval { cp?: number | null; mate?: number | null; depth?: number | null; fen?: string; at?: number; move?: number | null; band?: number; raw?: number; told?: number }
 // A game's match page (the server's Chess.match_page): its moves in pairs ("1. d4 Nf6"); while it's on, those its
 // source added since the last read of them, as the board gave each ("d5e3": more); its opening, how it ended where
-// that says more than the result ("resigned"), and in a mini-match the number of the game they're of.
+// that says more than the result ("resigned"), and of a mini-match's game its number in the match.
 export interface ChessPage { moves?: string[]; more?: string[] | null; opening?: string | null; ending?: string | null; game?: number | null }
 
 /** The line over a finished game's moves: its opening, and how it ended ("Resigned"). */
@@ -126,23 +129,21 @@ export function gameMoves(pairs: string[]): string[] | null {
   return sans.length ? sans : null
 }
 
-/** The big line between the players: in a knockout's mini-match, its score with the leader's points first, and while
- * it's on (`on`) who that is ("Gukesh D leads 2–0"; once it's over the note under it names the winner), the same
- * whichever player's page it is and however the board is turned; a game's result once it's over ("1–0", White's
- * first), else the clock. */
-export function chessMiddle(state: ChessState, clock?: string | null, on = true): string | null | undefined {
-  const match = state.match
-  if (!match) return state.result ? state.result.replace('-', '–') : clock
-  const leader = [state.white, state.black].find((s) => s?.id && s.id === match.ahead)
-  const [mine = '', theirs = ''] = match.score.split('–')
-  if (!leader) return `Match\u00a0${match.score}`  // level (or read before it said who leads)
-  const [high, low] = points(mine) >= points(theirs) ? [mine, theirs] : [theirs, mine]
-  return on ? `${leader.name} leads\u00a0${high}–${low}` : `Match\u00a0${high}–${low}`  // a long name may wrap; the score stays whole
+/** The big line between the players: the game's result once it's over ("1–0", White's first), else the clock; a
+ * mini-match's game's too, each a game of its own (its place in the match is the line under it: miniMatch). */
+export function chessMiddle(state: ChessState, clock?: string | null): string | null | undefined {
+  return state.result ? state.result.replace('-', '–') : clock
 }
 
-/** A match score's points ("2½" is 2.5). */
-function points(said: string): number {
-  return (Number.parseInt(said, 10) || 0) + (said.endsWith('½') ? 0.5 : 0)
+/** The small line under a mini-match's game's big line: which game of the match it is, and the match's score as it
+ * stands, by the leader's name ("Game 2 · Caruana leads 1½–½", "Armageddon · Level 2–2"; "Game 1" before any is
+ * decided), the same whichever player's page it is and however the board is turned. Null for a round's one game. */
+export function miniMatch(state: ChessState): string | null {
+  const match = state.mini_match
+  if (!match?.label) return null
+  if (!match.games || !match.score) return match.label
+  const leader = [state.white, state.black].find((s) => s?.id && s.id === match.ahead)
+  return `${match.label} · ${leader ? `${leader.name} leads` : 'Level'}\u00a0${match.score}`  // a long name may wrap; the score stays whole
 }
 
 export const chess: SportFacts = {

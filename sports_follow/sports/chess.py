@@ -136,6 +136,16 @@ def _sides(now: Seen) -> tuple[str, str, str]:
     return mine, theirs, white
 
 
+def _mini_match(state: dict[str, Any]) -> str:
+    """Where a mini-match's game leaves the match (its source's state["mini_match"]), by name: "Caruana leads the match
+    1½–½", "Match level 1–1"; "" for a game of a round's one, or before any of the match's games is decided."""
+    match = state.get("mini_match") or {}
+    if not match.get("games") or not match.get("score"):
+        return ""
+    leader = next((p.get("name") for p in (state.get("white") or {}, state.get("black") or {}) if p.get("id") and str(p["id"]) == str(match.get("ahead") or "")), None)
+    return f"{leader} leads the match {match['score']}" if leader else f"Match level {match['score']}"
+
+
 def _won(text: str, priority: int = 0) -> Poster | None:
     """A win as a poster, from a result's line at the end of `text` ("Won with Black vs Firouzja", or a
     moment's "Gukesh D: Won the match 2–1 vs So")."""
@@ -197,16 +207,26 @@ class Chess(Sport):
     # who follows both hears it from one (Found.voice): a swing from the side it went toward, the result from the
     # winner's, the start and a draw from White's.
 
+    # A mini-match's games (a knockout's tiebreak, an armageddon after a draw) are each a game of their own, told as
+    # one is: its start, which game of the match it is, and its result, with the match's score as it leaves it.
+
     def start(self, who: str, now: Seen) -> Found:
         rnd = now.state.get("round") or "Their game"
+        game = (now.state.get("mini_match") or {}).get("label")
         opp = stat(now.line, "Opponent")
-        return Found("start", "key", f"{who} is playing", f"{rnd}{f' · vs {opp}' if opp else ''}", voice=_sides(now)[2])
+        return Found("start", "key", f"{who} is playing", " · ".join(x for x in (rnd, game, f"vs {opp}" if opp else None) if x), voice=_sides(now)[2])
 
     def final(self, who: str, now: Seen) -> Found:
         head = (now.line or {}).get("headline") or ""
         mine, theirs, white = _sides(now)
         voice = mine if head.startswith("Won") else theirs if head.startswith("Lost") else white
-        return Found("final", "key", f"{who}: {head or 'result'}", now.score, voice=voice)
+        return Found("final", "key", f"{who}: {head or 'result'}", " · ".join(x for x in (now.score, _mini_match(now.state)) if x), voice=voice)
+
+    def game_final(self, name: str, now: Played) -> Found:
+        """A game followed by itself: its result, as any game's, and of a mini-match's game the match as it leaves it."""
+        found = super().game_final(name, now)
+        found.body = " · ".join(x for x in (found.body, _mini_match(now.state)) if x)
+        return found
 
     def settle(self, before: dict[str, Any] | None, ev: dict[str, Any]) -> dict[str, Any]:
         return settle(before, ev)
@@ -215,7 +235,7 @@ class Chess(Sport):
         """A followed player's game turning, as the engine sees it (from their side)."""
         was, got = before.state.get("eval"), now.state.get("eval")
         if now.status != "live" or now.state.get("result") or not was or not got or before.state.get("game_id") != now.state.get("game_id"):
-            return []  # a decided game (a mini-match is live after it) turns no more
+            return []  # a decided game turns no more, nor one another game's poll was of
         if got.get("joined"):
             # Its first evaluation from the board's settles (engine.settled): held against the board's band before it,
             # not its own last one, which may be stale (a deploy, a lost key), so only a real turn is told.
@@ -250,7 +270,7 @@ class Chess(Sport):
         body = " · ".join(x for x in (f"Engine {_score(score, side)}", f"move {move}" if move else None, f"vs {opponent}" if opponent else None) if x)
         mine, theirs, _ = _sides(now)
         # Its game, its band from White's side and its move: the same from either side of the board, so each side's
-        # word for a swing is told as one play (alerts.voiced_by), and one game of a mini-match isn't taken for another.
+        # word for a swing is told as one play (alerts.voiced_by).
         return [Found("swing", level, title, body, f"{self.board(now.state)}w{got['band']}m{move or 0}", 85 if turnaround else 70 if level == "key" else 30,
                       voice=mine if new > old else theirs)]  # the side it went toward: level again, the one that came back
 
@@ -277,11 +297,11 @@ class Chess(Sport):
     def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
         """The board says the game; beside it, the moves that led there, a move number's pair to a line ("1. d4
         Nf6", "1... e5" where Black moved first). Once it's over, from its source's read of the finished game
-        (state["moves"]: [n, White's, Black's] each), with its opening and how it ended; of a mini-match, the
-        last game's, the one on the board (game: its number). While it's on, the moves so far as its source's
-        reads keep them (state["page_detail"], under whichever board is newest, but only the same game's: a
-        mini-match's next one is another), with its opening, and those added since as the board gives its last
-        move ("d5e3": more), which the app writes as moves; a game kept from its first move has those alone."""
+        (state["moves"]: [n, White's, Black's] each), with its opening and how it ended; of a mini-match's game,
+        its number in the match (game). While it's on, the moves so far as its source's reads keep them
+        (state["page_detail"], under whichever board is newest, but only the same game's), with its opening, and
+        those added since as the board gives its last move ("d5e3": more), which the app writes as moves; a game
+        kept from its first move has those alone."""
         told = {} if state.get("moves") else state.get("page_detail") or {}
         if told.get("game_id") != state.get("game_id"):
             told = {}
@@ -293,38 +313,32 @@ class Chess(Sport):
         more = [m for m in told.get("more") or [] if isinstance(m, str)]
         if not pairs and not more:
             return {}
-        match = state.get("match") or {}
+        game = (state.get("mini_match") or {}).get("game")
         if told:
-            game = match["games"] + (0 if state.get("result") else 1) if isinstance(match.get("games"), int) else None  # the one being played
             return {"moves": pairs, "more": more, "opening": told.get("opening"), "ending": None, "game": game}
-        return {"moves": pairs, "opening": state.get("opening"), "ending": state.get("ending"), "game": match.get("games")}
+        return {"moves": pairs, "opening": state.get("opening"), "ending": state.get("ending"), "game": game}
 
     def glance(self, state: dict[str, Any], score: str, clock: str, status: str | None, events: list[dict[str, Any]]) -> Glance:
-        """White and Black by name, each with their points: of a mini-match so far (state["match"]: its score is
-        from the side its score line names first), else of the game once it has a result ("1-0", "½-½"). Where it's
-        at: the move, or the game's result; of a mini-match, its game and move ("Game 2 · move 34"), "Final" once
-        it's decided."""
+        """White and Black by name, each with their points once the game has a result ("1-0", "½-½"). Where it's at:
+        the move, or the game's result; of a mini-match's game, which one it is too ("Game 2 · move 34",
+        "Armageddon · ½–½")."""
         white, black = state.get("white") or {}, state.get("black") or {}
         if not (white.get("name") and black.get("name")):
             return Glance([], clock or "")
-        match, result, move = state.get("match") or {}, state.get("result") or "", state.get("move")
-        points = ["", ""]
-        if match.get("score") and "–" in match["score"]:
-            first, _, second = match["score"].partition("–")
-            points = [second, first] if score.startswith(black["name"]) and not score.startswith(white["name"]) else [first, second]
-        elif "-" in result:
-            points = result.split("-", 1)
-        if match:
-            where = "Final" if status == "final" else f"Game {(match.get('games') or 0) + (0 if result else 1)}" + (f" · move {move}" if move and not result else "")
-        else:
-            where = result.replace("-", "–") if result else f"Move {move}" if move else clock or ""
+        result, move = state.get("result") or "", state.get("move")
+        points = result.split("-", 1) if "-" in result else ["", ""]
+        where = result.replace("-", "–") if result else f"Move {move}" if move else clock or ""
+        game = (state.get("mini_match") or {}).get("label")
+        if game and where:
+            where = f"{game} · {where[0].lower()}{where[1:]}" if where.startswith("Move") else f"{game} · {where}"
         return Glance([(white["name"], points[0]), (black["name"], points[1])], where)
 
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
-        return clock  # its source's words for a finished board: "Magnus Carlsen won", "Draw", "Match drawn (4 games)"
+        return clock  # its source's words for a finished board: "Magnus Carlsen won", "Draw"
 
     def high(self, f: Found, versus: str) -> Poster | None:
-        """A win, as the result's line has it: "Won with Black vs Firouzja", "Won the match 2–1 vs So"."""
+        """A win, as the result's line has it: "Won with Black vs Firouzja" (or, told before a mini-match's games were
+        each a game of their own, "Won the match 2–1 vs So")."""
         return _won(f.title)
 
     def finished_poster(self, line: Line, result: str, versus: str) -> Poster | None:
@@ -340,28 +354,21 @@ class Chess(Sport):
         return str(state.get("game_id") or "")
 
     def board_players(self, state: dict[str, Any]) -> tuple[str, ...]:
-        """White and Black by their FIDE ids, the same all through a mini-match's games."""
+        """White and Black by their FIDE ids."""
         return tuple(str(p["id"]) for p in (state.get("white") or {}, state.get("black") or {}) if p.get("id"))
 
     def pairing(self, state: dict[str, Any]) -> str:
-        """Its tournament's and round's names and its two players: a round is one meeting, its mini-match's games
-        and all."""
+        """Its tournament's and round's names, its two players and the game: a mini-match's games, its players' each
+        in the round, are each a game of its own, its fixtures told apart from the others'."""
         players, tournament, rnd = sorted(self.board_players(state)), state.get("tournament"), state.get("round")
-        return "|".join([str(tournament), str(rnd), *players]) if len(players) == 2 and tournament and rnd else ""
-
-    def question_board(self, state: dict[str, Any]) -> str:
-        """A mini-match's questions are its first game's board's: the round showed that game alone when they were
-        asked, before anyone could know more would follow (asks), and its next games, each a board of its own, find
-        them there."""
-        return str((state.get("match") or {}).get("first") or "") or self.board(state)
+        return "|".join([str(tournament), str(rnd), *players, self.board(state)]) if len(players) == 2 and tournament and rnd else ""
 
     def asks(self, state: dict[str, Any]) -> list[Ask]:
-        """Who wins, or a draw, once the round's pairing is out: the two players by their FIDE ids, White first. A
-        knockout round's mini-match (several games on one board) asks nothing more: each of its games shows only
-        once the one before is over, too late to call. The question its first game was asked, shown alone before
-        the start, is the match's (question_board, answer)."""
+        """Who wins, or a draw, once the round's pairing is out: the two players by their FIDE ids, White first. Of a
+        mini-match, its first game alone, shown before its start: the games after it show only once the one before is
+        over, too late to call (and one made ahead may never be played)."""
         white, black = state.get("white") or {}, state.get("black") or {}
-        if state.get("match") or not (state.get("game_id") and white.get("id") and black.get("id") and white.get("name") and black.get("name")):
+        if (state.get("mini_match") or {}).get("game", 1) > 1 or not (state.get("game_id") and white.get("id") and black.get("id") and white.get("name") and black.get("name")):
             return []
         return [Ask("result", "Who wins?", ((str(white["id"]), white["name"]), (DRAW, "Draw"), (str(black["id"]), black["name"])))]
 
@@ -369,16 +376,10 @@ class Chess(Sport):
         return status in ("live", "final") or bool(state.get("result"))
 
     def answer(self, ask: str, status: str | None, state: dict[str, Any]) -> str | None:
-        """The winner's FIDE id, or a draw, once the board's over: of a mini-match, who's ahead in it (state["match"]);
-        of one game, its result, where an armageddon drawn is Black's win. Its source keeps a game live while its
-        pairing's next may follow it in the round, so no game of a tiebreak answers for its match."""
+        """The winner's FIDE id, or a draw, once the game's over, an armageddon drawn being Black's win; of a
+        mini-match's game, that game's, as its first game's question is (asks)."""
         if status != "final":
             return None
-        match = state.get("match")
-        if match:
-            if "ahead" not in match:
-                return None  # a board read before it said who's ahead: the next read says
-            return str(match["ahead"]) if match["ahead"] else DRAW
         side = RESULTS.get(state.get("result") or "")
         if side is None:
             return None
@@ -387,10 +388,10 @@ class Chess(Sport):
         return DRAW if side == DRAW else str((state.get(side) or {}).get("id") or "") or None
 
     def resettles(self, ask: str, state: dict[str, Any]) -> bool:
-        """Not from a mini-match's board: its question was settled once its board was over, no next game having come
-        within its source's wait for one, so a game after that (a longer break) makes a match that settled answer wasn't
-        of, and what its fans were told stands. One game's result corrected settles it again."""
-        return not state.get("match")
+        """Not from a mini-match's game: its first game's question, asked before anyone knew more would follow, was
+        settled by who won the match till its games were each a game of their own, and what its fans were told then
+        stands; a read of that game now answers by its own result. One game's result corrected settles it again."""
+        return not state.get("mini_match")
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:
         scored = [p for p in (_points(r.get("result", "")) for r in items) if p]
@@ -401,8 +402,9 @@ class Chess(Sport):
         return [{"label": "Score", "value": f"{fmt(mine)}/{fmt(games)}"}, {"label": "Score %", "value": f"{100 * mine / games:.0f}%"}]
 
     def form_games(self, items: list[dict[str, Any]]) -> tuple[str, str]:
-        """Games, unless one of the results is a knockout's mini-match (several games, "Won 3½–2½"): then rounds, as the
-        record counts it once and the score each of its games ("W–D–L 9–6–2 · Score 22½/32 · Last 17 rounds")."""
+        """Games, unless one of the results is a knockout's mini-match, kept from before its games were each a result
+        of their own (several games, "Won 3½–2½"): then rounds, as the record counts it once and the score each of its
+        games ("W–D–L 9–6–2 · Score 22½/32 · Last 17 rounds")."""
         return ("round", "rounds") if any(sum(p) > 1 for p in (_points(r.get("result", "")) for r in items) if p) else self.games
 
     # ---- the Feed's content judge (curate.py)

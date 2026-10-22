@@ -690,15 +690,11 @@ class Sport:
         once whichever of a fan's players it's under (structured.game_key). "" where the fixture is the game."""
         return ""
 
-    def question_board(self, state: dict[str, Any]) -> str:
-        """The board a game's questions are asked and settled under (predictions.ensure): board's, unless a game goes on
-        over several boards (a chess mini-match's games), whose questions stay with the board they were asked of."""
-        return self.board(state)
-
     def resettles(self, ask: str, state: dict[str, Any]) -> bool:
         """Whether a board's answer to a question settled already, changed since, settles it again (predictions.settle):
         a result its source corrected, told its fans again. False where a board answers differently for another reason
-        (a chess mini-match's games after its board was over), so fans told how their pick went aren't told otherwise."""
+        (a chess mini-match's first game, whose question was once settled by the match), so fans told how their pick
+        went aren't told otherwise."""
         return True
 
     def board_players(self, state: dict[str, Any]) -> tuple[str, ...]:
@@ -709,7 +705,7 @@ class Sport:
 
     def pairing(self, state: dict[str, Any]) -> str:
         """Which meeting of its players a game under several fixtures is, as each of its fixtures' boards says it: the
-        same all through it, a mini-match's games too, and another for the same players meeting again (another round),
+        same all through it, and another for the same players meeting again (another round, a mini-match's next game),
         so its fixtures are told apart from theirs (structured.boards). By default its players alone; "" where its
         board can't say, and its fixtures aren't taken for one game (each side tells its own)."""
         return "|".join(sorted(self.board_players(state)))

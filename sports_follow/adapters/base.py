@@ -103,6 +103,10 @@ class Fixture:
     # (a chess round set to start after the previous one), or some time on its day (a lobby entered without a time,
     # whose start_utc is its day's). It's armed while it is, so its start is seen when it comes (structured.reschedule).
     next_up: bool = False
+    # A game that may follow, which the source shows only once it's under way and which may never be played (a chess
+    # mini-match's next game): its event is made and armed as next_up's is, so its start is seen when it comes, but it
+    # isn't shown (a card's Coming up) till then. Its source puts it off once it won't come.
+    unlisted: bool = False
 
 
 @dataclass

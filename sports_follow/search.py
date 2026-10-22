@@ -622,7 +622,7 @@ def preview(system: str, athlete_id: str, league: str | None) -> dict[str, Any] 
     if adapter.preview_fixtures:
         now = datetime.now(timezone.utc)
         fixtures = adapter.fixtures(ref)
-        ahead = [f for f in fixtures if f.status in ("scheduled", "live") and not (f.status == "scheduled" and f.start_utc and f.start_utc < now - timedelta(hours=12))]
+        ahead = [f for f in fixtures if f.status in ("scheduled", "live") and not f.unlisted and not (f.status == "scheduled" and f.start_utc and f.start_utc < now - timedelta(hours=12))]
         finals = [f for f in fixtures if f.status == "final"]
         if ahead:
             f = ahead[0]
