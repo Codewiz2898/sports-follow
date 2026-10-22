@@ -105,8 +105,8 @@ def live_map(game: dict[str, Any], teams: list[dict[str, Any]], players: dict[in
 NO_BUILDINGS = 0x01240724
 LANES = ("top", "mid", "bot")
 # A live map's gold line keeps its readings of the last two hours of the game, at most READINGS of them
-# (every read and poll adds one, a few a minute). The worker and the API add to it without a lock, so now
-# and then one reading is lost: a point of the line, nothing more.
+# (every read and poll adds one, and the worker one a minute for every series Live now lists: a few a minute).
+# They add to it without a lock, so now and then one reading is lost: a point of the line, nothing more.
 LINE_SPAN = 2 * 3600
 READINGS = 600
 

@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from sports_follow import controls, history, pipeline, registry, search, server, structured, tools, worker
+from sports_follow import controls, history, live, pipeline, registry, search, server, structured, tools, worker
 from sports_follow.adapters import ADAPTERS, KNOWN, PlayerRef, budget, lichess_chess, liquipedia, pandascore, pubg, sportmonks
 
 from .test_api import api  # noqa: F401  (the fixture)
@@ -108,6 +108,22 @@ def test_a_cold_chess_preview_and_its_follow_fit_in_lichesss_fans_share(api, mon
     assert asked == ["https://lichess.org/api/fide/player?q=46616543"]
     [fans] = [r for r in budget.usage([kept, lichess_chess.FIDE]) if r["lane"] == "fan"]
     assert (fans["source"], fans["sent_h"], fans["refused_h"]) == ("lichess", 1, 0) and 1 <= kept.fan < kept.reserve
+
+
+def test_work_nobody_waits_on_can_leave_a_share_of_every_window_to_the_rest():
+    """A source with no reserve (OpenDota's) still puts pages and polls first: what nobody waits on stops while any
+    window is down to its share, by our count or by what the source says is left of its longest window."""
+    two = budget.Budget("two", windows=(budget.Window(60, 30, margin=3), budget.Window(86400, 300, margin=30)))
+    for _ in range(16):
+        budget.take(two, lane_name="live")
+    assert budget.spare(two, lane_name="refresh", leave=1 / 3)  # 30 a minute, 3 never spent, 10 left to the rest: 17
+    budget.take(two, lane_name="live")
+    assert not budget.spare(two, lane_name="refresh", leave=1 / 3) and budget.spare(two, lane_name="refresh")
+    day = budget.Budget("day", windows=(budget.Window(60, 30, margin=3), budget.Window(86400, 300, margin=30)))
+    budget.observe(day, "", 103, 3600)  # of the day: within the smaller margin and a third of 300
+    assert not budget.spare(day, lane_name="refresh", leave=1 / 3) and budget.spare(day, lane_name="refresh")
+    budget.observe(day, "", 104, 3600)
+    assert budget.spare(day, lane_name="refresh", leave=1 / 3)
 
 
 def test_a_source_saying_slow_down_pauses_every_lane():
@@ -283,6 +299,7 @@ def test_whatever_the_api_asks_of_a_source_is_in_the_fan_lane(api, monkeypatch):
     ("history_lane", history, "run", (), "history"),
     ("import_registry", registry, "import_locked", (), "import"),
     ("warm_sources", worker, "_warm_sources", (), "refresh"),
+    ("keep_up_live", live, "keep_up", (), "refresh"),
 ])
 def test_each_worker_job_runs_in_its_lane(monkeypatch, job, module, target, args, lane_name):
     # A live poll outside the live lane would stop at the reserve kept for it.
