@@ -11,6 +11,10 @@ import { refetcher, type Clock, type Wait } from '../../web/src/refetch'
  * minutes (sports_follow/curator.py), so a moment brings nothing new to it sooner. */
 export const FEED: Wait = { after: 2 * 60_000, spread: 8 * 60_000, every: 20 * 60_000 }
 
+/** News heard this soon after a read at once is that read's: the follow list read again with it (coming back to the
+ * front, a pull) says there's news as it answers, within its time limit (deadline.ts's 15 s). */
+export const WITH_NOW = 20_000
+
 export interface FeedReads {
   now: () => void // a read at once (the follow list in or changed, a pull, back in front): one waiting is this one, and the 20 minutes count from it
   heard: () => void // there may be news: read once, after FEED's wait
@@ -21,9 +25,11 @@ export interface FeedReads {
  * coming back to it reads at once. */
 export function feedReads(read: () => void, front: () => boolean, random: () => number = Math.random, clock?: Clock): FeedReads {
   const later = refetcher(FEED, () => { if (front()) read() }, random, clock)
+  const time = clock ? clock.now : () => Date.now()
+  let readAt = -Infinity // the last read at once
   return {
-    now() { later.stop(); later.asked() },
-    heard: () => later.heard(),
+    now() { later.stop(); later.asked(); readAt = time() },
+    heard() { if (time() - readAt >= WITH_NOW) later.heard() },
     stop: () => later.stop(),
   }
 }
