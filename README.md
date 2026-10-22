@@ -897,8 +897,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   one by address, see who they follow and their devices, sign them out everywhere, block them from
   signing in, delete them). What it changes is rows in `control` (`sports_follow/controls.py`), which
   every process reads again every 10 seconds; `sports.ENABLED`, `adapters.ADAPTERS` and the source
-  budgets follow them. The server's settings stay the ceiling: a sport `SPORTS_FOLLOW_SPORTS` leaves out,
-  or a source `SPORTS_FOLLOW_SOURCES` leaves out or without its token, can't be turned on there. It opens
+  budgets follow them. A sport turned off while its games are on is safe: the next tick puts them off
+  (`structured.put_off`: no longer polled, nor LIVE on cards or phones), and once it's on again its
+  players' and teams' games are read at the next tick, which brings each back as its source has it.
+  The server's settings stay the ceiling: a sport `SPORTS_FOLLOW_SPORTS` leaves out, or a source
+  `SPORTS_FOLLOW_SOURCES` leaves out or without its token, can't be turned on there. It opens
   with a password of its own, not a fan's account, and a 6-digit code from an authenticator app (TOTP,
   RFC 6238; each code works once): `python -m sports_follow.admin password` saves the password's scrypt
   hash and `python -m sports_follow.admin code` the app's key, checked against a code from the app before

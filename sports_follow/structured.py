@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from sqlalchemy import and_, delete, func, or_, select, tuple_
+from sqlalchemy import and_, delete, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import distinct_on, insert
 from sqlalchemy.orm import Session
 
@@ -30,7 +30,7 @@ from . import bus, engine, livecards, matches, metrics, moments, naming, notify,
 from .adapters import ADAPTERS, KNOWN, NOT_FOUND, Adapter, AdapterError, Fixture, Line, NotFound, PlayerRef, Snapshot, budget, for_sport, providers, source_name
 from .config import ARM_BEFORE_START, POLL_SESSION
 from .db import session
-from .models import Event, EventPlayer, EventState, Follow, Player, PlayerCard, PlayerIdentity, PlayerLine, SourceBinding
+from .models import Event, EventPlayer, EventState, EventTeam, Follow, Player, PlayerCard, PlayerIdentity, PlayerLine, SourceBinding, Team
 
 log = logging.getLogger("sports_follow.structured")
 
@@ -453,8 +453,9 @@ def refresh(player_id: int) -> None:
     A player followed before their sport had an adapter is bound here first, and one bound to a source
     their sport has since moved off (ESPN football once Sportmonks runs) is bound again; a lookup that
     finds nobody isn't retried for BIND_RETRY seconds, and a moving player keeps the old source till then.
-    A source down to what its live games need isn't read (spare); a failure is noted in the binding's
-    health, which the scheduler waits on before the next try (retry_at).
+    A source down to what its live games need isn't read (spare), nor one whose share for this lane is spent
+    for now (budget.RateLimited): both are tried at the next tick, and neither is a failure. A failure is noted
+    in the binding's health, which the scheduler waits on before the next try (retry_at).
     """
     lock = f"structured:{player_id}"
     token = bus.try_lock(lock, REFRESH_LOCK)
@@ -474,6 +475,8 @@ def refresh(player_id: int) -> None:
             if not rebound and current is None:
                 return
         _refresh(player_id)
+    except budget.RateLimited as exc:
+        log.info("refresh %s: %s; next tick", player_id, exc)
     except AdapterError as exc:
         log.warning("refresh %s failed: %s", player_id, exc)
         _record_health(player_id, ok=False, error=str(exc))
@@ -647,6 +650,26 @@ def finish(unfinished: dict[int, Snapshot | None]) -> None:
     livecards.ended(unseen)  # and their live cards on Android phones come down
 
 
+def put_off(db: Session) -> list[int]:
+    """Armed and live games of a sport turned off in the admin panel, which isn't polled (_watching): put off, as a
+    game called off is ("postponed"), so they aren't polled or armed again, and once committed nothing of them
+    stays LIVE on a card (close_live) or a phone (livecards.ended), and a follow of one lapses as a postponed
+    game's does (matches.lapse). Not final, which no read undoes (_refresh's seen_final): their players' and teams'
+    games are read again at the first tick their sport is on, which brings each back as its source has it then
+    (next_status): under way, polled again from a fresh look; over, final with nothing told, its result old news.
+    Returns the games put off."""
+    playing = db.scalars(select(Event.sport).where(Event.status.in_(("armed", "live"))).distinct()).all()
+    off = [sport for sport in playing if not sports.on(sport)]
+    if not off:
+        return []
+    ids = list(db.scalars(update(Event).where(Event.status.in_(("armed", "live")), Event.sport.in_(off)).values(status="postponed").returning(Event.id)))
+    for card_row in db.scalars(select(PlayerCard).where(PlayerCard.player_id.in_(select(EventPlayer.player_id).where(EventPlayer.event_id.in_(ids))))):
+        card_row.freshness = {**(card_row.freshness or {}), "fixtures": None}  # the tick skips them while their sport is off
+    db.execute(update(Team).where(Team.id.in_(select(EventTeam.team_id).where(EventTeam.event_id.in_(ids)))).values(fetched_at=None))
+    log.info("put off %d game(s) of %s, turned off: %s", len(ids), ", ".join(sorted(off)), ids)
+    return ids
+
+
 def close_live(db: Session, event_ids: list[int]) -> list[tuple[int, dict[str, Any]]]:
     """Cards still showing one of these events live, now it's over without a final poll: their live section
     is cleared, the game leaves their upcoming list, and their fixtures are due for a re-read. Returns the
@@ -717,19 +740,23 @@ def upsert_game(db: Session, adapter: Adapter, sport: str, f: Fixture) -> Event:
     event.notes = f.detail
     event.participants = f.team_ids
     event.live_binding = {"adapter": adapter.system, "locator": f.locator, "cadence": adapter.live_cadence}
-    reschedule(db, event, f.start_utc, f.status, sport)
+    reschedule(db, event, f.start_utc, f.status, sport, f.next_up)
     db.flush()
     return event
 
 
-def reschedule(db: Session, event: Event, start: datetime | None, status: str, sport: str | None = None) -> None:
+def reschedule(db: Session, event: Event, start: datetime | None, status: str, sport: str | None = None, next_up: bool = False) -> None:
     """An event's start and status as its source last said: a schedule read (upsert_game), or a read of the game
     itself for one no followed player's or team's refresh brings up to date (predictions.made). Put back (or brought
-    forward), its questions start then (predictions.moved); an armed one put back hours is disarmed (next_status)."""
+    forward), its questions start then (predictions.moved); an armed one put back hours is disarmed (next_status).
+    One with no start time of its own is armed while its source says it's next (Fixture.next_up: a chess round set
+    to start once the one before is over), so its start is seen when it comes, and disarmed once it doesn't."""
     if event.start_utc is not None and start is not None and start != event.start_utc:
         predictions.moved(db, event, start)
     event.start_utc = start
     later = start is not None and start > _now() + arm_before(event.sport or sport) + timedelta(hours=1)
+    if start is None and status == "scheduled":
+        status, later = ("armed", False) if next_up else (status, True)
     event.status = next_status(event.status, status, moved_later=later)
 
 

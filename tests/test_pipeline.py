@@ -614,6 +614,16 @@ def test_a_football_match_is_armed_when_its_team_sheets_come_out(monkeypatch):
     assert structured.arm_before_any() == timedelta(minutes=75)
 
 
+def test_a_game_of_a_sport_turned_off_isnt_armed(monkeypatch):
+    # BUG-256 (H15): CS2 turned off while PandaScore runs for Valorant: its games were still armed, which the poller
+    # skips on purpose, so each counted as a live game behind for six days.
+    from sports_follow import controls
+
+    controls.turn_sport("cs2", False)
+    games = [(1, "CS2", NOW + timedelta(minutes=10), True), (2, "Valorant", NOW + timedelta(minutes=10), True), (3, "Golf", NOW + timedelta(minutes=10), False)]
+    assert pipeline.to_arm(games, NOW) == [2, 3]  # a sport no module knows can't be turned off
+
+
 def test_the_tick_arms_what_is_due(monkeypatch):
     soon = iter([[(7, "Football", NOW + timedelta(minutes=60), True), (8, "Cricket", NOW + timedelta(minutes=60), True)]])
     db = FakeDb(answers={"Event.id": lambda: next(soon, [])})  # the games starting soon; nothing armed or live yet

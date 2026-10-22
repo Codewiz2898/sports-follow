@@ -99,6 +99,10 @@ class Fixture:
     # (a chess round once it's paired), so Coming up shows the game once (structured.board_key). "" where the
     # fixture is the game, or the source doesn't know it yet.
     board: str = ""
+    # A game with no start time of its own that the source says is next: it starts once the one before it is over
+    # (a chess round set to start after the previous one). It's armed while it is, so its start is seen when it
+    # comes (structured.reschedule).
+    next_up: bool = False
 
 
 @dataclass

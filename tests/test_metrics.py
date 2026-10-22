@@ -340,3 +340,28 @@ def test_live_counts_the_games_of_running_sources_and_whos_behind_by_their_caden
     assert sorted((v, a["source"]) for v, a in reading["games"]) == [(1, "fast"), (1, "slow")]
     assert sorted((v, a["source"]) for v, a in reading["behind"]) == [(0, "slow"), (1, "fast")]  # 400 s is under slow's 900
     assert sorted((v, a["source"]) for v, a in reading["poll_age"]) == [(200.0, "fast"), (400.0, "slow")]
+
+
+@pytest.mark.skipif(not TEST_DB, reason="SPORTS_FOLLOW_TEST_DATABASE_URL isn't set (an empty database at alembic head)")
+def test_a_game_of_a_sport_turned_off_isnt_late_though_its_source_runs_for_another(database, monkeypatch):
+    # BUG-256 (H15): CS2 turned off in the panel while PandaScore runs for Valorant. The poller skips CS2's games on
+    # purpose, so the alert counted each as behind (sf-live-behind) and a real stall on Valorant changed nothing.
+    import json
+
+    from sqlalchemy import text
+
+    from sports_follow import adapters, controls
+
+    now = 1_000_000.0
+    monkeypatch.setattr(adapters, "ADAPTERS", {"many": object()})
+    monkeypatch.setattr(bus, "sync_redis", lambda: SimpleNamespace(mget=lambda keys: [None for _ in keys]))
+    controls.turn_sport("cs2", False)
+    with database.begin() as c:
+        for e, sport in [(1, "CS2"), (2, "Valorant")]:
+            c.execute(text("INSERT INTO event (id, key, sport, competition, title, participants, status, live_binding) "
+                           "VALUES (:e, :k, :s, '', :k, '[]', 'armed', CAST(:b AS jsonb))"),
+                      {"e": e, "k": f"g{e}", "s": sport, "b": json.dumps({"adapter": "many", "locator": {}, "cadence": 30})})
+            c.execute(text("INSERT INTO event_player (event_id, player_id) VALUES (:e, 1)"), {"e": e})
+    reading = metrics.live(now)
+    assert reading["games"] == [(1, {"source": "many", "status": "armed"})]  # Valorant's only
+    assert reading["behind"] == [(1, {"source": "many"})]  # never polled: Valorant's is late, CS2's isn't
