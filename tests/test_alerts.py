@@ -230,3 +230,25 @@ def test_teammates_telling_the_same_play_are_one_line_naming_them_both():
     assert plan(goals, both, set(), [], NOW)[0].lines == ["Goal: zekken", "Goal: TenZ"]
     apart = [batch[0], replace(batch[1], event_id=OTHER)]
     assert sorted(len(p.lines) for p in plan(apart, both, set(), [], NOW)) == [1, 1]
+
+
+def test_a_result_teammates_tell_with_lines_of_their_own_is_one_line_with_each_ones_line_under_it():
+    # BUG-206, reopened: a result is the game's, but its body is each player's own line in it, so a cricket, football or
+    # basketball result two followed teammates told didn't fold: "Rishabh Pant: India won by 127 runs | 20 (10) | Rohit
+    # Sharma: India won by 127 runs". It's one line naming both, each one's own line under it.
+    pant, rohit = 3, 4
+
+    def told(id: int, kind: str, title: str, who: int, body: str, priority: int = 80) -> Item:
+        return replace(item(id, kind, title, player=who, body=body, priority=priority), who={pant: "Rishabh Pant", rohit: "Rohit Sharma"}[who])
+
+    batch = [told(1, "final", "Rohit Sharma: India won by 127 runs", rohit, "70 (40)"), told(2, "out", "Rohit Sharma out for 70", rohit, "70 (40) · b Farooqi", 75),
+             told(3, "final", "Rishabh Pant: India won by 127 runs", pant, "20 (10)"), told(4, "out", "Rishabh Pant out for 20", pant, "20 (10) · b Farooqi", 60)]
+    [p] = plan(batch, {pant: "key", rohit: "key"}, set(), [], NOW)
+    assert p.lines == ["Rishabh Pant and Rohit Sharma: India won by 127 runs", "Rohit Sharma out for 70", "Rishabh Pant out for 20"]
+    assert p.body == "Rishabh Pant · 20 (10)\nRohit Sharma · 70 (40)\nRohit Sharma out for 70\nRishabh Pant out for 20"
+    assert sorted(p.moment_ids) == [1, 2, 3, 4] and p.who == "Rishabh Pant and Rohit Sharma"
+    # A fan of one of them hears theirs, as before.
+    assert plan(batch, {pant: "key"}, set(), [], NOW)[0].body == "20 (10)\nRishabh Pant out for 20"
+    # Two of their outs in one poll are two plays, whatever their words: each stays theirs.
+    ducks = [told(5, "out", "Rohit Sharma out for 0", rohit, "0 (1) · b Farooqi", 65), told(6, "out", "Rishabh Pant out for 0", pant, "0 (2) · lbw b Farooqi", 65)]
+    assert len(plan(ducks, {pant: "key", rohit: "key"}, set(), [], NOW)[0].lines) == 2
