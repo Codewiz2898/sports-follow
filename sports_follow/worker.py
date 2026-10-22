@@ -309,6 +309,15 @@ async def read_live(ctx, system: str) -> None:
     await in_lane('refresh', live.read, system)
 
 
+async def keep_up_live(ctx) -> None:
+    """What sources keep of their games on now between reads, whoever is looking (live.keep_up): every minute, at
+    :30, between the tick's. In the refresh lane: no fan waits on it, and the sources it reads leave pages and
+    polls their share."""
+    if await _missed(ctx, "keep_up_live"):
+        return
+    await in_lane('refresh', live.keep_up)
+
+
 async def read_match(ctx, system: str, game: str) -> None:
     """One game from its source, for its match page (match.read): queued by the API while a fan has the page
     open and the last read is over a minute old. In the refresh lane: no fan waits on it, so it stops short of
@@ -552,6 +561,8 @@ class WorkerSettings:
         cron(_logged(read_sidelined), hour={6, 16}, minute=30, second=0, timeout=600),
         cron(_logged(refresh_campaigns), hour=5, minute=10, second=0, timeout=600),
         cron(_logged(prepare_questions, quiet=True), minute=set(range(4, 60, 10)), second=20, run_at_startup=True, timeout=300),
+        # Every minute, in a job slot: a minute's readings missed while the slots are full is a point of a line.
+        cron(_logged(keep_up_live, quiet=True), second=30, timeout=50),
     ]
     # Without a zone arq reads cron times in the machine's own: the weekly import ran at 22:00 UTC on a
     # laptop in India, Sunday evening's football.

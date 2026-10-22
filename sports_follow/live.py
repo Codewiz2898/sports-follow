@@ -18,6 +18,10 @@ player is in once, as theirs.
 
 That ranking is the same for every fan: each API process makes it once for every SHARED seconds of looks (and
 again at once when a source's read changes), and a fan's look adds only which of its players they follow.
+
+A source that keeps something of its games on between reads (a map's line drawn from readings of another
+source's live list, so a page opened mid-map has it from early on) is handed its last read's games each minute
+by the worker, whoever is looking (keep_up).
 """
 
 from __future__ import annotations
@@ -130,6 +134,25 @@ def read(system: str, now: datetime | None = None) -> int:
     payload = {"as_of": (now or datetime.now(timezone.utc)).isoformat(), "games": dumped[:READ_GAMES]}
     bus.sync_redis().set(_key(system), json.dumps(payload, default=str), ex=KEEP)
     return len(games)
+
+
+def keep_up(now: datetime | None = None) -> int:
+    """Each source that keeps something of its games on now between reads (an adapter's keep_up: a map's line
+    drawn from readings of a live list) is handed its last read's games and how old that read is ([] and forever
+    without one: nobody has looked for a while), about once a minute (worker.keep_up_live), whether or not anyone
+    is looking; what it keeps up, and what that costs it, is its own. Returns how many games were kept up. One
+    source failing leaves the others theirs."""
+    now = now or datetime.now(timezone.utc)
+    kept = 0
+    for adapter in sources():
+        if not callable(getattr(adapter, "keep_up", None)):
+            continue
+        read_ = last_read(adapter.system)
+        try:
+            kept += cast(Any, adapter).keep_up((read_ or {}).get("games") or [], _age(read_, now))
+        except Exception:
+            log.exception("live: %s couldn't keep up its games", adapter.system)
+    return kept
 
 
 def _raw(system: str) -> str | None:
