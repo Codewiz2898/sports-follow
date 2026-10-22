@@ -1893,7 +1893,7 @@ def test_a_fans_first_links_tags_are_kept_once_and_only_in_their_shape(api):
     def kept() -> list[dict]:
         return [{k: _param(s, k) for k in ("fan_id", "tag", "utm_source", "utm_medium", "utm_campaign", "landing")} for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source"]
 
-    assert api.call("POST", "/api/me/source", fan="fan", body={"utm_source": "whatsapp", "utm_campaign": "gukesh-launch", "s": "\x00", "path": "/gukesh"}).json() == {"ok": True}
+    assert api.call("POST", "/api/me/source", fan="fan", body={"utm_source": "whatsapp", "utm_campaign": "gukesh-launch", "s": "\x07", "path": "/gukesh"}).json() == {"ok": True}
     assert kept() == [{"fan_id": "fan", "tag": None, "utm_source": "whatsapp", "utm_medium": None, "utm_campaign": "gukesh-launch", "landing": "/gukesh"}]
     insert_ = next(s for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source")
     assert "ON CONFLICT (fan_id) DO NOTHING" in str(insert_.compile(dialect=postgresql.dialect()))  # the first link's, never a later one's
