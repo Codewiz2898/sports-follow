@@ -44,7 +44,7 @@ from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, credits
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
 from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_SEARCHES_PER_MINUTE
-from .db import get_db, session
+from .db import get_db, released, session
 from .models import ClipKey, Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription, Question, Team
 
 logs.setup()  # under uvicorn, after its own logging config: ours, with uvicorn's lines through it
@@ -74,6 +74,17 @@ async def lifespan(app: FastAPI):
 # RequestLog's span and metric stand for each request instead (tracing.request_span, metrics.request).
 # Nor does it log validation failures, which carry what a client sent.
 app = FastAPI(title=APP_NAME, lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False, "logs": False, "metrics": False})
+
+
+class Route(APIRoute):
+    """Every route here: a sync one gives its database connection back as it returns (db.released), never
+    holding it while it waits for a thread to check and send its answer."""
+
+    def __init__(self, path: str, endpoint: Callable[..., Any], **kwargs: Any) -> None:
+        super().__init__(path, released(endpoint), **kwargs)
+
+
+app.router.route_class = Route  # before the first route
 
 UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -1526,6 +1537,7 @@ def publisher(request: Request, db: Session = Depends(get_db)) -> ClipKey:
     key = clips.key_from(db, token) if token else None
     if key is None:
         raise HTTPException(401, "Send a publishing key: Authorization: Bearer slam_pk_…")
+    db.commit()  # its last use, and the connection back before the route waits for a thread (db.released)
     return key
 
 

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import inspect
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from functools import wraps
+from typing import Any
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -48,6 +51,27 @@ def session() -> Iterator[Session]:
 
 def get_db() -> Iterator[Session]:
     """FastAPI dependency, for sync routes only: the session lives until the response is sent, so an
-    async route would hold it on the event loop, and a stream for its whole life."""
+    async route would hold it on the event loop, and a stream for its whole life. A sync route commits it
+    as it returns (released), so its connection goes back before the answer is made."""
     with session() as db:
         yield db
+
+
+def released(route: Callable[..., Any]) -> Callable[..., Any]:
+    """A sync route that commits the sessions it was given (get_db's) on its own thread as it returns, so their
+    pooled connections are back before FastAPI checks its answer, on another of the same threads, and sends it.
+    Else a burst of requests stood still: every connection held by an answer waiting for a thread, every thread
+    by a request waiting for a connection, until the pool gave up (BUG-264). A route that raises isn't committed:
+    get_db rolls it back, as before. Async routes and streams are returned as they are."""
+    if inspect.iscoroutinefunction(route) or inspect.isgeneratorfunction(route) or inspect.isasyncgenfunction(route):
+        return route
+
+    @wraps(route)
+    def run(*args: Any, **kwargs: Any) -> Any:
+        answer = route(*args, **kwargs)
+        for value in kwargs.values():
+            if isinstance(value, Session):
+                value.commit()
+        return answer
+
+    return run
