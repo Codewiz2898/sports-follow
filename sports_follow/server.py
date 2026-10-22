@@ -876,7 +876,10 @@ async def team_page(team_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any
     shown, asking = await in_db(view)
     if shown is None:
         raise HTTPException(404, "No such team.")
-    return {**shown, "refreshing": asking is not None and await _read_team(asking, team_id)}
+    refreshing = asking is not None and await _read_team(asking, team_id)
+    if asking is not None and not refreshing:
+        await asyncio.to_thread(teams.look_later, team_id)  # no room this minute: the next look asks again
+    return {**shown, "refreshing": refreshing}
 
 
 async def _read_team(system: str, team_id: int) -> bool:

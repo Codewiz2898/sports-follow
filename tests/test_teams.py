@@ -865,3 +865,33 @@ def test_a_followed_team_with_no_game_soon_is_read_again_less_often(db, redis, s
     assert pipeline.due_work(NOW + timedelta(hours=1)).teams == [chelsea.id]  # a game tomorrow: every half hour
     assert sorted(pipeline.due_work(NOW + teams.QUIET + timedelta(minutes=1)).teams) == sorted([arsenal.id, chelsea.id])
     assert not teams.stale(team(db, ARS), NOW + timedelta(hours=1)) and teams.stale(team(db, CHE), NOW + timedelta(hours=1))
+
+
+@needs_db
+def test_a_team_page_the_minutes_reads_had_no_room_for_asks_again_at_the_next_look(db, redis, source, monkeypatch):
+    # BUG-231: a page took its team's ten-minute wait before the minute's reads were counted, so in a burst of pages
+    # (a crawler's) every team past the sixth was left unread, and its page empty, for ten minutes.
+    queued: list[int] = []
+
+    async def enqueue(function: str, team_id: int, **options) -> None:
+        queued.append(team_id)
+
+    class Counts(dict):
+        async def incr(self, key: str) -> int:
+            self[key] = self.get(key, 0) + 1
+            return self[key]
+
+        async def expire(self, key: str, seconds: int, nx: bool = False) -> bool:
+            return True
+
+    counts = Counts()
+    monkeypatch.setattr(server, "enqueue", enqueue)
+    monkeypatch.setitem(server.state, "redis", counts)
+    monkeypatch.setattr(teams, "READS", 1)
+    teams.import_teams(source.fake, NOW)
+    arsenal, chelsea = team(db, ARS).id, team(db, CHE).id
+    assert asyncio.run(server.team_page(arsenal, "crawler"))["refreshing"] is True
+    assert asyncio.run(server.team_page(chelsea, "crawler"))["refreshing"] is False  # the minute's read is spent
+    counts.clear()  # the next minute
+    assert asyncio.run(server.team_page(chelsea, "fan"))["refreshing"] is True and queued == [arsenal, chelsea]
+    assert asyncio.run(server.team_page(arsenal, "fan"))["refreshing"] is False  # asked a moment ago

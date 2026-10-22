@@ -733,6 +733,12 @@ def look_again(team: Team) -> bool:
     return stale(team) and readable(ADAPTERS.get(team.system)) and bus.cooldown(f"teamlook:{team.id}", LOOK_AGAIN)
 
 
+def look_later(team_id: int) -> None:
+    """A page's ask (look_again) that the minute's reads had no room for (READS): the next page may ask, not only
+    one LOOK_AGAIN on, so a burst of other pages can't keep this one empty."""
+    bus.release(f"teamlook:{team_id}")
+
+
 def merge(db: Session, anon: str, fan: str) -> None:
     """An anonymous fan's team follows into their account's (accounts.adopt): a team both follow keeps the
     account's level and the earlier date. The account follows at most MAX: of this device's others, the earliest
