@@ -1107,6 +1107,7 @@ def test_a_read_without_a_cookie_makes_no_fan_and_a_write_or_the_apps_page_does(
     assert page.status_code == 200 and made is not None and server.NEW_ID.fullmatch(made)
     assert _fan_of(api.call("GET", "/player/1", cookie=page.cookies["sf_fan"])) is None  # the same fan from then on
     assert "set-cookie" not in api.call("GET", "/sw.js").headers  # a file of the build isn't the app's page
+    assert "set-cookie" not in api.call("GET", "/", headers={"Cookie": "sf_session=a-session"}).headers  # a signed-in device is its account
 
     started = api.call("POST", "/api/me/start")
     assert started.json() == {"signed_in": False} and server.NEW_ID.fullmatch(_fan_of(started) or "")

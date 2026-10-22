@@ -2850,8 +2850,12 @@ async def spa(path: str, request: Request) -> Response:
         return FileResponse(found, media_type=MEDIA.get(found.suffix), headers={"Cache-Control": cache})
     response = HTMLResponse(share.page(found, await _page_preview(path, request), _site(request)), headers={"Cache-Control": "no-cache", **_not_indexed(path)})
     # The app's page is its first request: it makes this device's fan (a read doesn't: _fan), so the calls the app
-    # sends together as it starts are all one fan's (BUG-152).
-    await asyncio.to_thread(_fan, request, response, await account_of(request), True)
+    # sends together as it starts are all one fan's (BUG-152). Not a signed-in device's, which is its account.
+    if not request.cookies.get(accounts.SESSION_COOKIE):
+        try:
+            await asyncio.to_thread(_fan, request, response, None, True)
+        except Exception:  # noqa: BLE001 — the page is the app: without its fan for now, its first write makes one
+            log.warning("the app's page: couldn't make this device's fan", exc_info=True)
     return response
 
 
