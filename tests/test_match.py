@@ -400,6 +400,50 @@ def test_a_read_that_found_nothing_isnt_asked_again_every_minute(db, redis, sour
     match.read("pitch", "100", NOW)
     page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(minutes=10))
     assert page["event_ids"] == [40] and not ask  # what's stored still shows
+    assert match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=match.AHEAD + 1))[1]  # it's on: every half hour, for a source that lists it late
+
+
+@needs_db
+def test_a_read_that_found_nothing_before_the_start_is_read_again_once_the_game_is_on(db, redis, source):
+    """A look before a chess round's start finds no board (its broadcast lists them as it starts). Once the
+    game's on, that read is stale: it's read every FRESH like any live game, and its read's detail comes."""
+    followed(db)  # its event starts at NOW, and Saka's card has it live
+    source.game = None
+    match.read("pitch", "100", NOW - timedelta(minutes=90))
+    page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=40))
+    assert (page["status"], page["live"]["clock"], ask) == ("live", "71'", True)
+    source.game = game(players=ELEVENS)
+    match.read("pitch", "100", NOW + timedelta(seconds=50))
+    assert not match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=60))[1]
+    assert match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=50 + match.FRESH + 1))[1]
+
+
+@needs_db
+def test_a_read_that_found_nothing_of_a_game_no_board_shows_on_isnt_asked_again(db, redis, source):
+    """No board shows the game (none polled, none stored, not on Live now): a read that found nothing is the
+    last for hours. One made before the game's start is read once more after it; one made since is the last."""
+    db.add(Event(id=40, key="pitch:100", sport="Football", title="Arsenal vs Chelsea", competition="Premier League", status="scheduled", start_utc=NOW))
+    db.commit()
+    source.game = None
+    match.read("pitch", "100", NOW - timedelta(hours=3))
+    assert not match.view(db, "fan", "pitch", "100", NOW - timedelta(minutes=5))[1]  # its start still to come
+    page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(minutes=1))
+    assert (page["live"], ask) == (None, True)  # its start has passed since that read
+    match.read("pitch", "100", NOW + timedelta(minutes=1))
+    page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(hours=5))
+    assert (page["status"], page["live"], ask) == ("scheduled", None, False)
+
+
+@needs_db
+def test_a_settled_read_isnt_asked_again_though_a_poll_still_has_the_game_on(db, redis, source):
+    followed(db)  # Saka's card still has it live
+    source.game = game("Arsenal 3 – 2 Chelsea", status="final")
+    over = NOW + timedelta(hours=2)
+    match.read("pitch", "100", over)
+    match.read("pitch", "100", over + timedelta(seconds=match.CONFIRM))
+    assert json.loads(redis["match:pitch:100"])["settled"]
+    page, ask = match.view(db, "fan", "pitch", "100", over + timedelta(days=1))
+    assert (page["status"], page["live"]["score"], ask) == ("final", "Arsenal 3 – 2 Chelsea", False)
 
 
 @needs_db
