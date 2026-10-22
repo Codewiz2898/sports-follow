@@ -360,8 +360,8 @@ class Chess(Sport):
 
     def answer(self, ask: str, status: str | None, state: dict[str, Any]) -> str | None:
         """The winner's FIDE id, or a draw, once the board's over: of a mini-match, who's ahead in it (state["match"]);
-        of one game, its result. Its source keeps a game live while its pairing's next may follow it in the round, so
-        no game of a tiebreak answers for its match."""
+        of one game, its result, where an armageddon drawn is Black's win. Its source keeps a game live while its
+        pairing's next may follow it in the round, so no game of a tiebreak answers for its match."""
         if status != "final":
             return None
         match = state.get("match")
@@ -372,6 +372,8 @@ class Chess(Sport):
         side = RESULTS.get(state.get("result") or "")
         if side is None:
             return None
+        if side == DRAW and state.get("armageddon"):
+            side = "black"
         return DRAW if side == DRAW else str((state.get(side) or {}).get("id") or "") or None
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:

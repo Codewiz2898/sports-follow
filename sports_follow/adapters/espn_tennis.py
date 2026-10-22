@@ -286,11 +286,17 @@ class EspnTennis(espn.EspnAdapter, Adapter):
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
         tour, match_id = locator["tour"], locator["match"]
         # The current scoreboard while the tournament runs; the day it was found on once it has moved on.
-        for day, ttl in ((None, 5), (locator.get("day"), 24 * 3600 if final else 5)):
-            found = find_match(self._board(tour, day, ttl), match_id)
-            if found:
-                return parse_match(*found)
-        raise AdapterError(f"ESPN has no tennis match {match_id} on the {tour} scoreboard")
+        found = find_match(self._board(tour, None, 5), match_id)
+        if found:
+            return parse_match(*found)
+
+        def on_its_day(ttl: float) -> Snapshot:
+            found = find_match(self._board(tour, locator.get("day"), ttl), match_id)
+            if not found:
+                raise AdapterError(f"ESPN has no tennis match {match_id} on the {tour} scoreboard")
+            return parse_match(*found)
+
+        return self.read_snapshot(on_its_day, final, 5)
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         return result_label(fixture, team_ids)

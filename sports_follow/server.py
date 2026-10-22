@@ -17,6 +17,7 @@ import os
 import re
 import secrets
 import time
+from collections import Counter
 from collections.abc import Awaitable, Callable, MutableMapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -43,7 +44,7 @@ from starlette.routing import Match
 from . import accounts, admin, alerts, bus, campaigns, clips, clipstore, credits as credits_page, fcm, feed, google_signin, league, linear, live, logs, mail, match, matches, metrics, moments, notify, photos, pipeline, predictions, registry, results, search as player_search, share, sports, starters, structured, teams, tracing, watch, web_errors, week
 from .adapters import ADAPTERS, KNOWN, AdapterError, budget
 from .agent import MODEL
-from .config import AGENT_LIVE, ANDROID_CERT_SHA256, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_LOOKUPS_PER_ADDRESS, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE
+from .config import AGENT_LIVE, ANDROID_CERT_SHA256, API_DOCS, APP_NAME, ANDROID_PACKAGE, COMMIT, CONTACT_EMAIL, COOKIE_SECRET, COOKIE_SECRET_FILE, FAN_COOKIE, MAIL_CODES_PER_DAY, REDIS_URL, RESEARCH_PER_ADDRESS, RESEARCH_PER_HOUR, SITE_URL, SOURCE_LOOKUPS_PER_ADDRESS, SOURCE_LOOKUPS_PER_MINUTE, SOURCE_SEARCHES_PER_MINUTE
 from .db import get_db, released, session
 from .models import ClipKey, Event, FanSource, Follow, MatchFollow, Moment, Notification, NotificationMute, Player, PlayerAlias, PlayerCard, PlayerIdentity, PushSubscription, Question, Team
 
@@ -55,8 +56,20 @@ HEARTBEAT = 15
 # An event, not a comment: EventSource hides comments, and the app counts on hearing something every
 # HEARTBEAT to know its stream is alive (a proxy can keep it open after the API behind it is gone).
 PING = "event: ping\ndata:\n\n"
+# A live stream (_stream) holds a Redis connection while it's open, from a pool of the streams' own, so one
+# client can't hold enough to starve the worker's polling, locks and limits (BUG-184). So many are open at
+# once for one fan, for one client address and in this process; past that the next is refused, and the app tries
+# again a little later. A connection a phone dropped can stay open some minutes before the server hears of it, so
+# a fan's share allows for a few. An IPv6 /64 is a household; an IPv4 address can be a phone network's, shared by
+# thousands of its fans (carrier-grade NAT, as India's networks use), so it holds more.
+STREAMS_PER_FAN = 8
+STREAMS_PER_ADDRESS = 60  # an IPv6 /64's
+STREAMS_PER_IPV4 = 250  # an IPv4 address's
+STREAMS_PER_PROCESS = 1000
+REDIS_CONNECTIONS = 100  # the API's other Redis connections, in each process: past them a command waits its turn
 
 state: dict[str, Any] = {}
+streaming: Counter[str] = Counter()  # this process's open streams: by "fan:<id>", by "address:<address>", and "all"
 
 
 @asynccontextmanager
@@ -64,16 +77,20 @@ async def lifespan(app: FastAPI):
     cookie_key()  # a server without its cookie key stops here, not on a fan's first request
     metrics.seed()
     state["arq"] = await create_pool(RedisSettings.from_dsn(REDIS_URL))
-    state["redis"] = aredis.Redis.from_url(REDIS_URL, decode_responses=True)
+    state["redis"] = aredis.Redis.from_pool(aredis.BlockingConnectionPool.from_url(REDIS_URL, decode_responses=True, max_connections=REDIS_CONNECTIONS, timeout=10))
+    state["streams"] = aredis.Redis.from_url(REDIS_URL, decode_responses=True, max_connections=STREAMS_PER_PROCESS)  # each stream's pubsub
     yield
     await state["arq"].aclose()
     await state["redis"].aclose()
+    await state["streams"].aclose()
 
 
 # FastAPI traces requests itself once tracing is on, and records the query string (a search's words):
 # RequestLog's span and metric stand for each request instead (tracing.request_span, metrics.request).
-# Nor does it log validation failures, which carry what a client sent.
-app = FastAPI(title=APP_NAME, lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False, "logs": False, "metrics": False})
+# Nor does it log validation failures, which carry what a client sent. Its own docs (/docs, /redoc and the schema
+# they read) list every route, the admin panel's too: only on a development server that asks for them (API_DOCS).
+app = FastAPI(title=APP_NAME, lifespan=lifespan, telemetry={"tracing": False, "operation_spans": False, "logs": False, "metrics": False},
+              docs_url="/docs" if API_DOCS else None, redoc_url="/redoc" if API_DOCS else None, openapi_url="/openapi.json" if API_DOCS else None)
 
 
 class Route(APIRoute):
@@ -360,14 +377,20 @@ async def account_of(request: Request) -> accounts.Signed | None:
 
 def fan_id(request: Request, response: Response, signed_in: accounts.Signed | None = Depends(account_of)) -> str:
     """Whose follows, levels, mutes and devices a request reads and writes: the signed-in account's, else
-    the anonymous fan in the cookie this server signed, else a new anonymous fan. The request's log lines
-    name the fan by a hash (logs.fan)."""
+    the anonymous fan in the cookie this server signed, else a new anonymous fan, whose cookie only a write
+    sets (_fan). The request's log lines name the fan by a hash (logs.fan)."""
     fan = _fan(request, response, signed_in)
     logs.bind(fan=logs.fan(fan))
     return fan
 
 
-def _fan(request: Request, response: Response, signed_in: accounts.Signed | None) -> str:
+def _fan(request: Request, response: Response, signed_in: accounts.Signed | None, make: bool | None = None) -> str:
+    """The fan, as fan_id says. A device without a fan of its own keeps a new one (its cookie) only from a request
+    that `make`s one: by default a write, not a read. A read is answered as a new fan who owns nothing, for that
+    request alone, and sets no cookie: an app's first requests go out together, before any cookie is back, and each
+    keeping a fan of its own left the device with whichever answered last, and a follow made in between with a fan
+    no device holds (BUG-152). The app's page makes one (spa), as does the Android app's first request (POST
+    /api/me/start)."""
     if signed_in is not None:
         return signed_in.fan_id
     value = request.cookies.get(FAN_COOKIE) or ""
@@ -376,8 +399,12 @@ def _fan(request: Request, response: Response, signed_in: accounts.Signed | None
         fan, day = signed
         if _today() - day < REFRESH_DAYS:
             return fan
+    elif _unsigned_fan(value):
+        fan = value
     else:
-        fan = value if _unsigned_fan(value) else secrets.token_urlsafe(24)
+        fan = secrets.token_urlsafe(24)
+        if not (request.method not in ("GET", "HEAD") if make is None else make):
+            return fan
     _set_fan(request, response, fan)
     return fan
 
@@ -671,6 +698,11 @@ LEAGUES_MADE_PER_HOUR = 5  # leagues one fan makes in an hour
 INVITES_PER_HOUR = 60  # invite pages one fan opens, and leagues they join, in an hour: a code can't be guessed by trying them all
 PICKS_PER_ADDRESS = 300  # picks from one client address in an hour: new fans from one place can't stuff a split
 PICKS_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
+# Fans without an account whose picks on one question count (Pick.counted), from one client address: any device gets
+# a fan cookie (spa), so a split is stuffed only from as many addresses as the picks it would add. A home or a phone
+# network sharing one address has this many fans' calls in a game's split; the rest are theirs, and scored.
+COUNTED_PER_ADDRESS = 5
+COUNTED_FOR = 30 * 24 * 3600  # seconds an address's counted fans on a question are kept: longer than any question is open
 
 
 def _refused(db: Session, refused: predictions.Refused) -> HTTPException:
@@ -679,10 +711,14 @@ def _refused(db: Session, refused: predictions.Refused) -> HTTPException:
 
 
 @app.put("/api/predictions/{question_id}/pick")
-async def make_pick(request: Request, question_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id)) -> dict[str, Any]:
+async def make_pick(request: Request, question_id: RowId, body: dict = Body(...), fan: str = Depends(fan_id),
+                    signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
     """Call a game (or a map): this fan's answer to one of its questions, or a new one in place of theirs, while
     it's open. No account needed. Answers with the question as the app shows it, how fans split now included.
-    A question closed is a 409, an answer it doesn't offer a 400; PICKS_PER_ADDRESS an hour from one address."""
+    A question closed is a 409, an answer it doesn't offer a 400; PICKS_PER_ADDRESS an hour from one address.
+    It counts in the split and in what right picks score from an account, or a fan whose cookie came with it, up to
+    COUNTED_PER_ADDRESS of those on a question from one address (_counted_here): a fan this request made up (no
+    cookie), or past that, has their pick, but it moves nobody else's numbers (predictions.pick)."""
     option = body.get("option")
     if not isinstance(option, str) or not 0 < len(option) <= 64:
         raise HTTPException(400, "option is one of the question's answers")
@@ -690,15 +726,31 @@ async def make_pick(request: Request, question_id: RowId, body: dict = Body(...)
     await _take(f"picks:{address or 'unknown'}:{int(time.time() // 3600)}", PICKS_PER_ADDRESS if address else PICKS_UNKNOWN_ADDRESS, 7200,
                 "That's a lot of picks from your network. Try again in a while.")
 
+    counted = signed is not None or (_cookie_fan(request) == fan and await _counted_here(question_id, address, fan))
+
     def call(db: Session) -> dict[str, Any]:
         try:
-            q = predictions.pick(db, fan, question_id, option)
+            q = predictions.pick(db, fan, question_id, option, counted=counted)
         except predictions.Refused as refused:
             raise _refused(db, refused)
         db.commit()  # before the answer: the tick polls its game from now on
         return predictions.shown(db, fan, [q], datetime.now(timezone.utc))[0]
 
     return {"question": await in_db(call)}
+
+
+async def _counted_here(question_id: int, address: str | None, fan: str) -> bool:
+    """Whether a fan without an account counts on this question from this address: one of the first
+    COUNTED_PER_ADDRESS there, or counted there before (a changed pick)."""
+    key = f"picks-counted:{question_id}:{address or 'unknown'}"
+    redis = state["redis"]
+    if not await redis.sadd(key, fan):
+        return True  # counted here before
+    await redis.expire(key, COUNTED_FOR)
+    if await redis.scard(key) <= COUNTED_PER_ADDRESS:
+        return True
+    await redis.srem(key, fan)  # past the address's share: not one of them
+    return False
 
 
 @app.delete("/api/predictions/{question_id}/pick")
@@ -834,7 +886,7 @@ async def _read_team(system: str, team_id: int) -> bool:
         ask = await state["redis"].incr(spent) <= teams.READS
         await state["redis"].expire(spent, 120, nx=True)
         if ask:
-            await enqueue("refresh_team", team_id)
+            await enqueue("refresh_team", team_id, _job_id=f"refresh-team:{team_id}")
         return ask
     except Exception:
         log.warning("teams: couldn't ask for team %s's games", team_id, exc_info=True)
@@ -914,9 +966,11 @@ async def starter_players(fan: str = Depends(fan_id)) -> dict[str, Any]:
 
 
 def _campaign_slug(slug: str) -> str:
-    if not campaigns.SLUG.fullmatch(slug):
+    """The campaign at a link's address, whatever its case (stann.in/Gukesh is /gukesh); a 404 for one no campaign can have."""
+    found = campaigns.address(slug)
+    if found is None:
         raise HTTPException(404, "No such page.")
-    return slug
+    return found
 
 
 @app.get("/api/campaigns/{slug}")
@@ -1196,6 +1250,8 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
                 ref = None
             else:
                 adapter, ref = found
+                if await in_db(registry.removed, structured.sport_name(adapter, ref), ref):
+                    raise HTTPException(404, f"That athlete isn't on {APP_NAME}.")  # another registry row of someone removed
                 player_id, created = await asyncio.to_thread(pipeline.start_from_pick, adapter, ref)
     else:
         system = str(body.get("system") or "")
@@ -1214,6 +1270,9 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
             raise HTTPException(502, "Couldn't reach the live source to confirm this athlete. Try again in a moment.")
         if ref is None:
             raise HTTPException(404, "That athlete isn't in the source any more.")
+        if await in_db(registry.removed, structured.sport_name(adapter, ref), ref):
+            # Removed, in a source that had no id for them then: their name and birth date say who they are.
+            raise HTTPException(404, f"That athlete isn't on {APP_NAME}.")
         player_id, created = await asyncio.to_thread(pipeline.start_from_pick, adapter, ref)
 
     def save(db: Session) -> None:
@@ -1231,7 +1290,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
         # With a live source: scores and fixtures in seconds, and the profile from Wikidata and Wikipedia.
         # Without one: the profile, and the agent's research for an athlete Wikipedia has no article on.
         if ref is not None:
-            await enqueue("refresh_structured", player_id)
+            await enqueue("refresh_structured", player_id, _job_id=f"refresh-structured:{player_id}")
         await enqueue("build_card", player_id)
     return player_id
 
@@ -1331,15 +1390,19 @@ def set_alerts(player_id: RowId, body: dict = Body(...), fan: str = Depends(fan_
 # ---------------------------------------------------------------- accounts (accounts.py)
 
 CODE_LIFE = 600  # seconds an emailed code works
-CODE_TRIES = 5  # wrong codes before it stops working
+CODE_TRIES = 5  # wrong codes from one network (_network) before it stops working there
+CODE_TRIES_ELSEWHERE = 10  # wrong codes from every network but the one that asked for it, together: then it works only there
 RESEND_AFTER = 60  # seconds before another code to the same address
 CODES_PER_EMAIL = 5  # an hour
 CODES_PER_ADDRESS = 20  # an hour, from one client address (an IPv6 /64)
 CODES_UNKNOWN_ADDRESS = 100  # an hour, from every client without a public address together
 CODES_PER_ADDRESS_DAY = 20  # a UTC day, from one client address: one network can't spend the day's mail
+CODES_PER_NETWORK_DAY = 40  # a UTC day, from one IPv6 /48 (a site's): its 65,536 /64s can't each take twenty
 CODES_PER_HOUR = 200  # an hour, to everyone: the mail provider's bill
-FAILS_PER_DAY = 20  # wrong codes for one address in a UTC day, across new codes
+KEPT_FOR_ACCOUNTS = 0.3  # of the day's codes (MAIL_CODES_PER_DAY), kept for addresses with an account: made-up ones can't spend them
+FAILS_PER_DAY = 20  # wrong codes for one address from one network in a UTC day, across new codes
 BLOCKED = "This account has been blocked."  # by an admin (admin.py)
+TOO_MANY_WRONG = "Too many wrong codes. Ask for a new one."
 
 
 async def _take(key: str, limit: int, ttl: int, refusal: str) -> None:
@@ -1348,6 +1411,15 @@ async def _take(key: str, limit: int, ttl: int, refusal: str) -> None:
     await state["redis"].expire(key, ttl)
     if used > limit:
         raise HTTPException(429, refusal)
+
+
+def _network(address: str | None) -> str:
+    """Where a client's wrong codes are counted, and a site's codes: an IPv6 client's /48 (a home or an office may
+    hold all of it; client_address gives its /64), else its address; "unknown" without a public one."""
+    if not address:
+        return "unknown"
+    network = ipaddress.ip_network(address, strict=False)
+    return str(network.supernet(new_prefix=48)) if network.version == 6 else address
 
 
 def _clear_cookies_for_anonymous(request: Request, response: Response) -> None:
@@ -1405,9 +1477,22 @@ async def my_account(request: Request, response: Response, signed: accounts.Sign
     return about
 
 
+@app.post("/api/me/start")
+async def app_start(request: Request, response: Response, signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
+    """The Android app's first request as it starts (mobile/src/account.tsx): who this device is signed in as,
+    as GET /api/me/account answers, and, signed in to nothing, its anonymous fan, made now if it has none, so
+    the requests the app sends together next are all one fan's (a read makes none: _fan). The web app's page
+    does the same (spa)."""
+    about = await my_account(request, response, signed)
+    if not about.get("signed_in"):
+        await asyncio.to_thread(_fan, request, response, None, True)
+    return about
+
+
 @app.post("/api/auth/email/start")
 async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any]:
-    """Email a 6-digit sign-in code. The answer is the same whether or not the address has an account."""
+    """Email a 6-digit sign-in code. Part of the day's codes is kept for addresses with an account
+    (KEPT_FOR_ACCOUNTS)."""
     if not mail.configured(_secure(request)):
         raise HTTPException(503, "Signing in by email isn't set up on this server yet.")
     email = accounts.normal_email(body.get("email"))
@@ -1415,19 +1500,27 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
         raise HTTPException(400, "That doesn't look like an email address.")
     who, now = accounts.email_key(email), datetime.now(timezone.utc)
     hour, day = now.strftime("%Y-%m-%dT%H"), now.strftime("%Y-%m-%d")
-    if int(await state["redis"].get(f"auth-fails:{who}:{day}") or 0) >= FAILS_PER_DAY:
+    address = client_address(request)
+    network = _network(address)
+    # Wrong codes from this network only: anyone's elsewhere don't shut the fan out for the day (BUG-092).
+    if int(await state["redis"].get(f"auth-fails:{who}:{network}:{day}") or 0) >= FAILS_PER_DAY:
         raise HTTPException(429, "Too many wrong codes for this address today. Try again tomorrow.")
     if not await state["redis"].set(f"auth-wait:{who}", "1", nx=True, ex=RESEND_AFTER):
         # Asked again within the minute (a second tap, the app reloaded): the code sent then is the one.
         return {"ok": True, "resend_in": max(int(await state["redis"].ttl(f"auth-wait:{who}")), 1)}
-    address = client_address(request)
     try:
         await _take(f"auth-email:{who}:{hour}", CODES_PER_EMAIL, 2 * 3600, "That's a lot of codes for one address. Try again in an hour.")
         await _take(f"auth-address:{address or 'unknown'}:{hour}", CODES_PER_ADDRESS if address else CODES_UNKNOWN_ADDRESS, 2 * 3600, "Your network has asked for a lot of codes. Try again in an hour.")
         if address:
             await _take(f"auth-address-day:{address}:{day}", CODES_PER_ADDRESS_DAY, 2 * DAY, "Your network has asked for a lot of codes today. Try again tomorrow.")
+        if network != (address or "unknown"):  # an IPv6 client: its site's day too
+            await _take(f"auth-network-day:{network}:{day}", CODES_PER_NETWORK_DAY, 2 * DAY, "Your network has asked for a lot of codes today. Try again tomorrow.")
+        used_up = f"{APP_NAME} has sent all the sign-in codes it can today. Try again tomorrow."
+        # Part of the day's codes is kept for fans with an account: made-up addresses can't leave none (BUG-093).
+        if not await in_db(accounts.known, email):
+            await _take(f"auth-day-new:{day}", MAIL_CODES_PER_DAY - round(MAIL_CODES_PER_DAY * KEPT_FOR_ACCOUNTS), 2 * DAY, used_up)
         await _take(f"auth-hour:{hour}", CODES_PER_HOUR, 2 * 3600, f"{APP_NAME} is sending a lot of codes right now. Try again in a few minutes.")
-        await _take(f"auth-day:{day}", MAIL_CODES_PER_DAY, 2 * DAY, f"{APP_NAME} has sent all the sign-in codes it can today. Try again tomorrow.")
+        await _take(f"auth-day:{day}", MAIL_CODES_PER_DAY, 2 * DAY, used_up)
     except HTTPException:
         # No code went out: asking again within the minute mustn't answer "the code sent then is the one".
         await state["redis"].delete(f"auth-wait:{who}")
@@ -1437,12 +1530,13 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
         await state["redis"].delete(f"auth-wait:{who}")
         raise HTTPException(403, BLOCKED)
     code = f"{secrets.randbelow(10**6):06d}"
+    # A new code: its tries are counted afresh, and the network that asked for it keeps its own (_code_tries).
     await state["redis"].set(f"auth-code:{who}", mac("code", f"{email}:{code}"), ex=CODE_LIFE)
-    await state["redis"].delete(f"auth-tries:{who}")
+    await state["redis"].set(f"auth-asked:{who}", network, ex=CODE_LIFE)
     try:
         await asyncio.to_thread(mail.send_code, email, code)
     except mail.MailError as exc:
-        await state["redis"].delete(f"auth-code:{who}", f"auth-wait:{who}")
+        await state["redis"].delete(f"auth-code:{who}", f"auth-asked:{who}", f"auth-wait:{who}")
         if isinstance(exc, mail.Undeliverable):
             # The address, not the server: a 400, so a typo isn't counted as the API failing.
             raise HTTPException(400, "Emails can't be sent to that address. Check it, or use another one.")
@@ -1458,24 +1552,37 @@ async def email_verify(request: Request, response: Response, body: dict = Body(.
     if email is None or not re.fullmatch(r"\d{6}", code):
         raise HTTPException(400, "Enter the 6-digit code from the email.")
     who, day = accounts.email_key(email), datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    network = _network(client_address(request))
     expected = await state["redis"].get(f"auth-code:{who}")
     if not expected:
         raise HTTPException(400, "That code has run out. Ask for a new one.")
-    # Counted before it's checked, so tries sent at once can't all get in under the limit.
-    tries = await state["redis"].incr(f"auth-tries:{who}")
-    await state["redis"].expire(f"auth-tries:{who}", CODE_LIFE)
-    if tries > CODE_TRIES:
-        await state["redis"].delete(f"auth-code:{who}")
-        raise HTTPException(429, "Too many wrong codes. Ask for a new one.")
+    tries = f"auth-tries:{who}:{expected[:16]}"  # this code's: a new one's are counted afresh
+    if not await _code_tries(tries, network, network == await state["redis"].get(f"auth-asked:{who}")):
+        raise HTTPException(429, TOO_MANY_WRONG)
     if not hmac.compare_digest(expected, mac("code", f"{email}:{code}")):
-        await state["redis"].incr(f"auth-fails:{who}:{day}")
-        await state["redis"].expire(f"auth-fails:{who}:{day}", 2 * DAY)
+        fails = f"auth-fails:{who}:{network}:{day}"
+        await state["redis"].incr(fails)
+        await state["redis"].expire(fails, 2 * DAY)
         raise HTTPException(400, "That code isn't right. Check the email and try again.")
-    await state["redis"].delete(f"auth-code:{who}", f"auth-tries:{who}", f"auth-wait:{who}")
+    await state["redis"].delete(f"auth-code:{who}", f"auth-asked:{who}", f"auth-wait:{who}", tries, f"{tries}:{network}")
     if await in_db(accounts.blocked, email):
         raise HTTPException(403, BLOCKED)
     account_id = await in_db(accounts.find_or_create, email)
     return await _sign_in(request, response, account_id, signed)
+
+
+async def _code_tries(tries: str, network: str, asked_here: bool) -> bool:
+    """Count a try at a code (its count's key `tries`) from this network, before it's checked, so tries sent at once
+    can't all get in under the limit; whether it may be tried. Each network has CODE_TRIES at it, and every network
+    but the one that asked for it CODE_TRIES_ELSEWHERE between them: wrong codes sent from elsewhere never end it for
+    the fan it was sent to (BUG-092), and guesses at it stay few."""
+    counts = [(f"{tries}:{network}", CODE_TRIES), *([] if asked_here else [(tries, CODE_TRIES_ELSEWHERE)])]
+    allowed = True
+    for key, limit in counts:
+        used = await state["redis"].incr(key)
+        await state["redis"].expire(key, CODE_LIFE)
+        allowed = allowed and used <= limit
+    return allowed
 
 
 def _google_callback(request: Request) -> str:
@@ -1523,11 +1630,15 @@ async def google_callback(request: Request, state: str = "", code: str = "", err
 @app.post("/api/auth/signout")
 async def sign_out(request: Request, response: Response, body: dict | None = Body(None), signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
     """Sign this device out, or every device ({"everywhere": true}). Their alerts stop; this device
-    becomes a new, empty anonymous fan."""
+    becomes a new, empty anonymous fan. A device signed in to nothing (signed out in another tab, or
+    everywhere from another device) keeps the fan it has, and what it followed since (BUG-094); only a
+    session cookie that ended elsewhere goes."""
     if signed is not None:
         everywhere = bool((body or {}).get("everywhere"))
         await _forget_sessions(await in_db(accounts.end_sessions, signed.account_id, None if everywhere else signed.session_id))
-    _clear_cookies_for_anonymous(request, response)
+        _clear_cookies_for_anonymous(request, response)
+    elif request.cookies.get(accounts.SESSION_COOKIE):
+        response.delete_cookie(accounts.SESSION_COOKIE, httponly=True, samesite="lax", secure=_secure(request))
     return {"signed_in": False}
 
 
@@ -1549,7 +1660,7 @@ async def _forget_account(gone: accounts.Deleted | None) -> None:
     if gone is not None:
         await _forget_sessions(gone.token_hashes)
         who = accounts.email_key(gone.email)
-        await state["redis"].delete(player_search.research_key(gone.fan_id), f"auth-code:{who}", f"auth-tries:{who}")
+        await state["redis"].delete(player_search.research_key(gone.fan_id), f"auth-code:{who}", f"auth-asked:{who}")
 
 
 # ---------------------------------------------------------------- clips (clips.py)
@@ -1727,13 +1838,17 @@ def _switch(body: dict, field: str) -> bool:
 async def admin_login(request: Request, response: Response, body: dict = Body(...)) -> dict[str, Any]:
     """Sign in to the admin panel with its password and, once one is set, a code from the authenticator
     app; each code works once. Tries are limited from each client address, and wrong ones from everyone
-    together, so neither can be guessed at speed. Every sign-in is counted (metrics.admin_sign_in), and
-    one that works is emailed (app-rules.json)."""
+    together, so neither can be guessed at speed. Past everyone's limit the right password and code still
+    get in (BUG-101: else a few addresses guessing keep the admin out), and every other try is refused
+    alike, so a guess learns nothing, not even whether its password was right; with no code set, nothing
+    gets in until the hour is over. Every sign-in is counted (metrics.admin_sign_in), and one that works is
+    emailed (app-rules.json)."""
     keys = await _admin_keys()
     now = time.time()
     await _take(f"admin-tries:{client_address(request) or 'unknown'}:{int(now // 900)}", admin.ATTEMPTS_PER_ADDRESS, 1800, "Too many tries. Wait a quarter of an hour.")
     failed = f"admin-fails:{int(now // 3600)}"
-    if int(await state["redis"].get(failed) or 0) >= admin.FAILURES_PER_HOUR:
+    walled = int(await state["redis"].get(failed) or 0) >= admin.FAILURES_PER_HOUR
+    if walled and not keys.totp:
         raise HTTPException(429, "Too many wrong tries this hour. Try again in an hour.")
     # Counted as wrong before it's checked, so tries sent at once can't all get in under the limit.
     await state["redis"].incr(failed)
@@ -1747,6 +1862,8 @@ async def admin_login(request: Request, response: Response, body: dict = Body(..
     if not right:
         metrics.admin_sign_in("wrong")
         admin_log.warning("admin panel: a wrong password or code")
+        if walled:
+            raise HTTPException(429, "Too many wrong tries this hour: until it's over, only the right password and code get in.")
         raise HTTPException(401, "That password or code isn't right." if keys.totp else "That isn't the admin password.")
     await state["redis"].decr(failed)
     token = secrets.token_urlsafe(32)
@@ -2050,9 +2167,30 @@ def unsubscribe(body: dict = Body(...), fan: str = Depends(fan_id), db: Session 
     return {"ok": True}
 
 
+# The zones browsers still call by an old name (Chrome's ICU says "Asia/Calcutta" in India), each with its current
+# one, which every zone database has: Debian's in the image keeps the old names apart, in tzdata-legacy (BUG-267).
+OLD_ZONE_NAMES = {
+    "Africa/Asmera": "Africa/Asmara", "America/Buenos_Aires": "America/Argentina/Buenos_Aires",
+    "America/Catamarca": "America/Argentina/Catamarca", "America/Coral_Harbour": "America/Atikokan",
+    "America/Cordoba": "America/Argentina/Cordoba", "America/Godthab": "America/Nuuk",
+    "America/Indianapolis": "America/Indiana/Indianapolis", "America/Jujuy": "America/Argentina/Jujuy",
+    "America/Kralendijk": "America/Curacao", "America/Louisville": "America/Kentucky/Louisville",
+    "America/Lower_Princes": "America/Curacao", "America/Marigot": "America/Port_of_Spain",
+    "America/Mendoza": "America/Argentina/Mendoza", "America/St_Barthelemy": "America/Port_of_Spain",
+    "Arctic/Longyearbyen": "Europe/Oslo", "Asia/Calcutta": "Asia/Kolkata", "Asia/Katmandu": "Asia/Kathmandu",
+    "Asia/Rangoon": "Asia/Yangon", "Asia/Saigon": "Asia/Ho_Chi_Minh", "Atlantic/Faeroe": "Atlantic/Faroe",
+    "Europe/Bratislava": "Europe/Prague", "Europe/Busingen": "Europe/Zurich", "Europe/Kiev": "Europe/Kyiv",
+    "Europe/Mariehamn": "Europe/Helsinki", "Europe/Podgorica": "Europe/Belgrade", "Europe/San_Marino": "Europe/Rome",
+    "Europe/Vatican": "Europe/Rome", "Pacific/Enderbury": "Pacific/Kanton", "Pacific/Ponape": "Pacific/Pohnpei",
+    "Pacific/Truk": "Pacific/Chuuk",
+}
+
+
 def _device_settings(body: dict) -> tuple[str, str | None, str | None]:
-    """A device's timezone (UTC unless it's a real one) and its quiet hours ("22:00" to "07:00", or none)."""
+    """A device's timezone, by its current name (UTC unless it's a real one), and its quiet hours ("22:00" to
+    "07:00", or none)."""
     tz = str(body.get("timezone") or "UTC")[:64]
+    tz = OLD_ZONE_NAMES.get(tz, tz)
     try:
         from zoneinfo import ZoneInfo
 
@@ -2304,11 +2442,12 @@ def _voter(address: str | None, fan: str) -> str:
 
 
 @app.post("/api/players/{player_id}/feed/{item_id}/unplayable")
-async def feed_unplayable(player_id: RowId, item_id: str, request: Request, fan: str = Depends(fan_id)) -> dict[str, Any]:
+async def feed_unplayable(player_id: RowId, item_id: str, request: Request, body: dict | None = Body(None), fan: str = Depends(fan_id)) -> dict[str, Any]:
     """The fan's app says this video of the player's feed won't play inside it: the video's own player refused it.
-    It leaves their Feed at once (feed.said_unplayable), and it's their network's vote on whether it leaves every
-    fan's: once feed.UNPLAYABLE_VOTES networks have said so, it does (feed.unplayable; "marked"), and an admin
-    approving or pinning it brings it back. The app opens it on its site instead. Saying it again changes nothing.
+    It leaves their Feed at once (feed.said_unplayable), and when the app is in the feed's country ({"timezone": the
+    device's}, feed.counts_everywhere) it's their network's vote on whether it leaves every fan's: once
+    feed.UNPLAYABLE_VOTES networks have said so, it does (feed.unplayable; "marked"), and an admin approving or
+    pinning it brings it back. The app opens it on its site instead. Saying it again changes nothing.
     A fan says so only so many times an hour, and an address and everyone together vote only so many times: past
     any, a 429. Each count is taken before the report is acted on, so reports arriving together can't all pass, and
     given back when it's refused; the address's and everyone's too when it isn't a new vote, so junk ids and a video
@@ -2342,7 +2481,8 @@ async def feed_unplayable(player_id: RowId, item_id: str, request: Request, fan:
         await give_back(shared)
         raise HTTPException(404, str(exc)) from exc
     votes = f"feed:unplayable:votes:{video}"
-    if video is None or not await redis.sadd(votes, _voter(address, fan)):  # an admin vouched for it, or this network said so before
+    # An admin vouched for it, the app is abroad (where it may not play when it does here), or this network said so before.
+    if video is None or not feed.counts_everywhere((body or {}).get("timezone")) or not await redis.sadd(votes, _voter(address, fan)):
         await give_back(shared)
         return {"item_id": item_id, "unplayable": True, "marked": False}
     await redis.expire(votes, feed.UNPLAYABLE_VOTES_FOR)
@@ -2476,7 +2616,7 @@ async def refresh(player_id: RowId, fan: str = Depends(fan_id)) -> dict[str, Any
         if bus.is_locked(f"structured:{player_id}"):
             return {"queued": False, "reason": "A refresh is already running."}
         await _refresh_due(player_id)
-        await enqueue("refresh_structured", player_id)
+        await enqueue("refresh_structured", player_id, _job_id=f"refresh-structured:{player_id}")
         return {"queued": True}
     if not AGENT_LIVE:
         return {"queued": False, "reason": "Live scores aren't available for this sport yet."}
@@ -2603,8 +2743,9 @@ async def athlete_preview(request: Request, system: str, athlete_id: str, league
 async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[str, Any]]]], request: Request):
     """Every message on the channels, after `first()`: what they cover as it is now, read once
     subscribed so nothing published in between is missed. Each reconnect starts here, so it is how an
-    app catches up. Holds no database connection."""
-    pubsub = state["redis"].pubsub()
+    app catches up. Holds no database connection, and one Redis connection, from the streams' own pool;
+    its route takes its places first (_hold_streams)."""
+    pubsub = state["streams"].pubsub()
     await pubsub.subscribe(*channels)
     try:
         for event in await first():
@@ -2620,8 +2761,43 @@ async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[s
         await pubsub.aclose()
 
 
-def _sse(body) -> StreamingResponse:
-    return StreamingResponse(body, media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+def _hold_streams(request: Request, fan: str | None) -> list[str]:
+    """Places for one more open stream: the fan's (when the route has one), its client address's (a public
+    one) and this process's. Past the fan's or the address's share a 429, past the process's a 503, and then
+    it holds none. The stream's answer gives them back when it ends (_Stream)."""
+    address = client_address(request)
+    shares = {f"fan:{fan}": STREAMS_PER_FAN} if fan else {}
+    if address:
+        shares[f"address:{address}"] = STREAMS_PER_ADDRESS if ":" in address else STREAMS_PER_IPV4
+    if any(streaming[key] >= share for key, share in shares.items()):
+        raise HTTPException(429, "Too many live updates open at once from here. Close some, and they come back.")
+    if streaming["all"] >= STREAMS_PER_PROCESS:
+        raise HTTPException(503, "Live updates are busy. The app tries again in a moment.")
+    places = [*shares, "all"]
+    streaming.update(places)
+    return places
+
+
+class _Stream(StreamingResponse):
+    """A stream's answer, which gives back its places (_hold_streams) when it ends, however it ends: its
+    client gone, the server stopping, or an error."""
+
+    def __init__(self, body: Any, places: list[str]) -> None:
+        super().__init__(body, media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        self.places = places
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            streaming.subtract(self.places)
+            for key in self.places:
+                if streaming[key] <= 0:
+                    del streaming[key]
+
+
+def _sse(body, places: list[str] | None = None) -> StreamingResponse:
+    return _Stream(body, places or [])
 
 
 @app.get("/api/players/{player_id}/stream")
@@ -2633,7 +2809,8 @@ async def player_stream(player_id: RowId, request: Request) -> StreamingResponse
         card = await read_card(player_id)
         return [{"type": "card", "player_id": player_id, "card": card}] if card else []
 
-    return _sse(_stream([bus.channel(player_id)], first, request))
+    places = _hold_streams(request, None)  # it needs no cookie: its address's share holds it
+    return _sse(_stream([bus.channel(player_id)], first, request), places)
 
 
 @app.get("/api/me/stream")
@@ -2645,17 +2822,23 @@ async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingRe
     they follow by themselves, and of their teams' games on now or soon (teams.event_ids), with their teams."""
     ids, games = await in_db(lambda db: (db.scalars(select(Follow.player_id).where(Follow.fan_id == fan)).all(),
                                          list(dict.fromkeys([*matches.event_ids(db, fan), *teams.event_ids(db, fan)]))))
+
+    async def first() -> list[dict[str, Any]]:
+        return [{"type": "following", "players": await _following(fan), "matches": await in_db(matches.mine, fan), "teams": await in_db(teams.mine, fan)}]
+
     if not ids and not games:
         async def idle():
+            # Nothing to hear yet, but the fan's list still comes first, as on any stream: an app whose fan was signed
+            # out elsewhere (it reads as nobody now), or stopped following everyone there, drops what it shows (BUG-162).
+            for event in await first():
+                yield f"data: {json.dumps(event, default=str)}\n\n"
             while not await request.is_disconnected():
                 yield PING
                 await asyncio.sleep(HEARTBEAT)
         return _sse(idle())
 
-    async def first() -> list[dict[str, Any]]:
-        return [{"type": "following", "players": await _following(fan), "matches": await in_db(matches.mine, fan), "teams": await in_db(teams.mine, fan)}]
-
-    return _sse(_stream([*(bus.channel(i) for i in ids), *(bus.match_channel(e) for e in games)], first, request))
+    places = _hold_streams(request, fan)
+    return _sse(_stream([*(bus.channel(i) for i in ids), *(bus.match_channel(e) for e in games)], first, request), places)
 
 
 # ---------------------------------------------------------------- the Android app
@@ -2717,6 +2900,51 @@ def watch_page(player: str, plays: str, request: Request) -> Response:
     return HTMLResponse(body, headers={"Content-Security-Policy": policy, "Cache-Control": "public, max-age=3600", "X-Robots-Tag": "noindex, nofollow"})
 
 
+# ---------------------------------------------------------------- link previews of invites, teams, clips and games
+
+
+@app.get("/api/leagues/{code}/share.png")
+async def invite_picture(code: LeagueCode) -> Response:
+    """The picture a league's invite link shows (share.of_invite): its name, who asked and how many are in it, never
+    its code. Only read: drawing it counts no opening."""
+    invite = await in_db(predictions.about, code)
+    if invite is None:
+        raise HTTPException(404, "No such league.")
+    return await _picture(share.of_invite(invite).picture)
+
+
+@app.get("/api/teams/{team_id}/share.png")
+async def team_picture(team_id: RowId) -> Response:
+    """The picture a link to a team's page shows (share.of_team): who it is, and its game on now, last or next."""
+    team = await in_db(teams.page, team_id, None)
+    if team is None:
+        raise HTTPException(404, "No such team.")
+    preview = share.of_team(team)
+    if preview is None:
+        raise HTTPException(404, "No such team.")
+    return await _picture(preview.picture)
+
+
+@app.get("/api/clips/{slug}/share.png")
+async def clip_picture(slug: str) -> Response:
+    """The picture a link to a clip shows (share.of_clip): its caption, its moment and its game, drawn."""
+    clip = await in_db(clips.one, slug)
+    if clip is None:
+        raise HTTPException(404, "No such clip.")
+    return await _picture(share.of_clip(clip).picture)
+
+
+@app.get("/api/match/{system}/{game}/share.png")
+async def game_picture(system: str, game: str) -> Response:
+    """The picture a link to a game's page shows (share.of_match): the game, and the score, who won or when it starts.
+    From what's stored: a made-up address asks nothing of a source."""
+    shown = (await in_db(lambda db: match.view(db, None, system, game)[0])) if system in KNOWN and match.ID.fullmatch(game) else None
+    preview = share.of_match(shown) if shown else None
+    if preview is None:
+        raise HTTPException(404, "No such game.")
+    return await _picture(preview.picture)
+
+
 # ---------------------------------------------------------------- the built frontend (production)
 
 # Served fresh every time, so a new build reaches installed apps: the page, the service worker that
@@ -2729,6 +2957,10 @@ PLAYER_PAGE = re.compile(r"player/([0-9]{1,10})/?")
 # A game's page, with a question of it (?q=<question id>, the link its card shares): the question's preview.
 MATCH_PAGE = re.compile(r"match/([a-z_]{1,40})/([A-Za-z0-9][A-Za-z0-9_.:-]{0,62})/?")
 GAME = re.compile(r"[0-9]{1,10}")
+# A league's invite (/j/<code>, the link a member shares), a team's page, and a clip's: each with its own preview.
+INVITE_PAGE = re.compile(r"j/([A-Za-z0-9]{4,16})/?")
+TEAM_PAGE = re.compile(r"team/([0-9]{1,10})/?")
+CLIP_PAGE = re.compile(r"clip/([A-Za-z0-9_-]{1,16})/?")
 
 # The build's files by their content's hash, typed by Python's mimetypes: a .wasm (a chess analysis board's engine)
 # as application/wasm, the only type a browser compiles as it streams in, which tests/test_share.py guards.
@@ -2741,12 +2973,22 @@ def _site(request: Request) -> str:
     return SITE_URL or f"{request.url.scheme}://{request.url.netloc}"
 
 
+async def _looked_up(path: str, read: Callable[[Session], T]) -> T | None:
+    """What a page's preview reads, or None when that fails."""
+    try:
+        return await in_db(read)
+    except Exception:  # noqa: BLE001 — the page is the app: it opens with the app's own preview instead
+        log.warning("link preview of /%s", path, exc_info=True)
+        return None
+
+
 async def _page_preview(path: str, request: Request) -> share.Preview | None:
     """The link preview of the page at `path`: a player's, a game of theirs, a campaign's, a question's (a game's page
-    with ?q=), or None for the app's own."""
-    if campaigns.SLUG.fullmatch(path.rstrip("/")) and path.rstrip("/") not in campaigns.TAKEN:
+    with ?q=), a league's invite, a team's, a clip's or a game's, or None for the app's own. Never as a fan sees it:
+    a crawler is no one."""
+    if (slug := campaigns.address(path.rstrip("/"))) and slug not in campaigns.TAKEN:
         try:
-            shown = await in_db(campaigns.page, path.rstrip("/"), None)
+            shown = await in_db(campaigns.page, slug, None)
         except Exception:  # noqa: BLE001 — the page is the app: it opens with the app's own preview instead
             log.warning("link preview of /%s", path, exc_info=True)
             return None
@@ -2759,6 +3001,8 @@ async def _page_preview(path: str, request: Request) -> share.Preview | None:
             log.warning("link preview of /%s", path, exc_info=True)
             return None
         return share.of_question(q) if q and q["match"] == f"{g[1]}/{g[2]}" else None
+    if found := await _shared(path):
+        return found
     m = PLAYER_PAGE.fullmatch(path)
     if not m or int(m[1]) > MAX_ID:
         return None
@@ -2768,6 +3012,24 @@ async def _page_preview(path: str, request: Request) -> share.Preview | None:
     except Exception:  # noqa: BLE001 — the page is the app: it opens with the app's own preview instead
         log.warning("link preview of /%s", path, exc_info=True)
         return None
+
+
+async def _shared(path: str) -> share.Preview | None:
+    """The preview of a league's invite, a team's page, a clip's or a game's at `path`; None for another page, or one
+    of these there's none of (no such league, a team of a sport turned off, a game no source has named here)."""
+    if m := INVITE_PAGE.fullmatch(path):
+        invite = await _looked_up(path, lambda db: predictions.about(db, m[1]))
+        return share.of_invite(invite) if invite else None
+    if (m := TEAM_PAGE.fullmatch(path)) and int(m[1]) <= MAX_ID:
+        team = await _looked_up(path, lambda db: teams.page(db, int(m[1]), None))
+        return share.of_team(team) if team else None
+    if m := CLIP_PAGE.fullmatch(path):
+        clip = await _looked_up(path, lambda db: clips.one(db, m[1]))
+        return share.of_clip(clip) if clip else None
+    if (m := MATCH_PAGE.fullmatch(path)) and m[1] in KNOWN and match.ID.fullmatch(m[2]):
+        game = await _looked_up(path, lambda db: match.view(db, None, m[1], m[2])[0])  # what's stored: a preview asks no source
+        return share.of_match(game) if game else None
+    return None
 
 
 def _built(path: str) -> Path | str | None:
@@ -2794,7 +3056,16 @@ async def spa(path: str, request: Request) -> Response:
     if isinstance(found, Path):
         cache = "no-cache" if found.name in NO_CACHE else "public, max-age=86400"
         return FileResponse(found, media_type=MEDIA.get(found.suffix), headers={"Cache-Control": cache})
-    return HTMLResponse(share.page(found, await _page_preview(path, request), _site(request)), headers={"Cache-Control": "no-cache", **_not_indexed(path)})
+    # private: it can carry this device's fan cookie (below), which no shared cache may keep for others.
+    response = HTMLResponse(share.page(found, await _page_preview(path, request), _site(request)), headers={"Cache-Control": "private, no-cache", **_not_indexed(path)})
+    # The app's page is its first request: it makes this device's fan (a read doesn't: _fan), so the calls the app
+    # sends together as it starts are all one fan's (BUG-152). Not a signed-in device's, which is its account.
+    if not request.cookies.get(accounts.SESSION_COOKIE):
+        try:
+            await asyncio.to_thread(_fan, request, response, None, True)
+        except Exception:  # noqa: BLE001 — the page is the app: without its fan for now, its first write makes one
+            log.warning("the app's page: couldn't make this device's fan", exc_info=True)
+    return response
 
 
 def _not_indexed(path: str) -> dict[str, str]:

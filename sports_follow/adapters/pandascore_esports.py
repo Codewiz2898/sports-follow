@@ -570,14 +570,18 @@ class PandascoreEsports(Adapter):
         match_id = str(locator["match"])
         if final and match_id in self._seen:
             return parse_match(self._seen[match_id])
-        # A short cache lets every followed player in one series share each poll's fetch.
-        data = pandascore.get_json(f"/matches/{match_id}", ttl=24 * 3600 if final else 30)
-        if not isinstance(data, dict) or not data.get("id"):
-            raise AdapterError(f"PandaScore has no match {match_id}")
-        self._keep([data])
-        snap = parse_match(data)
+        read: list[dict[str, Any]] = []
+
+        def series(ttl: float) -> Snapshot:  # the request match() makes for its page, too
+            data = pandascore.get_json(f"/matches/{match_id}", ttl=ttl)
+            if not isinstance(data, dict) or not data.get("id"):
+                raise AdapterError(f"PandaScore has no match {match_id}")
+            read[:] = self._keep([data])
+            return parse_match(data)
+
+        snap = self.read_snapshot(series, final, 30)
         if not final:
-            self._dota(data, snap)
+            self._dota(read[0], snap)
         return snap
 
     @staticmethod
@@ -639,10 +643,11 @@ class PandascoreEsports(Adapter):
             heroes = opendota.heroes()
             known = self._known_maps(str(m.get("id")), len(finished) + 1, game)
             numbered = sorted((int(n), mid) for n, mid in known.items() if int(n) <= len(finished))
-            if not numbered and finished:
-                # Nothing seen live (the worker started mid-series): OpenDota's last hundred pro matches.
+            if len(numbered) < len(finished):
+                # Maps not seen live (the worker started, or the page was first opened, mid-series): OpenDota's last
+                # hundred pro matches.
                 begin = _time(m.get("begin_at") or m.get("scheduled_at"))
-                numbered = dota.number_maps(dota.find_maps(over, teams, int(begin.timestamp()) if begin else 0), len(finished))
+                numbered = dota.fill_maps(numbered, dota.find_maps(over, teams, int(begin.timestamp()) if begin else 0), len(finished))
             names = {str(p["id"]): p.get("name") or "" for p in roster if p.get("id") is not None}
             items = opendota.items() if detail else {}
             maps, parts, parsed = [], [], 0

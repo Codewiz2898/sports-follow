@@ -445,6 +445,31 @@ def test_a_followed_player_found_by_another_name_is_theirs(monkeypatch):
     assert [(r.key, r.player_id) for r in search.rank("salah", [ours], [hit])] == [("sportmonks_football:4125", 14)]
 
 
+@pytest.mark.parametrize("research", [True, False])
+def test_a_live_hit_lists_the_player_here_it_names_though_the_query_is_only_like_them(monkeypatch, research):
+    # "leo messi": ESPN finds Lionel Messi, and Messi's page here is only alike to what was typed (no alias of it
+    # starts so). The hit was dropped as the page's, and the page wasn't listed: the answer was empty (BUG-147).
+    from sports_follow import config
+
+    monkeypatch.setattr(config, "RESEARCH", research)
+
+    def page() -> SearchResult:
+        return SearchResult(key="wikidata:Q615:football", name="Lionel Messi", sport="Football", detail="Inter Miami", player_id=28, followers=3, matched=False, _rank=(0.45,))
+
+    hit = SearchResult(key="espn_soccer:45843", name="Lionel Messi", sport="Football", detail="Inter Miami · MLS", system="espn_soccer", athlete_id="45843", live_scores=True)
+    asked = searching(monkeypatch, espn=[hit])
+    monkeypatch.setattr(search, "local", lambda db, query, fan, sport: [page()])
+    out = search.run(None, "leo messi")
+    assert "leo messi" in asked
+    # The page stands for both, as a registry row the source names does: one Messi, the one fans follow here.
+    assert [(r["name"], r["player_id"]) for r in out["results"]] == [("Lionel Messi", 28)]
+    # Someone only alike, whom the source didn't name, is still a "did you mean" at most, not a result.
+    other = SearchResult(key="espn_soccer:1", name="Leon Messing", sport="Football", detail="", system="espn_soccer", athlete_id="1", live_scores=True)
+    searching(monkeypatch, espn=[other])
+    monkeypatch.setattr(search, "local", lambda db, query, fan, sport: [page()])
+    assert 28 not in [r["player_id"] for r in search.run(None, "leo messi")["results"]]
+
+
 # ---------------------------------------------------------------- the trigram index
 
 

@@ -133,6 +133,9 @@ def test_a_day_later_a_kept_video_is_read_again_for_its_pace(world):
     world.feeds[CHANNEL] = feed(("kohli000001", "Kohli: the chase", ""))
     world.videos["kohli000001"] = video("kohli000001", views=100, likes=4)
     candidates.poll(NOW)
+    with db_module.session() as s:  # the judge read it
+        s.execute(update(FeedCandidate).values(verdict={"about_player": "subject", "interest": 0.8}, judged_at=NOW, score=0.5))
+        s.commit()
     world.videos["kohli000001"] = video("kohli000001", views=2500, likes=90, paid=True)  # its maker declares paid promotion meanwhile
     candidates.poll(NOW + timedelta(hours=6))
     assert world.api_calls("/videos") == 1  # not a day yet
@@ -142,6 +145,7 @@ def test_a_day_later_a_kept_video_is_read_again_for_its_pace(world):
         row = s.scalar(select(FeedCandidate))
         assert row is not None and row.features["views"] == 2500 and row.checked_at == later and row.candidate["paid"] is True
         assert row.verdict is None and row.score is None  # judged again before it's served: the rules make it a promo
+        assert s.scalar(select(FeedCandidate.id).where(FeedCandidate.verdict.is_(None))) == row.id  # SQL's NULL, not JSON's: in the judge's queue
         assert [(r["views"], r["at"]) for r in row.features["reads"]] == [(100, NOW.isoformat()), (2500, later.isoformat())]
     candidates.poll(later + timedelta(minutes=30))
     assert world.api_calls("/videos") == 2  # read twice, then left to the weekly check
@@ -299,6 +303,25 @@ def test_a_video_a_fans_app_said_wont_play_inside_it_stays_unserved_when_found_f
     with db_module.session() as s:
         marks = dict(s.execute(select(FeedCandidate.player_id, FeedCandidate.unplayable_at)).all())
     assert marks == {kohli: NOW, bumrah: NOW}
+
+
+def test_a_video_an_admin_hid_stays_hidden_when_found_for_another_player(world):
+    """BHA-438: an admin's hide is the video's: a later poll that keeps it for someone else keeps it hidden."""
+    from sports_follow import rank
+
+    kohli = player("Virat Kohli")
+    world.feeds[CHANNEL] = feed_xml = feed(("kohlibumrah", "Kohli and Bumrah on the tour", ""))
+    world.videos["kohlibumrah"] = video("kohlibumrah")
+    candidates.poll(NOW)
+    with db_module.session() as s:
+        row = s.scalar(select(FeedCandidate.id).where(FeedCandidate.player_id == kohli))
+        assert row is not None and rank.review(s, row, "hidden")
+    bumrah = player("Jasprit Bumrah")
+    world.feeds[CHANNEL] = feed_xml
+    assert candidates.poll(NOW + timedelta(minutes=30))["kept"] == 1
+    with db_module.session() as s:
+        said = dict(s.execute(select(FeedCandidate.player_id, FeedCandidate.review)).all())
+    assert said == {kohli: "hidden", bumrah: "hidden"}
 
 
 def test_a_poll_keeps_pool_players_videos_and_a_teams_video_for_its_players_as_their_teams(world):

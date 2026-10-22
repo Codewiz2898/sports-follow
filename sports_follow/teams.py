@@ -39,7 +39,7 @@ from sqlalchemy.dialects.postgresql import distinct_on, insert
 from sqlalchemy.orm import Session, aliased
 
 from . import bus, logs, matches, moments, naming, registry, search, sports, structured
-from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, Fixture, PlayerRef, SourceTeam, serving, source_name
+from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, Fixture, PlayerRef, SourceTeam, budget, serving, source_name
 from .db import session
 from .models import Event, EventState, EventTeam, Moment, NotificationMute, Team, TeamFollow, TeamOverride
 from .sports.base import Found
@@ -344,8 +344,9 @@ def due(db: Session, now: datetime) -> list[int]:
 def refresh(team_id: int) -> None:
     """Read a team's games again from its source (the worker, for a followed team, or a page nobody follows it
     from): each one's event made or brought up to date and linked to the team, each result kept from its side,
-    and its page. A source down to what its live games need isn't read (structured.spare); a failure is noted in
-    the team's health, which the tick waits on before the next try (structured.retry_at)."""
+    and its page. A source down to what its live games need isn't read (structured.spare), nor one whose share for this
+    lane is spent for now (budget.RateLimited): both are tried at the next tick, and neither is a failure. A failure is
+    noted in the team's health, which the tick waits on before the next try (structured.retry_at)."""
     lock = f"team:{team_id}"
     token = bus.try_lock(lock, REFRESH_LOCK)
     if not token:
@@ -363,6 +364,8 @@ def refresh(team_id: int) -> None:
             log.info("team %s: %s is down to what live games need; next tick", team_id, system)
             return
         _refresh(team_id, adapter, external, card)
+    except budget.RateLimited as exc:
+        log.info("team %s: %s; next tick", team_id, exc)
     except AdapterError as exc:
         log.warning("team %s refresh failed: %s", team_id, exc)
         _health(team_id, ok=False, error=str(exc))

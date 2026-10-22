@@ -99,6 +99,10 @@ class Fixture:
     # (a chess round once it's paired), so Coming up shows the game once (structured.board_key). "" where the
     # fixture is the game, or the source doesn't know it yet.
     board: str = ""
+    # A game with no start time of its own that the source says is next: it starts once the one before it is over
+    # (a chess round set to start after the previous one). It's armed while it is, so its start is seen when it
+    # comes (structured.reschedule).
+    next_up: bool = False
 
 
 @dataclass
@@ -304,7 +308,10 @@ class Adapter:
     same), which the worker moves every binding to (structured.rekey_bound). Its id_pattern then refuses
     the old ids, and the registry drops its rows holding one. A source that lists teams' rosters has
     team(team_id) -> SourceTeam | None and find_teams(name) -> [SourceTeam], with team_id_pattern the shape
-    of its team ids: a campaign page follows a whole team through them (campaigns.py).
+    of its team ids: a campaign page follows a whole team through them (campaigns.py). A source that lists a
+    game only once it's under way (PUBG's lobbies, once their first match is over) has listed_after_start (a
+    timedelta): first polled that soon after its start, the game's start and what happened since are told, as
+    they'd have been had it been listed ahead (structured.opened_live).
 
     A source fans can follow teams from (teams.py) has, for its sports whose athletes turn out for teams
     (Sport.team): teams() -> [SourceTeam], every team it covers in its sports that run (running()), players
@@ -329,6 +336,10 @@ class Adapter:
     # so their old team's games stop (structured.record_move). False where a read may leave the team out (ESPN's athlete
     # records at times): a read with no team is passed over there, and the binding stays as it is.
     no_team_is_real = False
+    # True for a source whose game may go on again after it said it was over (a PUBG lobby, called over after 90
+    # minutes without a match, joined by one after a longer break): a refresh that finds it on again puts it back to
+    # live, and its next poll tells what happened since (structured.reopened). Otherwise a game seen over stays over.
+    final_may_reopen = False
     # How a player's page words this source's live scores, where the app's general sentences don't fit (a
     # source whose standings come after each match): live_note under the live board, lag_note at the page's
     # foot. Sent in the card's live block; None leaves the app's own.
@@ -388,9 +399,22 @@ class Adapter:
         raise NotImplementedError
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
-        """The event now. final=True may serve a cached copy: a finished match doesn't change. Called from
-        several threads at once: a refresh reads a player's recent finals side by side."""
+        """The event now. final=True may serve a cached copy: a finished match doesn't change (read_snapshot).
+        Called from several threads at once: a refresh reads a player's recent finals side by side."""
         raise NotImplementedError
+
+    @staticmethod
+    def read_snapshot(read: Callable[[float], Snapshot], final: bool, live: float, kept: float = 24 * 3600) -> Snapshot:
+        """An event's snapshot by read(ttl), its read through the source's cache with that ttl, for snapshot().
+        A live read takes a copy up to `live` seconds old: a short cache lets every followed player in one game
+        share each poll's fetch. A final read takes one up to `kept` old, as a finished game doesn't change; but
+        the cache keeps a game's copy a day however it was read (cache.KEEP), so the copy may be from while it
+        was on (a live poll's, its match page's, a squad check's), and one not over is read again as a live
+        read would be. A refresh's, the history lane's and a preview's final reads all come through here."""
+        if not final:
+            return read(live)
+        snap = read(kept)
+        return snap if snap.status == "final" else read(live)
 
     # Optional, for a source that fetches many events in one request (Sportmonks football):
     #   def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]
@@ -490,6 +514,7 @@ class VideoFacts:
     allowed: tuple[str, ...] | None = None  # the only countries it plays in (ISO 3166-1 alpha-2), where the source limits it
     blocked: tuple[str, ...] = ()  # countries it doesn't play in
     paid: bool = False  # its maker declared paid promotion in it (YouTube's "Includes paid promotion")
+    age_restricted: bool = False  # only a signed-in adult may watch it, on the source's own site: no embedded player plays it
     raw: dict[str, Any] = field(default_factory=dict)  # the parts the source sent, as it sent them
 
     def plays_in(self, country: str) -> bool:

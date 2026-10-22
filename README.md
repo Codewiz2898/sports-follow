@@ -289,7 +289,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   id they share), and is made from its board the first time it's seen before the start: a poll of a followed
   game, a look at its match page (which lists its questions), or the worker's read of a fan's game, or one of
   Today's big games, coming up within a day (`prepare_questions`, every ten minutes, at most once every two hours a
-  game till its board asks: a big game's card says "Call it" to a fan who follows nobody). It
+  game till its board asks: a big game's card says "Call it" to a fan who follows nobody). A game with no start
+  time is asked nothing till it has one (nothing would close it as it began); one asked before that takes a pick
+  only on a board a few minutes fresh that says the game's still to come. It
   closes as its game or map starts (`Sport.closed`; a first question's start time closes it too, and the server
   refuses a pick after that) and settles from the board (`Sport.answer`): a right pick scores 100 less the share of
   fans who picked the same, at least 10; a wrong one 0; a map the series didn't need is voided, as is a question
@@ -303,14 +305,19 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   joining a league needs one (`prediction_league`, `prediction_member`: a six-letter invite code, a name the
   friends see, never the email). Fans see how everyone split once they've picked; friends' picks show in the
   league once the question's closed; a league's table is its members' points on what settled since it was made.
-  The split shows to a fan once they've picked and at least 20 have, as shares only while it's open (counts, or
-  fewer picks, would tell them a friend's pick), and to everyone once the question's closed; picks on questions still open move into an account on sign-in, those
+  The split shows to a fan once they've picked and at least 20 have, and to everyone once the question's closed.
+  While it's open it's shares of the split as it stood when last refreshed (at 20 picks, then each 10 more, a tenth
+  more past a hundred: `Question.split`), with that count, never the exact one: else its moves would tell a fan a
+  friend's pick. Only picks from an account, or from a fan whose cookie came with the pick, count in the split and
+  in what a right pick scores (`Pick.counted`): a request without a cookie is a new fan, whose pick is theirs and
+  scored but moves nobody else's numbers. Picks on questions still open move into an account on sign-in, those
   already under way stay the device's (no calling a game three ways and signing in on the right browser). A game
   whose source is off asks nothing, and picks are limited per address. In the app: "Call it" on a match page (beside the
   game on a wide screen, in the side column) and on a campaign page (its players' games); on Today and in the side
   column, a game's card says "Call it" until the fan has, then their pick, then "You called it · +38" or what they said
   (`GET /api/me/predictions`, `web/src/components/Calls.tsx`); `/me/leagues`, `/league/<code>` and the invite `/j/<code>`, whose sign-in comes back
-  to it. A question's own link (`/match/<game>?q=<id>`, its card's Share) previews its split (`share.of_question`).
+  to it. A question's own link (`/match/<game>?q=<id>`, its card's Share) previews the question, and its split once
+  it's closed (`share.of_question`).
   The admin panel's Users tab counts leagues (and those of three or more), invites shared and opened, and fans who
   picked on two game days. Pushes (`sports_follow/predictions_push.py`, the worker every minute): "Make your pick" two
   hours before a campaign's game (`campaigns.player_ids`: its players' game within three hours of one on its
@@ -351,9 +358,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   crawlers that read them run no JavaScript. A player's page says who they are and what they're doing
   now, live, last or next; a game of theirs (`/player/<id>?g=<event id>`, the link a This week poster
   shares) says its big moment in the sport's own words, as This week does (`week.game`); a campaign page
-  (`/<slug>`, below) says its event, its next game and who to follow; every other page says what the app is.
+  (`/<slug>`, below) says its event, its next game and who to follow; a league's invite (`/j/<code>`) says join
+  it, who asked and how many are in it, never its code; a team's page says who and its game on now, last or
+  next; a clip's says its caption, moment and game; a game's (`/match/<source>/<game>`) its score, who won or
+  when it starts; every other page says what the app is. A preview is what anyone with the link may see, read
+  from what's stored: it counts no invite as opened and asks no source.
   Each has a 1200 × 630 picture drawn by the server with Pillow (`/api/players/<id>/share.png`, `?g=` for a
-  game; `/api/campaigns/<slug>/share.png`; `/api/share.png` for the app): a block of the sport's
+  game; `/api/campaigns/<slug>/share.png`; `/api/leagues/<code>/share.png`; `/api/teams/<id>/share.png`;
+  `/api/clips/<id>/share.png`; `/api/match/<source>/<game>/share.png`; `/api/share.png` for the app): a block of the sport's
   colour, the name and the moment's word in Anton, the lines in Manrope, the app's name in the logo's
   Fredoka (the fonts are in `sports_follow/data/fonts`, OFL). No photos, no likenesses, no league or
   team marks. Its address carries a digest of what it shows, so a crawler that caches pictures by
@@ -471,7 +483,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   that doesn't answer keeps the roster last read. Its players are registry athletes a running source has
   (checked as a starter is), so following never needs AI research. A campaign is a row in `campaign`, set
   with a command; a later one (the WPL, the IPL) is a new row. Its address is any one word the app doesn't
-  have (`campaigns.TAKEN`, which `tests/test_campaigns.py` holds to the app's routes). A campaign of a sport
+  have (`campaigns.TAKEN`, which `tests/test_campaigns.py` holds to the app's routes), in lower case; a link
+  typed with capitals (`stann.in/Gukesh`, from a poster) is the same page, its preview and the Android app's
+  too, and the web app moves it to `/gukesh`. A campaign of a sport
   that's turned off has no page, and a player removed with `players remove` leaves every campaign.
 
       python -m sports_follow.campaigns set gukesh --sport chess --title "Gukesh v Sindarov" --event "World Chess Championship" --line "…"
@@ -811,7 +825,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   kinds, whether it's a team sport and whether fans can follow its teams (`follow_teams`, with a result from one
   side in its words: `side_final`), its Wikidata ids and registry rules, what its players' pages read from
   Wikidata (`profile_nation`, `profile_role` and the awards worth naming, `honours`: wiki.py), its moments (start, result,
-  line-up, what happens during a game, what a source takes back (`taken_back`), and which of them are a
+  line-up, what happens during a game, whether a player's first line in a game polled all along is news
+  (`first_line_is_news`: a cricketer's first ball) and whether a result is still to come (`result_pending`: cricket's
+  summary a poll behind its "Result"), what a source takes back (`taken_back`), and which of them are a
   player's highs on Today's "This week" and in what words (`poster`: a "Five-for"), and the same off a
   finished game's line when no moment was found in it (`finished_poster`: "5/23 (4 ov)")), how big a game
   its sources list league-wide is and what its card says (`notable`: a final, "1st v 3rd", a last-over
@@ -894,8 +910,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   one by address, see who they follow and their devices, sign them out everywhere, block them from
   signing in, delete them). What it changes is rows in `control` (`sports_follow/controls.py`), which
   every process reads again every 10 seconds; `sports.ENABLED`, `adapters.ADAPTERS` and the source
-  budgets follow them. The server's settings stay the ceiling: a sport `SPORTS_FOLLOW_SPORTS` leaves out,
-  or a source `SPORTS_FOLLOW_SOURCES` leaves out or without its token, can't be turned on there. It opens
+  budgets follow them. A sport turned off while its games are on is safe: the next tick puts them off
+  (`structured.put_off`: no longer polled, nor LIVE on cards or phones), and once it's on again its
+  players' and teams' games are read at the next tick, which brings each back as its source has it.
+  The server's settings stay the ceiling: a sport `SPORTS_FOLLOW_SPORTS` leaves out, or a source
+  `SPORTS_FOLLOW_SOURCES` leaves out or without its token, can't be turned on there. It opens
   with a password of its own, not a fan's account, and a 6-digit code from an authenticator app (TOTP,
   RFC 6238; each code works once): `python -m sports_follow.admin password` saves the password's scrypt
   hash and `python -m sports_follow.admin code` the app's key, checked against a code from the app before
@@ -915,7 +934,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   asks first unless given `--yes`. `restore` takes a decision back, and `list` shows them. Decisions are
   rows in `athlete_override`, which every registry import respects, so they work on a running server and
   survive the weekly import; a removed athlete's ids in the sources are left out of search and refused
-  for following. `unmatch <ref> [Q…]` is for an esports pro matched to the wrong Wikidata person, so
+  for following, in every source of their sport (`remove` asks each it has no id in, by name and birth date),
+  and so is a pick with their name and birth date from a source added since. `unmatch <ref> [Q…]` is for an esports pro matched to the wrong Wikidata person, so
   shown with someone else's face: it takes the match and photo back at once (off every card showing it,
   followed or not, and off the Credits page) and
   no run of `roster_wikidata` matches them again, to that person if one is named, else to anyone;
@@ -934,13 +954,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   follows goes by itself; a followed one stays.
 - **Starter players**, who a new fan is offered in each sport (the welcome, an empty Today, search's
   "Try"), find themselves, the same way for every sport (`sports_follow/starters.py`): who's playing
-  now or soon, worked out as asked from the live cards; the most followed, counted as asked; and the
+  now or soon, worked out as asked from the live cards; the most followed by signed-in fans (at least two:
+  a cookie's follow is its own), counted as asked; and the
   best known (Wikipedia editions, the home country's counting double: `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY`)
   with a game soon, which the worker finds in their sources once a day. The operator can pin a few
   ahead of them with `players starter add <registry id>` (it checks the source has them, and keeps
   them in the registry), `starter remove` (they stay kept; `restore` lets them go) and `starter list`;
-  `starter refresh` builds the best-known pool now. A sport that's turned off offers none, and removing a
-  player takes their pin with them, and takes them off every campaign page.
+  `starter refresh` builds the best-known pool now. A sport that's turned off offers none, without research
+  a page no live source has isn't offered, and removing a player takes their pin with them, and takes them off
+  every campaign page.
 - **The Feed's content judge** (`sports_follow/curate.py`, BHA-297) decides whether a share about a player (an
   unofficial video, a news headline, the player's own post) is fit to show, before any fan sees it. Given a
   `Candidate` (what was found, who posted it, and who it was found for, with their own accounts) it returns a
@@ -1076,6 +1098,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_LINEAR_FREE_ISSUES` | `250` | the issues Linear's Free plan holds (not counting archived ones), which the panel counts against; Linear's API doesn't say it |
 | `SPORTS_FOLLOW_CONTACT_EMAIL` | none | where fans write about their data, shown on the privacy page (no Questions part without it) and in the user agent data sources see |
 | `SPORTS_FOLLOW_SITE_URL` | none | the app's public address; compose sets `https://$DOMAIN`. Push services and data sources are told it, and link previews' addresses are on it (without it, on the address each request came to) |
+| `SPORTS_FOLLOW_API_DOCS` | off | `1` serves FastAPI's own docs (`/docs`, `/redoc`, `/openapi.json`) on a development server; they list every route, the admin panel's too, so never on the site |
 | `SPORTS_FOLLOW_COMMIT` | none | the commit the image was built from, which `/api/health` says; `deploy.sh` passes it to the build, so set it by hand only to test |
 | `SPORTS_FOLLOW_VAPID_SUBJECT` | the site address, else `https://localhost` | the contact push services see; never a person's address |
 | `SPORTS_FOLLOW_STOCKFISH` | `stockfish` on the PATH | chess engine; without it, no chess swings |
@@ -1102,6 +1125,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_FEED_POOL_ADDS` | `40` | pool players made a day at most, each found in their sport's live source as a follow from search would (a request or a few each) |
 | `SPORTS_FOLLOW_FEED_POOL_SEARCHES` | `10` | pool-sweep searches in any 24 hours (`sweeps.py`): a pool player nobody follows, their last 60 days, each at most fortnightly; `0` turns it off |
 | `SPORTS_FOLLOW_FEED_COUNTRY` | `IN` | where the feed's fans watch from (ISO 3166-1 alpha-2): a video that doesn't play there isn't kept |
+| `SPORTS_FOLLOW_FEED_ZONES` | `Asia/Kolkata,Asia/Calcutta` with `IN`, else empty | the time zones a device in `SPORTS_FOLLOW_FEED_COUNTRY` says it's in, comma-separated: only an app in one of them helps take a "won't play" video from every fan's Feed (it always leaves that fan's); empty, every app does |
 | `SPORTS_FOLLOW_FEED_LAYOUT` | `edge` | how the apps draw the Feed tab: `edge` (posts edge to edge) or `full` (a video a screen); the admin panel's Feed tab changes it live, and every page of the Feed and `/api/config` say which |
 | `SPORTS_FOLLOW_CLIPS_ENDPOINT` | none | the clips bucket's S3 endpoint (`https://<account>.r2.cloudflarestorage.com`); clips are off without it and the next three |
 | `SPORTS_FOLLOW_CLIPS_BUCKET` | none | the clips bucket's name |
@@ -1192,8 +1216,8 @@ needs a new app build, not only new JavaScript. Removing chess removes the modul
 **stann.in links open the app** when it's installed (Android App Links), at the same page: a player
 shared on WhatsApp, a campaign's link in a launch post. The app claims the addresses it has a page for,
 which `mobile/app.config.ts` reads from its routes (`mobile/src/app`): `/`, `/player/…`, `/match/…`,
-`/search` and the rest, and any one-word address for a campaign (Android 12 and later; older phones open
-campaigns in the browser). The admin panel's `/admin` is one-word too, so a tapped link to it opens the
+`/search` and the rest, and any one-word address for a campaign, capitals and all, since Android matches a
+path as it's typed (Android 12 and later; older phones open campaigns in the browser). The admin panel's `/admin` is one-word too, so a tapped link to it opens the
 app's "Not found"; typed into Chrome, it stays there. Android trusts the claim only once
 `https://stann.in/.well-known/assetlinks.json` names the package and the SHA-256 fingerprint of the
 certificate that signed the installed app: on the server, `SPORTS_FOLLOW_ANDROID_PACKAGE=io.slam.app` and

@@ -125,7 +125,8 @@ class AthleteOverride(Base):
 
     keep: an athlete added by hand, or one pinned so an import never drops them; imports may refresh the
     row but never delete it. remove: taken out, with their page; an import never writes the row again,
-    and search and following leave out their ids in the sources.
+    and search and following leave out their ids in the sources, and following a pick with their name and
+    birth date.
     """
 
     __tablename__ = "athlete_override"
@@ -137,6 +138,9 @@ class AthleteOverride(Base):
     action: Mapped[str] = mapped_column(String(10))  # keep | remove
     name: Mapped[str] = mapped_column(String(200))  # who, as they were called then
     ids: Mapped[dict] = mapped_column(JSONB, default=dict)  # their ids in the sources: {"espn_cricket": "253802"}
+    # A removed athlete's, as the registry had it: a pick with their name and birth date is them, in a source
+    # whose id for them nobody knew when they were removed (registry.removed).
+    birth_date: Mapped[date | None] = mapped_column(Date)
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = _now()
 
@@ -451,8 +455,9 @@ class FeedCandidate(Base):
     judge_tries: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     judge_error: Mapped[str | None] = mapped_column(String(20))
     judge_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # The player's moment it's about (published within two days after it), so the Feed groups it there.
-    moment_id: Mapped[int | None] = mapped_column(ForeignKey("moment.id", ondelete="SET NULL"))
+    # The player's moment it's about (published within two days after it), so the Feed groups it there. Indexed:
+    # deleting old moments (retention.py) looks up each one's candidates.
+    moment_id: Mapped[int | None] = mapped_column(ForeignKey("moment.id", ondelete="SET NULL"), index=True)
     # An admin's word on it (rank.REVIEWS: approved, hidden, pinned), which stands over the judge's.
     review: Mapped[str | None] = mapped_column(String(10))
     # When enough fans' apps said its source's player won't play it inside the app (feed.unplayable): its owner keeps
@@ -610,7 +615,8 @@ class Moment(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     key: Mapped[str] = mapped_column(String(200), unique=True)
     player_id: Mapped[int | None] = mapped_column(ForeignKey("player.id", ondelete="CASCADE"), index=True)  # None: the game's own
-    event_id: Mapped[int | None] = mapped_column(ForeignKey("event.id", ondelete="SET NULL"))
+    # Indexed: a live game's polls, its match page and the activity lists look its moments up by it.
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("event.id", ondelete="SET NULL"), index=True)
     kind: Mapped[str] = mapped_column(String(30))  # start | lineup | final | goal | assist | red | on | fifty | hundred | correction | ...
     level: Mapped[str] = mapped_column(String(10))  # key | minor
     priority: Mapped[int] = mapped_column(Integer, default=50, server_default="50")  # 0-100, moments.PRIORITY
@@ -775,6 +781,10 @@ class Question(Base):
     # When its pushes went (predictions_push.py): "Make your pick" before its game, how each pick went after.
     reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     told_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Its split as fans see it while it's open: the counted picks of each answer when it was last refreshed, which is
+    # only once enough more have picked that a friend's one pick isn't told by it (predictions.pick). None till
+    # predictions.SPLIT_FROM have.
+    split: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = _now()
 
 
@@ -782,7 +792,7 @@ class Pick(Base):
     """A fan's answer to a question (predictions.py), changed as often as they like until it closes; scored when it
     settles: 100 less the share of fans who picked the same, for a right one, at least predictions.FLOOR; 0 for a
     wrong one; none when the question was voided. Kept under the fan id, an anonymous fan's moving to the account
-    they sign in to (accounts.adopt)."""
+    they sign in to (accounts.adopt); one that moved after its question closed is moved_late, in no league's table."""
 
     __tablename__ = "prediction_pick"
 
@@ -790,6 +800,11 @@ class Pick(Base):
     fan_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
     option: Mapped[str] = mapped_column(String(64))
     points: Mapped[int | None] = mapped_column(Integer)
+    # Whether it counts in its question's split and in what right picks score: an account's, or a fan's whose cookie
+    # came with it. Not one from a fan the request itself made up, which is theirs and scored, but moves nobody
+    # else's numbers: a script with no cookies can't stuff a split (predictions.pick).
+    counted: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    moved_late: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))  # brought into an account once closed (predictions.merge)
     created_at: Mapped[datetime] = _now()
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

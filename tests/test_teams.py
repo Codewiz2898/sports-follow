@@ -22,7 +22,7 @@ from sqlalchemy import create_engine, func, select, text, update
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import accounts, bus, notify, pipeline, server, sports, structured, teams
-from sports_follow.adapters import ADAPTERS, KNOWN, Fixture, Line, PlayerRef, Provider, Snapshot, SourceTeam, espn_basketball, espn_cricket
+from sports_follow.adapters import ADAPTERS, KNOWN, AdapterError, Fixture, Line, PlayerRef, Provider, Snapshot, SourceTeam, budget, espn_basketball, espn_cricket
 from sports_follow.adapters.base import DIGITS
 from sports_follow.alerts import Item, Watch, plan
 from sports_follow.models import (Account, Event, EventPlayer, EventState, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerIdentity,
@@ -438,8 +438,9 @@ def test_the_fan_stream_carries_a_teams_games_from_a_day_and_a_half_before_they_
     # And the stream subscribes to those games' channels, with the fan's teams in its first frame.
     subscribed: list[list[str]] = []
     monkeypatch.setattr(server, "_stream", lambda channels, first, request: subscribed.append(channels) or "stream")
-    monkeypatch.setattr(server, "_sse", lambda body: body)
-    assert asyncio.run(server.my_stream(SimpleNamespace(), fan="gooner")) == "stream"
+    monkeypatch.setattr(server, "_sse", lambda body, places=None: body)
+    monkeypatch.setattr(server, "streaming", server.Counter())  # the stream's places, given back by its answer
+    assert asyncio.run(server.my_stream(SimpleNamespace(client=None), fan="gooner")) == "stream"
     assert subscribed == [[f"match:{key['pitch:100']}"]]
 
 
@@ -489,6 +490,30 @@ def test_a_match_page_tells_apart_two_teams_its_source_numbers_alike(db, redis, 
     assert [t["name"] for t in teams.in_game(db, None, "pitch", {}, [event_id])] == ["Indiana Fever", "Las Vegas Aces"]  # before tip-off, by its title
     nameless = {"kind": "basketball", "home": {"id": "5", "score": "80"}, "away": {"id": "17", "name": "Las Vegas Aces", "score": "90"}}
     assert [t["name"] for t in teams.in_game(db, None, "pitch", nameless, [])] == ["Las Vegas Aces"]  # one it can't tell isn't offered
+
+
+@needs_db
+def test_a_spent_lane_share_is_no_failure_and_leaves_the_team_due_at_the_next_tick(db, redis, source, monkeypatch):
+    # BUG-174: our own per-lane limit isn't the source failing: the team isn't waited on (structured.retry_at).
+    monkeypatch.setattr(teams, "_now", lambda: NOW)
+    teams.import_teams(source.fake, NOW)
+    arsenal = team(db, ARS)
+    teams.follow(db, "gooner", arsenal.id)
+    db.commit()
+
+    def spent(team_id: str) -> list[Fixture]:
+        raise budget.RateLimited("pitch: the refresh share of its 10 requests a minute is spent")
+
+    source.fake.team_fixtures = spent
+    teams.refresh(arsenal.id)
+    teams.refresh(arsenal.id)
+    db.expire_all()
+    assert team(db, ARS).health in (None, {}) and pipeline.due_work(NOW).teams == [arsenal.id]
+    # A source that fails is waited on.
+    source.fake.team_fixtures = lambda team_id: (_ for _ in ()).throw(AdapterError("Pitch returned HTTP 502"))
+    teams.refresh(arsenal.id)
+    db.expire_all()
+    assert team(db, ARS).health["failures"] == 1 and pipeline.due_work(NOW).teams == []
 
 
 @needs_db

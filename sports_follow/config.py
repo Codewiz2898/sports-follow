@@ -29,6 +29,9 @@ LOG_LEVEL = os.environ.get("SPORTS_FOLLOW_LOG_LEVEL", "INFO").strip().upper()
 # The commit the image was built from (deploy.sh, through the Dockerfile): /api/health says it, so the
 # deploy workflow and its summary know what's live. Empty outside a deployed image.
 COMMIT = os.environ.get("SPORTS_FOLLOW_COMMIT", "").strip()
+# FastAPI's own docs (/docs, /redoc and /openapi.json), which list every route: "1" on a development server
+# that wants them, never on the site.
+API_DOCS = os.environ.get("SPORTS_FOLLOW_API_DOCS", "").strip() == "1"
 # The app's public address: compose sets it from DOMAIN (https://<domain>). Empty in development.
 SITE_URL = os.environ.get("SPORTS_FOLLOW_SITE_URL", "").strip().rstrip("/")
 # Where fans write about their data: the privacy page shows it (and has no Questions part without it),
@@ -98,6 +101,10 @@ BACKGROUNDS_PER_HOUR = int(os.environ.get("SPORTS_FOLLOW_BACKGROUNDS_PER_HOUR", 
 STARTERS_HOME_COUNTRY = os.environ.get("SPORTS_FOLLOW_STARTERS_HOME_COUNTRY", "India").strip()
 # Where the feed's fans watch from (ISO 3166-1 alpha-2): a video that doesn't play there isn't kept (candidates.py).
 FEED_COUNTRY = os.environ.get("SPORTS_FOLLOW_FEED_COUNTRY", "IN").strip().upper() or "IN"
+# The time zones a device in FEED_COUNTRY says it's in, comma-separated (India's both ways: Chrome still says
+# Asia/Calcutta): a fan's app saying a video won't play there counts toward taking it from every fan only from one of
+# these (feed.counts_everywhere). Empty: every app's word counts, wherever it is.
+FEED_ZONES = frozenset(z.strip() for z in os.environ.get("SPORTS_FOLLOW_FEED_ZONES", "Asia/Kolkata,Asia/Calcutta" if FEED_COUNTRY == "IN" else "").split(",") if z.strip())
 # How the apps draw the fan's Feed (feed.layout, BHA-349): "edge", posts edge to edge, or "full", a video a screen.
 # The admin panel's Feed tab changes it live; this is what it is until it does (and once the panel's word is taken back).
 FEED_LAYOUT = os.environ.get("SPORTS_FOLLOW_FEED_LAYOUT", "edge").strip().lower() or "edge"

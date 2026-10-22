@@ -24,7 +24,7 @@ import { BackIcon, BellIcon, CheckIcon, PlusIcon, RefreshIcon } from '../../icon
 import { ResultsHistory, Segmented, StatsWithForm } from '../../results'
 import { ShareButton } from '../../share'
 import { colour, font, num, t } from '../../theme'
-import { Btn, Card as Surface, ErrorBox, Eyebrow, Pill, SectionHead, Spinner, WL } from '../../ui'
+import { Btn, Card as Surface, ErrorBoundary, ErrorBox, Eyebrow, Pill, SectionHead, Spinner, WL } from '../../ui'
 import { Page } from '../../page'
 
 type Tab = 'overview' | 'matches' | 'stats' | 'feed'
@@ -156,10 +156,13 @@ export default function PlayerScreen() {
             ))}
           </View>
 
-          {tab === 'overview' ? <Overview card={card} feed={feed.feed} show={(x, view) => { setTab(x); setMatches(view ?? null) }} onError={setFailure} /> : null}
-          {tab === 'matches' ? <Matches card={card} view={matches} setView={setMatches} /> : null}
-          {tab === 'stats' ? <View style={{ gap: 10 }}><StatsWithForm card={card} /></View> : null}
-          {tab === 'feed' ? <FeedTab feed={feed.feed} error={feed.error} name={p.name} sport={p.sport} photo={p.photo} now={now} onHide={feed.hide} /> : null}
+          {/* As the web's: a tab that couldn't be shown says so, under the band and the tabs; a newer card tries again. */}
+          <ErrorBoundary resetKey={`${tab}:${card.version}`}>
+            {tab === 'overview' ? <Overview card={card} feed={feed.feed} show={(x, view) => { setTab(x); setMatches(view ?? null) }} onError={setFailure} /> : null}
+            {tab === 'matches' ? <Matches card={card} view={matches} setView={setMatches} /> : null}
+            {tab === 'stats' ? <View style={{ gap: 10 }}><StatsWithForm card={card} /></View> : null}
+            {tab === 'feed' ? <FeedTab feed={feed.feed} error={feed.error} name={p.name} sport={p.sport} photo={p.photo} now={now} onHide={feed.hide} /> : null}
+          </ErrorBoundary>
 
           <Text style={[t.tiny, t.muted]}>
             {/* A page from a live source alone (no research agent yet, or none in this build) was never "built". */}

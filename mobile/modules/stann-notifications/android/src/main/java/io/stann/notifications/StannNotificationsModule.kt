@@ -7,7 +7,7 @@ import java.lang.ref.WeakReference
 
 /** What the app's JavaScript asks of its notifications (src/push.ts): make the channels, say where the API is
  *  and the token the app registered with it (a button calls it while the app's closed), sport colours or one,
- *  turn live cards on or off; and it hears each moment that
+ *  turn live cards on or off, take a game's or every live card down; and it hears each moment that
  *  arrives while it runs ("onMoment"), as it heard expo-notifications' before the app drew them itself. */
 class StannNotificationsModule : Module() {
   override fun definition() = ModuleDefinition {
@@ -27,6 +27,7 @@ class StannNotificationsModule : Module() {
       Settings.setLiveCards(context, on)
       if (!on) Cards.takeDownLive(context)
     }
+    Function("takeDownLive") { event: String? -> Cards.takeDownLive(context, event) }
   }
 
   private val context: Context

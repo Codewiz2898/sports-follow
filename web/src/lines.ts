@@ -14,8 +14,9 @@ export function highlight(sportKey: string, text?: string | null): string | null
   return factsOf(sportKey)?.highlight?.(text) ?? null
 }
 
-/** What a player's tile says: live, then a game this week, then the last result, then the news; `sport`,
- * the player's sport as the app writes it, when there's nothing else. */
+/** What a player's tile says: live, then a game this week, then the last result, then a story of the last
+ * FRESH_NEWS_DAYS (the tile shows it without its date); `sport`, the player's sport as the app writes it, when
+ * there's nothing else. */
 export function statusLine(card: Card, progress: string[] | undefined, now: number, sport: string): string {
   if (card.status === 'building') return progress?.at(-1) ?? 'Building page…'
   if (card.status === 'failed') return "Page couldn't be built, open to see why"
@@ -31,12 +32,23 @@ export function statusLine(card: Card, progress: string[] | undefined, now: numb
   if (last && now - lastAt < 14 * 864e5) return last.result
   if (next) return `Next ${day(next.start_utc)} · ${next.title}`
   if (card.player.status === 'retired') return 'Retired · news only'
-  return newsOf(card)[0]?.headline ?? sport
+  return newsOf(card, now).find((n) => recent(n, now))?.headline ?? sport
 }
 
-/** A card's news: the publishers' stories the curator served, else the research agent's. */
-export function newsOf(card: Pick<Card, 'news' | 'stories'>): NewsItem[] {
-  return card.stories?.length ? card.stories : (card.news ?? [])
+/** How long a story is news on a player's tile, which shows it without its date (the server's week.NEWS_DAYS). */
+const FRESH_NEWS_DAYS = 3
+
+/** A card's news: the publishers' stories the curator served (the server keeps those current), else the research
+ * agent's of the last FRESH_NEWS_DAYS: the agent writes a page's news only when it runs, and a page it doesn't run
+ * for again keeps what it wrote then. */
+export function newsOf(card: Pick<Card, 'news' | 'stories'>, now = Date.now()): NewsItem[] {
+  return card.stories?.length ? card.stories : (card.news ?? []).filter((n) => recent(n, now))
+}
+
+/** Whether a story was published in the last FRESH_NEWS_DAYS; one with no date can't say it was. */
+function recent(n: NewsItem, now: number): boolean {
+  const at = parseDate(n.published)?.getTime()
+  return at !== undefined && now - at <= FRESH_NEWS_DAYS * 864e5
 }
 
 /** The line over a ready page still being filled in: a page from a live source has its scores; one from

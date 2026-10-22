@@ -22,12 +22,12 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypeVar, cast
 
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import bus, matches, metrics, moments, notify, photos, predictions, shutdown, sports, structured, wiki
+from . import bus, livecards, matches, metrics, moments, notify, photos, predictions, shutdown, sports, structured, wiki
 from .agent import AgentError, follow_player, gateway, live_update
 from .config import AGENT_LIVE
 from .db import session
@@ -673,10 +673,13 @@ def player_qid(db: Session, player_id: int) -> str | None:
 def merge_profile(player: dict[str, Any], found: wiki.Profile | None, bound: bool) -> dict[str, Any]:
     """A card's player section with what Wikidata and Wikipedia say in it, and in profile_from which they
     gave ({"born": "wikidata", "summary": "wikipedia"}). A live source's facts win (a bound player's teams
-    are their source's); Wikidata's and Wikipedia's win over the research agent's. What they gave before and
-    no longer say (an award taken back, an article deleted) goes. Pure, so it's tested without the network."""
+    are their source's: the ones Wikidata gave before they were bound stay, no longer Wikidata's); Wikidata's
+    and Wikipedia's win over the research agent's. What they gave before and no longer say (an award taken
+    back, an article deleted) goes. Pure, so it's tested without the network."""
     out = dict(player)
     for key in (player.get("profile_from") or {}):
+        if key == "teams" and bound:
+            continue
         out.pop(key, None)
         if key == "summary":
             out.pop("about", None)
@@ -726,7 +729,7 @@ def apply_profile(player_id: int, found: wiki.Profile | None, now: datetime) -> 
             player.role = merged["role"]
         if "teams" in given:
             player.teams = merged["teams"]
-        elif "teams" in before:  # Wikidata's, and it lists none now: they're nobody's player
+        elif "teams" in before and not bound:  # Wikidata's, and it lists none now: they're nobody's player
             player.teams = merged["teams"] = []
         elif "teams" not in merged:
             merged["teams"] = list(player.teams or [])
@@ -1049,9 +1052,11 @@ def rebuild_due(card: PlayerCard, now: datetime) -> bool:
 
 def to_arm(games: Iterable[tuple[int, str | None, datetime | None, bool]], now: datetime) -> list[int]:
     """Of scheduled games (id, sport, start, whether a source polls it), those to arm now: each within its
-    sport's lead. A game no source polls gets agent live checks once armed, which can't see a team sheet,
-    so it keeps the usual lead."""
-    return [game for game, sport, start, polled in games if start is not None and start <= now + structured.arm_before(sport if polled else None)]
+    sport's lead, of a sport that's on (one turned off in the admin panel isn't polled, so none of its games
+    is armed). A game no source polls gets agent live checks once armed, which can't see a team sheet, so it
+    keeps the usual lead."""
+    return [game for game, sport, start, polled in games
+            if start is not None and sports.on(sport) and start <= now + structured.arm_before(sport if polled else None)]
 
 
 def due_work(now: datetime | None = None) -> Due:
@@ -1065,9 +1070,11 @@ def due_work(now: datetime | None = None) -> Due:
     poll job, shared by every player in it, or, from a source that fetches many events in one
     request, a place in that source's lane; players without a binding get agent live checks.
     Events nobody closed are closed: after 12 hours from the agent, after 6 days from a source
-    (a Test match runs five), and a card still showing one live stops. A bound player whose refreshes
-    keep failing waits longer each time (structured.retry_at), and none is refreshed while their
-    source is down to what its live games need (structured.spare).
+    (a Test match runs five), and a card still showing one live stops; those of a sport turned off in the
+    admin panel are put off till it's on again (structured.put_off), and their cards and phones' live cards
+    stop showing them live. A bound player whose refreshes keep failing waits longer each time
+    (structured.retry_at), and none is refreshed while their source is down to what its live games need
+    (structured.spare).
     """
     from . import teams  # it reads search, which reads this
     from .config import FIXTURES_MAX_AGE, LIVE_CHECK_INTERVAL
@@ -1087,14 +1094,19 @@ def due_work(now: datetime | None = None) -> Due:
             .where(Event.status.in_(("armed", "live")), Event.live_binding.is_(None), Event.start_utc.is_not(None), Event.start_utc < now - timedelta(hours=12))
             .values(status="final")
         )
+        # A source's games six days after their start; one with no start time of its own (armed as next:
+        # structured.reschedule), six days after it was made.
         closed = db.scalars(
             update(Event)
-            .where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.start_utc.is_not(None), Event.start_utc < now - timedelta(days=6))
+            .where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None),
+                   or_(Event.start_utc < now - timedelta(days=6), and_(Event.start_utc.is_(None), Event.created_at < now - timedelta(days=6))))
             .values(status="final")
             .returning(Event.id)
         ).all()
-        # Closed without a final poll (the source stopped returning the game): its cards stop saying LIVE.
-        unstuck = structured.close_live(db, list(closed))
+        # Games of a sport turned off in the admin panel aren't polled: put off, not closed, so they come back with it.
+        put_off = structured.put_off(db)
+        # Closed without a final poll (the source stopped returning the game), or put off: its cards stop saying LIVE.
+        unstuck = structured.close_live(db, [*closed, *put_off])
         # Games followed by themselves that are over: nothing more of them is sent. The rest settle on the event
         # of a player their fan follows, where the game's here as several.
         matches.lapse(db, now)
@@ -1183,6 +1195,7 @@ def due_work(now: datetime | None = None) -> Due:
                 due.lives.append(pid)
     for pid, card in unstuck:
         bus.store_card(pid, card)
+    livecards.ended(put_off)  # and their live cards on Android phones come down
     return due
 
 

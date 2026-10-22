@@ -164,7 +164,9 @@ def _lobby_final(who: str, now: Seen) -> Found:
     place = ours.get("place")
     verb = "win the lobby" if place == 1 else f"finish {ordinal(place)}"
     body = " · ".join(x for x in (f"{teams} teams" if teams else None, f"{ours.get('wins')} won" if ours.get("wins") else None, f"{ours.get('kills', 0)} finishes", stage) if x)
-    return Found("final", "key", f"{who}: {ours['name']} {verb} · {points(ours.get('points'))} pts", body, priority=90 if place == 1 else 0)
+    # Keyed by its matches: a lobby on again after it was over (a match after a long break) has a new result to tell.
+    played = len(now.state.get("games") or [])
+    return Found("final", "key", f"{who}: {ours['name']} {verb} · {points(ours.get('points'))} pts", body, f"m{played}", 90 if place == 1 else 0)
 
 
 def _game_maps(name: str, before: Played, now: Played) -> list[Found]:
@@ -290,7 +292,7 @@ class Esports(Sport):
     def start(self, who: str, now: Seen) -> Found:
         if _lobby(now):
             played = now.state.get("total")
-            return Found("start", "key", f"{who} is playing", " · ".join(x for x in (now.state.get("stage"), f"{played} matches" if played else None, now.state.get("game")) if x))
+            return Found("start", "key", f"{who} is playing", " · ".join(x for x in (now.state.get("stage"), f"{played} match{'es' if played != 1 else ''}" if played else None, now.state.get("game")) if x))
         return Found("start", "key", f"{who}'s series has started", " · ".join(x for x in (self.matchup(now.state), now.state.get("format"), now.state.get("stage")) if x))
 
     def final(self, who: str, now: Seen) -> Found:

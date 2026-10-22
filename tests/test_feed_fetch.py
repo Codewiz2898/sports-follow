@@ -54,10 +54,12 @@ def feed(*entries: tuple[str, str, str]) -> str:
 
 def video(vid: str, duration: str = "PT8M30S", views: int = 5000, likes: int = 300, embeddable: bool = True, privacy: str = "public",
           region: dict | None = None, live: str = "none", paid: bool | None = None, thumbs: tuple[str, ...] = (),
-          size: tuple[int, int] | None = None) -> dict:
+          size: tuple[int, int] | None = None, rating: dict | None = None) -> dict:
     """One item of videos.list, as YouTube sends it; thumbs: the thumbnail sizes it has ("maxres" only for some);
-    size: its player's (width, height) as the player part gives it with maxWidth, else no player part."""
-    details = {"duration": duration, "dimension": "2d", "definition": "hd", "caption": "false", **({"regionRestriction": region} if region else {})}
+    size: its player's (width, height) as the player part gives it with maxWidth, else no player part; rating: its
+    contentRating."""
+    details = {"duration": duration, "dimension": "2d", "definition": "hd", "caption": "false", **({"regionRestriction": region} if region else {}),
+               **({"contentRating": rating} if rating else {})}
     return {
         "kind": "youtube#video", "id": vid,
         "snippet": {"title": "t", "liveBroadcastContent": live, "categoryId": "17", "tags": ["cricket"],
@@ -298,6 +300,7 @@ def facts(**kw) -> VideoFacts:
     ({"blocked": ("IN",)}, "blocked in IN"),
     ({"allowed": ("GB", "US")}, "blocked in IN"),
     ({"allowed": ("IN",)}, None),
+    ({"age_restricted": True}, "age restricted"),
 ])
 def test_the_hard_filters(kw, why):
     assert candidates.refused(facts(**kw), "IN") == why
@@ -317,6 +320,16 @@ def test_parsed_facts_meet_the_filters(fake):
     assert {v: candidates.refused(got.get(v), "IN") for v in fake.videos} == {
         "keep0000000": None, "short000000": "length", "embedoff000": "not embeddable", "private0000": "private", "onlygb00000": "blocked in IN", "livenow0000": "live",
     }
+
+
+def test_an_age_restricted_video_isnt_kept_and_one_kept_before_is_gone(fake):
+    """BHA-436: YouTube plays an age-restricted video only to a signed-in adult on its own site, never in the app's
+    player: it's refused when it's found, and one kept before goes at its weekly check. Another rating is no bar."""
+    fake.videos.update({v["id"]: v for v in (video("agelimit000", rating={"ytRating": "ytAgeRestricted"}), video("rated000000", rating={"mpaaRating": "mpaaPg13"}))})
+    got = SOURCE.facts(list(fake.videos))
+    assert got["agelimit000"].age_restricted and not got["rated000000"].age_restricted
+    assert candidates.refused(got["agelimit000"], "IN") == candidates.gone(got["agelimit000"], "IN") == "age restricted"
+    assert candidates.refused(got["rated000000"], "IN") is None
 
 
 # ---------------------------------------------------------------- names

@@ -165,19 +165,25 @@ def session_key(token: str) -> str:
 
 
 def sports_view() -> list[dict[str, Any]]:
-    """Every sport: whether the server's settings let it run, whether the panel has it on, its sources, and
-    the group it's one of (each esports game is a sport, under "Esports")."""
+    """Every sport: whether the server's settings let it run, whether the panel has it on, its sources, whether
+    fans are offered it (sports.offered: a sport on with no source running and research off isn't, and the
+    panel says to turn it off), and the group it's one of (each esports game is a sport, under "Esports")."""
     off = controls.current().sports_off
     running = sports.ENABLED
-    return [{
-        "key": s.key,
-        "label": s.label,
-        "group": sports.BY_KEY[s.group].label if s.group in sports.BY_KEY else "",
-        "allowed": s in sports.ALLOWED,
-        "on": not sports.named(s, off),
-        "running": s in running,
-        "sources": list(dict.fromkeys(a.name for a in ADAPTERS.values() if s.key in a.sports)),
-    } for s in sports.ALL]
+    rows = []
+    for s in sports.ALL:
+        sources = list(dict.fromkeys(a.name for a in ADAPTERS.values() if s.key in a.sports))
+        rows.append({
+            "key": s.key,
+            "label": s.label,
+            "group": sports.BY_KEY[s.group].label if s.group in sports.BY_KEY else "",
+            "allowed": s in sports.ALLOWED,
+            "on": not sports.named(s, off),
+            "running": s in running,
+            "sources": sources,
+            "offered": sports.offered(s, bool(sources)),
+        })
+    return rows
 
 
 def set_sport(key: str, on: bool) -> None:
@@ -516,14 +522,16 @@ def channels_view(db: Session) -> list[dict[str, Any]]:
 
 
 def review_candidate(row_id: int, said: str | None) -> dict[str, Any] | None:
-    """Approve, hide or pin a candidate (rank.REVIEWS), or take that back (None), and rank it again at once:
-    the candidate as the Feed tab lists it, or None for no such candidate. ValueError for a word that isn't one."""
+    """Approve, hide or pin a candidate (rank.REVIEWS; a hide is the video's, every player's row of it), or take that
+    back (None), and rank the video's rows again at once: the candidate as the Feed tab lists it, or None for no such
+    candidate. ValueError for a word that isn't one."""
     from . import db
 
     with db.session() as session:
-        if not rank.review(session, row_id, said):
+        video = rank.review(session, row_id, said)
+        if video is None:
             return None
-    rank.rescore(row=row_id)
+    rank.rescore(video=video)
     with db.session() as session:
         found = session.execute(select(FeedCandidate, Player.name, Player.sport).join(Player, Player.id == FeedCandidate.player_id).where(FeedCandidate.id == row_id)).first()
         return _candidate_row(*found) if found else None

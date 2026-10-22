@@ -1,11 +1,12 @@
 // The web app's building blocks (web/src/styles.css, "building blocks"), one for one: buttons, pills, the
 // live badge, cards and lists, section heads, and the page itself.
 
-import { router } from 'expo-router'
+import { router, type ErrorBoundaryProps } from 'expo-router'
 import { Component, useEffect, useState, type ReactNode } from 'react'
 import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, TextInput, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { BackIcon } from './icons'
-import { colour, dsp, dspInk, font, RADIUS_CARD, t } from './theme'
+import { colour, dsp, dspInk, font, GUTTER, RADIUS_CARD, t } from './theme'
 
 /** A big word that may break onto two lines after its hyphen ("TRIPLE- / DOUBLE"), as a browser breaks it:
  * Android's line breaker doesn't take a hyphen as a place to break, so it gets an explicit one. */
@@ -251,6 +252,30 @@ export class ErrorBoundary extends Component<BoundaryProps, { failed: boolean; k
 /** A part of a page that couldn't be shown; the rest of the page still works. */
 export function BlockError() {
   return <Card style={{ paddingVertical: 28, paddingHorizontal: 20 }}><Text accessibilityRole="alert" style={[t.small, t.muted, { textAlign: 'center' }]}>This part of the page couldn't be shown.</Text></Card>
+}
+
+/** A whole page that couldn't be shown, as the web's PageError: expo-router's ErrorBoundary for every page (the
+ * Stack's, in _layout.tsx) and for the app around them (its own). Says so, with a way to try again and the way back
+ * to Today; the tab bar stays over a page's. Nothing of the fan's (no provider): it may be what failed. */
+export function PageError({ retry }: ErrorBoundaryProps) {
+  const insets = useSafeAreaInsets()
+  const again = () => { retry().catch(() => {}) }
+  const today = () => {
+    try { router.replace('/') } catch { /* the app around the pages failed: trying again draws Today */ }
+    again()
+  }
+  return (
+    <View style={{ flex: 1, backgroundColor: colour.bg, paddingTop: insets.top + 20, paddingHorizontal: GUTTER }}>
+      <Card style={{ padding: 18, gap: 12 }}>
+        <Text accessibilityRole="alert" style={t.title}>Something went wrong showing this page.</Text>
+        <Text style={[t.small, t.muted]}>Try again, or go back to Today.</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+          <Btn kind="primary" label="Try again" onPress={again} />
+          <Btn label="Back to Today" onPress={today} />
+        </View>
+      </Card>
+    </View>
+  )
 }
 
 /** No page at this address (the web's NotFound, main.tsx), and the way back to Today. */

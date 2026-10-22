@@ -221,6 +221,45 @@ def test_chess_match_page_is_one_players_board_with_both_players():
     assert lichess_chess.LichessChess.fixture_pattern.fullmatch(f"{rnd}-{CARLSEN}") and not lichess_chess.LichessChess.fixture_pattern.fullmatch(f"{rnd}:abc")
 
 
+def test_an_armageddon_drawn_is_blacks_win(monkeypatch):
+    # BUG-212 (H17 arm1): Norway Chess's form, a classical draw then an armageddon in the same round, drawn with Gukesh
+    # as Black. A draw in an armageddon is Black's win, but it was scored ½ each: "Drew the match 1–1", "Match drawn",
+    # a draw in form, no Win poster, and Call it settled Draw.
+    from sports_follow import sports
+
+    now = datetime.now(timezone.utc)
+    gukesh = {"name": "Gukesh, D", "fideId": 46616543, "rating": 2767, "title": "GM", "fed": "IND"}
+    sindarov = {"name": "Sindarov, Javokhir", "fideId": 14205483, "rating": 2726, "title": "GM", "fed": "UZB"}
+    rnd = {"id": "AbCdEf12", "name": "Round 3", "finished": True, "startsAt": int((now - timedelta(hours=4)).timestamp() * 1000)}
+    tour = {"id": "T1", "name": "Norway Chess 2027"}
+    end = "8/8/8/4k3/8/4K3/8/8 w - - 0 61"
+    classical = {"id": "game0001", "name": "Gukesh, D - Sindarov, Javokhir", "players": [gukesh, sindarov], "fen": end, "status": "½-½"}
+    armageddon = {"id": "game0002", "name": "Sindarov, Javokhir - Gukesh, D (Armageddon)", "players": [sindarov, gukesh], "fen": end, "status": "½-½"}
+    data = {"round": rnd, "tour": tour, "games": [classical, armageddon]}
+    g, s = str(gukesh["fideId"]), str(sindarov["fideId"])
+    snap = lichess_chess.parse_board(data, g, now)
+    assert (snap.status, snap.score_label, snap.clock_label) == ("final", "D Gukesh 1½–½ Javokhir Sindarov", "D Gukesh won on armageddon (2 games)")
+    assert snap.lines[g].headline == "Won the match 1½–½ vs Javokhir Sindarov on armageddon"
+    assert snap.lines[s].headline == "Lost the match ½–1½ vs D Gukesh on armageddon"
+    assert snap.state["match"]["ahead"] == g and sports.get("chess").answer("result", "final", snap.state) == g  # Call it: Gukesh
+    assert sports.get("chess").finished_poster({"headline": snap.lines[g].headline}, "", "") is not None  # his Win poster
+    mine, theirs = (lichess_chess.fixture_for(tour, rnd, lichess_chess.games_of(data, fide), fide, now) for fide in (g, s))
+    assert (lichess_chess.result_label(mine, [g]), lichess_chess.result_label(theirs, [s])) == ("Won 1½–½ on armageddon", "Lost ½–1½ on armageddon")
+    # A round of its own for the armageddon, or one whose scoring gives Black more for a draw (Lichess's custom scoring).
+    alone = {"round": {**rnd, "name": "Round 3 Armageddon"}, "tour": tour, "games": [{**armageddon, "name": "Sindarov, Javokhir - Gukesh, D"}]}
+    one = lichess_chess.parse_board(alone, g, now)
+    assert (one.clock_label, one.lines[g].headline) == ("D Gukesh won on armageddon", "Won with Black vs Javokhir Sindarov on armageddon")
+    assert sports.get("chess").answer("result", "final", one.state) == g
+    scored = {**alone, "round": {**rnd, "customScoring": {"white": {"win": 1, "draw": 0}, "black": {"win": 1, "draw": 1}}}}
+    assert lichess_chess.parse_board(scored, s, now).lines[s].headline == "Lost with White vs D Gukesh on armageddon"
+    # Its tournament's PGN (a finished round's games, as a refresh reads them) names it in the game's event.
+    pgn = ('[Event "Norway Chess 2027 Armageddon"]\n[White "Sindarov, Javokhir"]\n[Black "Gukesh, D"]\n[Result "1/2-1/2"]\n[WhiteFideId "14205483"]\n'
+           '[BlackFideId "46616543"]\n[GameURL "https://lichess.org/broadcast/t/r/AbCdEf12/game0002"]\n')
+    assert lichess_chess.match_score(lichess_chess.games_of({"games": lichess_chess.parse_pgn_rounds(pgn)["AbCdEf12"]}, g), g) == (1.0, 1)
+    # Any other game drawn is half a point each, as before.
+    assert lichess_chess.match_score(lichess_chess.games_of({**data, "games": [classical]}, g), g) == (0.5, 1)
+
+
 def test_chess_single_game_round():
     data = load("lichess/round-final")
     first = data["games"][0]  # Carlsen–Lazavik 1-0, as if it were the round's only game
@@ -722,6 +761,63 @@ def test_a_player_fide_names_without_a_comma_is_found_by_their_name_not_its_init
     monkeypatch.setattr(lichess_chess, "get_json", page_and_search)
     tours = chess._tours(lichess_chess.ref_for({"id": gukesh["fideId"], "name": "Gukesh D"}), now)
     assert len(tours) == lichess_chess.MAX_TOURS and tours[0]["id"] == "OwnEvent"
+
+
+def test_a_round_set_to_start_after_the_previous_one_is_read_and_said_to_be_next_once_that_one_is_on(monkeypatch):
+    # BUG-211 (H17): a blitz day's round 7 has no start time ("startsAfterPrevious"): it was taken as unpaired, its
+    # pairings never read, and its fixture no more than "scheduled" with no start, which nothing ever armed or polled.
+    now = datetime.now(timezone.utc)
+    ms = lambda d: int(d.timestamp() * 1000)  # noqa: E731
+    gukesh = {"name": "Gukesh D", "fideId": 46616543, "rating": 2767, "title": "GM"}
+    sindarov = {"name": "Sindarov, Javokhir", "fideId": 14205483, "rating": 2726, "title": "GM"}
+    tour = {"id": "BlitzDay", "name": "Grand Chess Tour Blitz 2027", "info": {"players": "Gukesh, Sindarov"}, "dates": [ms(now - timedelta(hours=3)), ms(now + timedelta(hours=5))]}
+    r6 = {"id": "Round006", "name": "Round 6", "ongoing": True, "startsAt": ms(now - timedelta(minutes=10))}
+    r7 = {"id": "Round007", "name": "Round 7", "startsAfterPrevious": True}
+    r8 = {"id": "Round008", "name": "Round 8", "startsAfterPrevious": True}
+    start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    boards = {"Round006": [{"id": "game6aaa", "players": [sindarov, gukesh], "fen": start, "status": "*"}], "Round007": []}
+    asked: list[str] = []
+
+    def get_json(url, ttl, text=False):
+        asked.append(url.removeprefix("https://lichess.org/api/"))
+        if "/broadcast/search?q=" in url:
+            return {"currentPageResults": [{"tour": tour}]}
+        if url.endswith("/broadcast/top"):
+            return {"active": [], "upcoming": []}
+        if url.endswith(f"/broadcast/{tour['id']}"):
+            return {"tour": tour, "rounds": [r6, r7, r8]}
+        if url.endswith(f"/broadcast/{tour['id']}.pgn"):  # the finished rounds' games
+            return ('[White "Sindarov, Javokhir"]\n[Black "Gukesh D"]\n[Result "0-1"]\n[WhiteFideId "14205483"]\n[BlackFideId "46616543"]\n'
+                    '[GameURL "https://lichess.org/broadcast/t/r/Round006/game6aaa"]\n\n1. e4 0-1\n')
+        for rnd in (r6, r7, r8):
+            if url.endswith(f"/broadcast/-/-/{rnd['id']}"):
+                return {"round": rnd, "tour": tour, "games": boards[rnd["id"]]}
+        raise AdapterError(f"not faked: {url}")
+
+    monkeypatch.setattr(lichess_chess, "get_json", get_json)
+    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: Kept())
+    chess = lichess_chess.LichessChess()
+    ref = lichess_chess.ref_for({"id": gukesh["fideId"], "name": gukesh["name"]})
+    # Round 6 on: round 7 is next, its pairings asked for (none yet); round 8 isn't, nor read.
+    fixtures = {f.source_id.split("-")[0]: f for f in chess.fixtures(ref)}
+    assert "broadcast/-/-/Round007" in asked and "broadcast/-/-/Round008" not in asked
+    assert [(r, f.status, f.start_utc, getattr(f, "next_up", None)) for r, f in fixtures.items()] == [
+        ("Round006", "live", datetime.fromtimestamp(r6["startsAt"] / 1000, timezone.utc), False), ("Round007", "scheduled", None, True), ("Round008", "scheduled", None, False)]
+    # Paired once round 6 is over; round 7 under way with no board of Gukesh's is no game of his (not live, no start
+    # told): his board may not be up yet, or he isn't paired; with it, it's his game, live.
+    r6.update(ongoing=False, finished=True, finishedAt=ms(now - timedelta(minutes=2)))
+    boards["Round006"][0]["status"] = "0-1"
+    boards["Round007"] = [{"id": "game7aaa", "players": [gukesh, sindarov], "fen": start, "status": "*"}]
+    assert {f.source_id.split("-")[0]: f.next_up for f in chess.fixtures(ref)}["Round007"] is True
+    r7["ongoing"] = True
+    others = {"round": r7, "tour": tour, "games": [{"id": "game7bbb", "players": [{"name": "A", "fideId": 1}, {"name": "B", "fideId": 2}], "fen": start, "status": "*"}]}
+    unpaired = lichess_chess.parse_board(others, str(gukesh["fideId"]), now)
+    assert (unpaired.status, unpaired.clock_label) == ("scheduled", "Not paired this round")
+    assert lichess_chess.parse_board({"round": r7, "tour": tour, "games": boards["Round007"]}, str(gukesh["fideId"]), now).status == "live"
+    # Round 6 long over (a day's last round, the next on another day): round 7 isn't next.
+    r7["ongoing"] = False
+    r6["finishedAt"] = ms(now - lichess_chess.AFTER_PREVIOUS - timedelta(minutes=1))
+    assert lichess_chess.next_up([r6, r7, r8], r7, now) is False
 
 
 def test_tournament_pgn_gives_every_round_in_one_read():

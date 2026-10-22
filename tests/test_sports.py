@@ -177,6 +177,28 @@ def test_the_app_is_sent_every_sport_in_order_with_what_it_says(api, monkeypatch
     assert all(s["colour"] for s in body["sports"]) and body["other"]["colour"] is None
 
 
+def test_a_sport_with_no_source_running_and_research_off_isnt_offered(api, monkeypatch):
+    """BUG-257: a sport on with no source behind it and research off was still a welcome tile and a search
+    filter, finding nobody, and the admin panel called it "AI-built pages only". The app isn't offered it, and
+    the panel says nothing can show it; with research on, the agent writes its players' pages, so it is."""
+    from sports_follow import config
+
+    sport = next(s for s in sports.ENABLED if adapters.serving(s))
+    for source in adapters.serving(sport):
+        controls.turn_source(source.system, False)
+    monkeypatch.setattr(config, "RESEARCH", False)
+
+    def offered() -> tuple[bool, bool]:
+        shown = next(s for s in api.call("GET", "/api/sports").json()["sports"] if s["key"] == sport.key)
+        row = next(s for s in admin.sports_view() if s["key"] == sport.key)
+        assert (row["on"], row["running"], row["sources"]) == (True, True, [])
+        return shown["on"], row.get("offered")
+
+    assert offered() == (False, False)
+    monkeypatch.setattr(config, "RESEARCH", True)
+    assert offered() == (True, True)
+
+
 def test_each_sport_brings_its_colour(api):
     res = api.call("GET", "/api/sports.css")
     assert res.headers["content-type"].startswith("text/css")

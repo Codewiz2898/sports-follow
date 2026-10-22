@@ -377,8 +377,8 @@ class EspnCricket(espn.EspnAdapter, Adapter):
         return sorted(kept, key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
-        data = espn.get_json(f"{espn.SITE}/cricket/{locator['league']}/summary?event={locator['event']}", ttl=24 * 3600 if final else 5)
-        return parse_summary(data)
+        url = f"{espn.SITE}/cricket/{locator['league']}/summary?event={locator['event']}"  # the squad check's too (_summary)
+        return self.read_snapshot(lambda ttl: parse_summary(espn.get_json(url, ttl=ttl)), final, 5)
 
     def result_label(self, fixture: Fixture, team_ids: list[str]) -> str:
         r = fixture.result or {}

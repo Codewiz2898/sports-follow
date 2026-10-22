@@ -58,6 +58,8 @@ def test_fixture_reads_series_round_venue_and_result():
 def test_statuses_map_to_our_four():
     assert [sc._status(s) for s in ("NS", "Delayed", "1st Innings", "Innings Break", "Stump Day 2", "Tea Break", "Finished", "Aban.", "Postp.")] == [
         "scheduled", "scheduled", "live", "live", "live", "live", "final", "postponed", "postponed"]
+    # Once a ball has been bowled: a delay is a match still on, an abandoned one a no result.
+    assert [sc._status(s, played=True) for s in ("Delayed", "Aban.", "Cancl.", "Postp.")] == ["live", "final", "postponed", "postponed"]
 
 
 def test_a_players_match_is_their_xi_then_their_squad():
@@ -216,18 +218,20 @@ XI = [_picked(OPENER, IND), _picked(KEEPER, IND), _picked(TAILENDER, IND, sub=Tr
 CAUGHT = {"bowler": _player(1, "Khan"), "catchstump": _player(2, "Gurbaz")}
 FIFTY = _bat(OPENER, 52, 32, "Catch Out", **CAUGHT)
 SPELL = {"player_id": OPENER, "team_id": IND, "scoreboard": "S2", "sort": 1, "overs": 3, "runs": 20, "wickets": 3, "rate": 6.67}
-# The match at each poll worth telling: half an hour before, the toss, the opener's fifty, out, the
-# break, three wickets in the chase, the result.
+# The match at each poll worth telling: half an hour before, the toss, the first ball (nobody has a line
+# yet: the opener is told it's started as one of the XI), the opener on 48, his fifty and out, the break,
+# three wickets in the chase, the result.
 STAGES = [
     _row("NS"),
     _row("NS", lineup=XI),
+    _row("1st Innings", [{**FIRST, "score": 0, "wickets": 0, "overs": 0}], XI, batting=[_bat(OPENER, 0, 0, None)]),
     _row("1st Innings", [{**FIRST, "score": 60, "wickets": 0, "overs": 5.4}], XI, batting=[_bat(OPENER, 48, 30, None)]),
     _row("1st Innings", [{**FIRST, "score": 70, "wickets": 1, "overs": 6.1}], XI, batting=[FIFTY]),
     _row("Innings Break", [FIRST], XI, batting=[FIFTY]),
     _row("2nd Innings", [FIRST, {"team_id": AFG, "inning": 2, "score": 80, "wickets": 3, "overs": 10}], XI, batting=[FIFTY], bowling=[SPELL]),
     _row("Finished", [FIRST, CHASE], XI, batting=[FIFTY], bowling=[{**SPELL, "overs": 4, "runs": 30}], note="India won by 127 runs", winner_team_id=IND, manofmatch={"fullname": "A Opener"}),
 ]
-TOSS, START, BREAK, FINISHED = 1, 2, 4, len(STAGES) - 1
+TOSS, START, OUT, BREAK, FINISHED = 1, 2, 4, 5, len(STAGES) - 1
 ELSEWHERE = {**_row("2nd Innings", [FIRST, CHASE]), "id": 71299}  # another match on, nobody's following
 LOC = {"fixture": "71215"}
 STAGE_SECONDS = 120  # how long the match stays at each stage, on a timed run
@@ -372,12 +376,13 @@ def test_the_live_lane_tells_a_match_as_its_own_poll_did(monkeypatch, carried):
 DELAYED = _row("Delayed", [FIRST], XI, batting=[FIFTY])  # rain in the break
 
 
-@pytest.mark.parametrize(("answer", "status"), [(None, "live"), (STAGES[TOSS], "live"), (DELAYED, "scheduled")], ids=["read-again", "match-endpoint-lagging", "delayed"])
+@pytest.mark.parametrize(("answer", "status"), [(None, "live"), (STAGES[TOSS], "live"), (DELAYED, "live")], ids=["read-again", "match-endpoint-lagging", "delayed"])
 def test_a_match_livescores_drops_in_play_is_read_at_once(monkeypatch, answer, status):
     # Read on its own before the toss, carried once it starts, quiet through a break for over a minute,
     # then left out (a gap in livescores): it's read again at once, uncached. An answer lagging livescores
     # ("NS") doesn't take it back to not started, which would take it out of the lane (a 50-second cache
-    # of the read before the toss did that, BHA-49 review); a delay after the start is told.
+    # of the read before the toss did that, BHA-49 review); a delay after play has started is a match
+    # still on, waiting (its clock "Delayed"), so it stays in the lane.
     sm = Sportmonks(monkeypatch, carried=_in_play)
     adapter = sc.SportmonksCricket()
     assert adapter.snapshots({7: LOC})[7].status == "scheduled"
@@ -452,7 +457,7 @@ def test_a_quiet_match_read_on_its_own_is_read_once_a_minute(monkeypatch):
 
 def test_a_livescores_row_without_the_scorecard_is_read_on_its_own(monkeypatch, caplog):
     sm = Sportmonks(monkeypatch, thin=True)
-    sm.stage = START + 1
+    sm.stage = OUT
     adapter = sc.SportmonksCricket()
     for _ in range(3):
         snap = adapter.snapshots({7: LOC})[7]

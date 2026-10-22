@@ -13,7 +13,8 @@ team (candidates.py, BHA-382: "team", worth TEAM of one about them). A verdict t
 that it's paid for, or that names any risk is kept (for the admin panel, for channel trust and for the judge's
 tuning) but never served: its score stays NULL. So is a video from a channel its player's sport doesn't list
 (candidates.on_list: official channels and a few top creators, BHA-349), a row stored before the list was cut. An
-admin's word on a row (review) stands over the judge's and the list: approved or pinned serves it, hidden never does.
+admin's word on a row (review) stands over the judge's and the list: approved or pinned serves it, one the judge hasn't
+read or held back too (as UNREAD); hidden never does, and is said of the video, so no player's row of it is served.
 
 The score, 0 to 1 (a pinned row's goes past 1, ahead of everything):
 
@@ -53,13 +54,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast, get_args
 
 from pydantic import ValidationError
-from sqlalchemy import not_, or_, select, update
+from sqlalchemy import literal, not_, or_, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from . import candidates, controls, curate, db, metrics, naming, news, shutdown, sports
 from .accounts import FAN_PREFIX
-from .adapters import NEWS, feed_source
-from .models import FeedCandidate, FeedFeedback, Moment, Player, PlayerAlias, PlayerCard
+from .adapters import ADAPTERS, NEWS, feed_source
+from .models import FeedCandidate, FeedFeedback, Moment, Player, PlayerAlias, PlayerCard, SourceBinding
 
 log = logging.getLogger("sports_follow.rank")
 
@@ -103,6 +105,10 @@ EVERGREEN_AFTER = timedelta(days=30)
 EVERGREEN_PACE = 25.0  # views an hour between its two reads
 EVERGREEN_VIEWS = 20_000
 REVIEWS = ("approved", "hidden", "pinned")  # what an admin may say of a row (admin.py)
+# The verdict an approved or pinned row is scored with while the judge has none of its own (not read yet: the gateway
+# down or out of credit; or held back: held): about the player, of middling interest. The admin said it's worth
+# serving, not how good it is, so its views and likes rank it among the rest.
+UNREAD = {"about_player": "subject", "by": "unknown", "kind": "other", "interest": 0.5, "risks": [], "sponsored": False, "reason": ""}
 TAGS = {  # the verdict's kind, as the Feed's pill says it; by who made it where that tells it apart
     "match_moment": "Highlights", "milestone": "Milestone", "personal_or_fun": "Fun", "interview_or_analysis": "Analysis",
     "news": "News", "rumour": "Rumour", "promo": "Promo", "other": "Video",
@@ -485,27 +491,31 @@ def _team_verdicts(session: Session, rows: Sequence[Any]) -> dict[tuple[str, str
 # ---------------------------------------------------------------- the score
 
 
-def rescore(now: datetime | None = None, channel: str | None = None, row: int | None = None) -> dict[str, int]:
-    """Work out every judged row's moment and score again from what's stored (just one channel's rows, or one
-    row, given either), and write the ones that changed. A row a moment's search found keeps that moment while it
-    stands. A story is scored with the others of its player's about the same thing (_stories), so those are read
-    too. No source, no model: cheap enough to run after every poll."""
+def rescore(now: datetime | None = None, channel: str | None = None, row: int | None = None, video: tuple[str, str] | None = None) -> dict[str, int]:
+    """Work out the moment and score again, from what's stored, of every row the judge has a verdict on or an admin
+    approved or pinned, and of every one with a score (just one channel's rows, one row, or every row of one video
+    (source, its id), given any), and write the ones that changed. A row a moment's search found keeps that moment
+    while it stands. A story is scored with the others of its player's about the same thing (_stories), so those are
+    read too. No source, no model: cheap enough to run after every poll."""
     now = now or datetime.now(timezone.utc)
+    scorable = or_(FeedCandidate.verdict.is_not(None), FeedCandidate.review.in_(("approved", "pinned")), FeedCandidate.score.is_not(None))  # a score: one to take back
     with db.session() as session:
         columns = (FeedCandidate.id, FeedCandidate.player_id, FeedCandidate.source, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features,
                    FeedCandidate.verdict, FeedCandidate.review, FeedCandidate.score, FeedCandidate.moment_id)  # fmt: skip
-        query = select(*columns).where(FeedCandidate.verdict.is_not(None))
+        query = select(*columns).where(scorable)
         if channel is not None:
             query = query.where(FeedCandidate.candidate["channel_id"].astext == channel)
         if row is not None:
             query = query.where(FeedCandidate.id == row)
+        if video is not None:
+            query = query.where(FeedCandidate.source == video[0], FeedCandidate.external_id == video[1])
         rows = list(session.execute(query).all())
         if not rows:
             return {"scored": 0, "served": 0, "changed": 0}
         storied = {r.player_id for r in rows if is_story(r.source)}
-        if storied and (channel is not None or row is not None):
+        if storied and (channel is not None or row is not None or video is not None):
             have = {r.id for r in rows}
-            more = session.execute(select(*columns).where(FeedCandidate.verdict.is_not(None), FeedCandidate.player_id.in_(storied),
+            more = session.execute(select(*columns).where(scorable, FeedCandidate.player_id.in_(storied),
                                                           FeedCandidate.source.in_([s for s in {r.source for r in rows} if is_story(s)]))).all()  # fmt: skip
             rows += [r for r in more if r.id not in have]
         published = {r.id: when((r.candidate or {}).get("published")) for r in rows}
@@ -518,10 +528,13 @@ def rescore(now: datetime | None = None, channel: str | None = None, row: int | 
         for r in rows:
             cid = str((r.candidate or {}).get("channel_id") or "")
             how_far = trust(cid, listed, set_by_admin, weights.get(cid, 0.0))
+            # An approved or pinned row the judge has no word on (not read, or held back) is scored as UNREAD.
+            unread = r.review in ("approved", "pinned") and (not r.verdict or r.verdict.get("stage") == "held")
+            verdict = UNREAD if unread else r.verdict
             if r.id in outlets:
-                worth = lambda far, r=r: story_score(r.verdict, outlets[r.id][0], far)  # noqa: E731
+                worth = lambda far, r=r, verdict=verdict: story_score(verdict, outlets[r.id][0], far)  # noqa: E731
             else:
-                worth = lambda far, r=r: score(r.verdict, r.features or {}, far, published[r.id])  # noqa: E731
+                worth = lambda far, r=r, verdict=verdict: score(verdict, r.features or {}, far, published[r.id])  # noqa: E731
             value: float | None = None
             if r.review in ("approved", "pinned"):
                 # The admin's word on this one item stands over their word on its channel: served, if hidden there.
@@ -572,8 +585,7 @@ def _stories(session: Session, rows: Sequence[Any], published: dict[int, datetim
     outlet: dict[int, str] = {}
     for r in rows:
         kept = r.candidate or {}
-        words = news.story_words(str(kept.get("title") or ""), str(kept.get("description") or ""), drop.get(r.player_id, []))
-        by_player.setdefault(r.player_id, []).append(news.Story(r.id, published[r.id], frozenset(words)))
+        by_player.setdefault(r.player_id, []).append(news.story(r.id, published[r.id], str(kept.get("title") or ""), str(kept.get("description") or ""), drop.get(r.player_id, [])))
         outlet[r.id] = naming.fold(str(kept.get("channel") or "")) or str(kept.get("channel_id") or r.url)
     out = {}
     for stories in by_player.values():
@@ -586,9 +598,11 @@ def _stories(session: Session, rows: Sequence[Any], published: dict[int, datetim
 def cards(now: datetime | None = None) -> dict[str, int]:
     """After ranking: each player's served stories (news.py) onto their card as "stories" (feed.news_for), so every
     card that leaves the server carries them, a page's, a stream's or the Android app's, beside the research agent's
-    news, which stays under "news"; taken off once none is served. A card is written only where they differ, under
-    its row's lock, its version moved on, and published as any card is; one another writer replaced meanwhile gets
-    them back at the next run."""
+    news, which stays under "news"; taken off once none is served. A player a live source has has the publishers'
+    news alone (BHA-334): the agent's that a build before they were bound left on the card goes here too, without
+    waiting for an agent run that never comes for them (pipeline.agent_due). A card is written only where it
+    changes, under its row's lock, its version moved on, and published as any card is; one another writer replaced
+    meanwhile is put right at the next run."""
     from . import bus
     from .feed import news_for  # feed.py reads this module's helpers; this one of its, here only
 
@@ -596,33 +610,54 @@ def cards(now: datetime | None = None) -> dict[str, int]:
     with db.session() as session:
         ids = set(session.scalars(select(FeedCandidate.player_id).where(FeedCandidate.source.in_(list(NEWS)), FeedCandidate.score.is_not(None)).distinct()))
         ids |= set(session.scalars(select(PlayerCard.player_id).where(PlayerCard.card.has_key("stories"))))
+        bound = set(session.scalars(
+            select(PlayerCard.player_id).join(SourceBinding, SourceBinding.player_id == PlayerCard.player_id)
+            .where(SourceBinding.purpose == "fixtures", SourceBinding.adapter.in_(list(ADAPTERS)), PlayerCard.card["news"] != literal([], JSONB))
+        ))  # fmt: skip
         served = news_for(session, sorted(ids), now, strict=True)  # a failed read is an error, not every story gone
-        for pid in sorted(ids):
+        for pid in sorted(ids | bound):
             row = session.get(PlayerCard, pid, with_for_update=True)
             want = served.get(pid)
-            if row is None or row.status != "ready" or (row.card or {}).get("stories") == want:
+            if row is None or row.status != "ready":
                 continue
-            card = {k: v for k, v in (row.card or {}).items() if k != "stories"} | ({"stories": want} if want else {})
+            card: dict[str, Any] = {k: v for k, v in (row.card or {}).items() if k != "stories"} | ({"stories": want} if want else {})
+            agents = pid in bound and bool(card.get("news"))
+            if agents:
+                card["news"] = []
+                card["freshness"] = {k: v for k, v in (card.get("freshness") or {}).items() if k != "news"}
+            if card == (row.card or {}):
+                continue
             card["version"] = row.version = (row.version or 0) + 1
             row.card = card
+            if agents:
+                row.freshness = card["freshness"]
             changed.append((pid, card))
     for pid, card in changed:
         bus.store_card(pid, card)
     return {"cards": len(changed)}
 
 
-def review(session: Session, row_id: int, said: str | None) -> bool:
-    """An admin's word on a row (REVIEWS, or None to take it back); False for no such row. Its score follows
-    at the row's next rescore, which the caller runs. Approving or pinning one a fan's app said won't play inside
-    it (feed.unplayable) says it does: every row of the video is served again."""
+def review(session: Session, row_id: int, said: str | None) -> tuple[str, str] | None:
+    """An admin's word on a row (REVIEWS, or None to take it back): the row's video (its source, its id), or None for
+    no such row. Its score follows at the video's rows' next rescore, which the caller runs. Approving or pinning is
+    the row's: the video is about this player. Hiding is the video's (it's abusive, or fake): every player's row of it
+    is hidden, and one kept for someone later is too (candidates.keep); any other word on a row of it takes that back.
+    Approving or pinning one a fan's app said won't play inside it (feed.unplayable) says it does: every row of the
+    video is served again."""
     if said is not None and said not in REVIEWS:
         raise ValueError(f"not a review: {said!r}")
     found = session.execute(update(FeedCandidate).where(FeedCandidate.id == row_id).values(review=said)
                             .returning(FeedCandidate.source, FeedCandidate.external_id)).first()  # fmt: skip
-    if found is not None and said in ("approved", "pinned"):
-        session.execute(update(FeedCandidate).where(FeedCandidate.source == found.source, FeedCandidate.external_id == found.external_id,
-                                                    FeedCandidate.unplayable_at.is_not(None)).values(unplayable_at=None))  # fmt: skip
-    return found is not None
+    if found is None:
+        return None
+    video = (FeedCandidate.source == found.source) & (FeedCandidate.external_id == found.external_id)
+    if said == "hidden":
+        session.execute(update(FeedCandidate).where(video, FeedCandidate.review.is_distinct_from("hidden")).values(review="hidden"))
+    else:
+        session.execute(update(FeedCandidate).where(video, FeedCandidate.review == "hidden").values(review=None))
+    if said in ("approved", "pinned"):
+        session.execute(update(FeedCandidate).where(video, FeedCandidate.unplayable_at.is_not(None)).values(unplayable_at=None))
+    return found.source, found.external_id
 
 
 def unserved() -> Any:

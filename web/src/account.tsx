@@ -1,11 +1,13 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, type Account, type Me, type ServerConfig } from './api'
 import { CloseIcon } from './components/Icons'
+import { changedHands } from './resync'
 
 /**
- * Who this device is signed in as (sports_follow/accounts.py), asked once at start, which also renews
- * the session. Signing in, out or deleting the account starts the app over: every list, stream and
- * cached answer belonged to the fan this device was a moment ago.
+ * Who this device is signed in as (sports_follow/accounts.py), asked at start, which also renews the session,
+ * and again when the app wakes or its stream connects again (`recheck`). Signing in, out or deleting the
+ * account starts the app over: every list, stream and cached answer belonged to the fan this device was a
+ * moment ago. So does finding the device signed out elsewhere, or in to another account in another tab.
  */
 interface AccountState {
   me: Me | null  // null until the server answers
@@ -17,11 +19,15 @@ interface AccountState {
   signedIn: (account: Account, back?: string) => void
   signOut: (everywhere?: boolean) => Promise<void>
   deleteAccount: () => Promise<void>
+  /** Ask again who this device is (the app woke, its stream connected again), at most once in RECHECK_MS. */
+  recheck: () => void
 }
 
 const AccountContext = createContext<AccountState | null>(null)
 const NOTICE = 'sf-account-notice'  // what to say once the app has started over
 const AFTER = 'sf-after-signin'  // the page to come back to after Google's sign-in, which comes back to /account
+const RECHECK_MS = 10_000
+const SIGNED_OUT = 'This device was signed out. Sign in again to see your players.'
 
 /** A path of this app's own ("/j/K7Q2M"), or null: nothing to leave the site for. */
 function ownPage(path: string | null | undefined): string | null {
@@ -74,6 +80,9 @@ function welcome(added: number): string {
 
 export function AccountProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null)
+  const meRef = useRef(me)
+  meRef.current = me
+  const asked = useRef(Date.now())  // the last time who this device is was asked
   const [config, setConfig] = useState<ServerConfig | null>(null)
   const [notice, setNotice] = useState<string | null>(() => {
     try {
@@ -106,11 +115,30 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       setMe(answer)
       if (answer.signed_in === false && answer.reason === 'signed_out') {
         forgetCachedAnswers()
-        setNotice((said) => said ?? 'This device was signed out. Sign in again to see your players.')
+        setNotice((said) => said ?? SIGNED_OUT)
       }
     }).catch(() => setMe({ signed_in: false }))
     api.config().then(setConfig).catch(() => {})
   }, [])
+
+  // Signed out elsewhere (everywhere from another device, the account deleted or blocked), the app kept showing the
+  // account, its players and its alerts (BUG-162): asked again as it wakes and as its stream connects again, a
+  // device that's someone else now starts over as who it is, here.
+  const recheck = useCallback(() => {
+    if (meRef.current === null || Date.now() - asked.current < RECHECK_MS) return
+    asked.current = Date.now()
+    api.account().then((now) => {
+      if (!changedHands(meRef.current, now)) return setMe(now)
+      const out = !now.signed_in
+      startOver(window.location.pathname + window.location.search, out ? SIGNED_OUT : null, out)
+    }, () => { /* offline: asked again on the next wake */ })
+  }, [])
+
+  useEffect(() => {
+    const wake = () => { if (document.visibilityState === 'visible') recheck() }
+    document.addEventListener('visibilitychange', wake)
+    return () => document.removeEventListener('visibilitychange', wake)
+  }, [recheck])
 
   const dismissNotice = useCallback(() => setNotice(null), [])
   const signedIn = useCallback((account: Account, back?: string) => {
@@ -126,8 +154,8 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo<AccountState>(
-    () => ({ me, config, notice, dismissNotice, signedIn, signOut, deleteAccount }),
-    [me, config, notice, dismissNotice, signedIn, signOut, deleteAccount],
+    () => ({ me, config, notice, dismissNotice, signedIn, signOut, deleteAccount, recheck }),
+    [me, config, notice, dismissNotice, signedIn, signOut, deleteAccount, recheck],
   )
   return <AccountContext.Provider value={value}>{children}</AccountContext.Provider>
 }

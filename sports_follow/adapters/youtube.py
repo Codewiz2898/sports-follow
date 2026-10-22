@@ -4,7 +4,7 @@ YouTube Data API v3 says of each one.
 A channel's uploads come from its public feed (youtube.com/feeds/videos.xml), which costs no quota but often
 answers 404 or 500 for a while, for no reason it gives. When it doesn't answer and there's a key, the channel's
 uploads playlist is read from the API instead (playlistItems.list, 1 unit). What the feed's hard filters need
-(how long a video runs, whether it may be embedded, where it plays, its views and likes) comes from
+(how long a video runs, whether it may be embedded, where it plays, whether it's age-restricted, its views and likes) comes from
 videos.list: 1 unit for up to 50 videos, whichever parts are asked for, so the same call also reads whether the
 maker declared paid promotion in it (paidProductPlacementDetails), which the judge takes as sponsored, and its
 shape (player, asked with maxWidth: the embedded player's size), which tells an upright video (a Short) from a wide
@@ -283,6 +283,7 @@ def parse_videos(data: dict[str, Any]) -> dict[str, VideoFacts]:
             allowed=tuple(allowed) if isinstance(allowed, list) else None,
             blocked=tuple(region.get("blocked") or ()),
             paid=placement.get("hasPaidProductPlacement") is True,
+            age_restricted=(details.get("contentRating") or {}).get("ytRating") == "ytAgeRestricted",
             raw={
                 "contentDetails": details,
                 "statistics": stats,

@@ -33,7 +33,8 @@ YouTube, plus OpenDota by choice (BHA-208). Never ESPN, which is for development
 | `seal-secrets.sh`, `secrets-recipients.txt` | On the server: seals every secret into `secrets.age` for the age keys listed, or puts a sealed copy back. |
 | `backup-secrets.sh`, `restore-secrets.sh` | From any machine: download the sealed copy for the password manager, or put it back on a new server. |
 | `offsite-backup.sh`, `systemd/sports-follow-offsite.*` | On the server, hourly: seals new dumps and sends them, with the sealed secrets, to object storage; thins out old ones. |
-| `fetch-backup.sh` | From any machine: brings a dump back from object storage onto the server, opened, for `pg_restore`. |
+| `fetch-backup.sh` | From any machine: brings a dump back from object storage onto the server, opened, for `restore-backup.sh`. |
+| `restore-backup.sh` | On the server: puts a dump in place of the database (loaded beside it, then swapped in) and runs the migrations; keeps the database it replaced until you drop it. |
 | `deploy.sh` | On the server: deploys a commit of main, rolls back, or shows what's live. GitHub Actions runs it. |
 | `../.github/workflows/deploy.yml` | After CI passes on main: waits for your approval, then runs `deploy.sh` over SSH, then a health check from outside that the site runs that commit. |
 | `deploy-summary.sh`, `../.github/workflows/deploy-summary.yml` | What a waiting deploy brings, on its run's page; sent when it starts waiting and every morning while it does. |
@@ -253,9 +254,10 @@ A sign-in that works is emailed ("Someone signed in to the admin panel", with ho
 minutes; another within those 5 minutes sends no email of its own), and so are 10 wrong ones in an hour; the rules are in `grafana/app-rules.json`: after changing them, `deploy/grafana/apply-alerts.sh`.
 If a sign-in wasn't you, make a new password and key at once, and send them: that signs every admin out.
 The first time, the containers need the file mounted: `docker compose -f deploy/compose.yaml up -d
---force-recreate api worker` after the deploy that brings the panel. Wrong passwords are limited for
-everyone together (30 an hour), so someone guessing can lock you out for the rest of the hour; to get in
-sooner, clear the count:
+--force-recreate api worker` after the deploy that brings the panel. Tries are limited from each address
+(10 a quarter of an hour), and wrong ones for everyone together (30 an hour): past that, only the right
+password with a code from the authenticator app gets in until the hour is over. Without a code set,
+someone guessing can lock you out for the rest of the hour; to get in sooner, clear the count:
 `docker compose -f deploy/compose.yaml exec redis sh -c 'redis-cli --scan --pattern "admin-fails:*" | xargs -r redis-cli del'`.
 
 **Linear's plan on the admin panel** (you, once): the panel's Sources tab shows which plan the Linear
@@ -397,21 +399,33 @@ Other files in the bucket are left alone.
 deploy/fetch-backup.sh deploy@<server-ip>   # the newest; or a name from offsite-backup.sh list
 ```
 It asks for the age secret key, or reads it piped in. The key goes over SSH into the server's memory only.
-The opened dump lands in `/var/backups/sports-follow/fetched/`. Loading it **replaces the database**, so
-the API and worker stop meanwhile. The migrations bring an older dump up to the code. On the server, as
-`deploy`, in `/opt/sports-follow`:
+The opened dump lands in `/var/backups/sports-follow/fetched/`. Loading it **replaces the database**. On
+the server, as `deploy`, in `/opt/sports-follow`:
 ```bash
-c() { docker compose -f deploy/compose.yaml "$@"; }
-c stop api worker && c exec -T postgres pg_restore -U sports -d sports_follow --clean --if-exists \
-  < /var/backups/sports-follow/fetched/<file>.dump && c run --rm migrate && c start api worker
+deploy/restore-backup.sh /var/backups/sports-follow/fetched/<file>.dump
 ```
+- **The site is down while it runs:** it stops the API, worker, curator and backup job, and starts them
+  again at the end, whatever happened. It won't start during a deploy or a rollback (they share
+  `deploy.sh`'s lock).
+- **The dump loads into a new database** beside the live one, and the two swap names only once all of it is
+  in. Then the migrations bring an older dump up to the code. If the load or the migrations fail, the live
+  database is as it was, and the script says so.
+- **Redis forgets signed-in sessions and the cards' hot copies** (`session:*`, `card:*`), which name the
+  replaced database's rows. Nothing else there is touched. A fan who signed in after the dump was taken is
+  signed out; everything else about fans is as of the dump.
+- **The database it replaced is kept** as `sports_follow_before_<time>`. Drop it once the site looks right;
+  the script prints the command.
+
+Don't load a dump over the live database (`pg_restore --clean`). `--clean` drops only what the dump has,
+so after a migration that added a table, that table's keys keep `player` and its rows from going back, and
+the migrations then stop on the table already being there (BHA-539).
 
 **A new server from nothing**, with the Mac gone, takes four steps:
 1. `server-setup.sh`.
 2. `restore-secrets.sh`, from the password manager's sealed copy, or `secrets.age` downloaded from the
    bucket's web page. That brings back `offsite.env` too.
 3. `deploy.sh deploy`.
-4. `fetch-backup.sh`, then the load above.
+4. `fetch-backup.sh`, then `restore-backup.sh` as above.
 
 ## Deploying
 
@@ -735,7 +749,7 @@ follow the `debug` skill (`.claude/skills/debug/SKILL.md`), which also says what
 | Add or remove a player | `c exec -it worker python -m sports_follow.players list` (`add`, `remove`, `restore`, `unmatch` a wrong face, `rematch`: see the README) |
 | A campaign page (stann.in/gukesh) | `c exec worker python -m sports_follow.campaigns list` (`set`, `show`, `player add`, `team find`, `team add`, `game add`, `remove`: see the README) |
 | Backups | `ls /var/backups/sports-follow` |
-| Restore a backup | `c stop api worker && c exec -T postgres pg_restore -U sports -d sports_follow --clean --if-exists < /var/backups/sports-follow/<file>.dump && c run --rm migrate && c start api worker` (off-site ones: [Off-site backups](#off-site-backups)) |
+| Restore a backup | `deploy/restore-backup.sh /var/backups/sports-follow/<file>.dump`: the site is down while it runs, and the database it replaced is kept (off-site ones and what it does: [Off-site backups](#off-site-backups)) |
 | Off-site backups | `deploy/offsite-backup.sh list`; run now: `sudo systemctl start sports-follow-offsite`; log: `sudo journalctl -u sports-follow-offsite` |
 
 The daily dumps stay on the server for 14 days. Off-site, they're sealed and kept for longer (see
@@ -776,7 +790,8 @@ secrets. Their data is as of the newest off-site dump: the daily one, off-site w
    c build && c up -d postgres redis
    ```
    Fetch the newest dump from the Mac with `deploy/fetch-backup.sh deploy@<ip>`, which asks for the age
-   key. Then, back on the server:
+   key. Then, back on the server, load it straight into the database, which is still empty (nothing has
+   run on it, not even the migrations; on a server that has data, use `restore-backup.sh`):
    ```bash
    c exec -T postgres pg_restore -U sports -d sports_follow --clean --if-exists --no-owner < /var/backups/sports-follow/fetched/<file>.dump
    deploy/deploy.sh deploy   # migrations, then everything: API, worker, backups, Caddy
@@ -841,6 +856,20 @@ On the second machine:
 - `fetch-backup.sh` brought the newest dump back at its exact size.
 - `pg_restore` gave a database with the same 5,000 rows and checksum.
 - A wrong key and a bad dump name were refused, with nothing left behind.
+
+`restore-backup.sh` was rehearsed on 2026-10-22 (BHA-539) on the Mac's Postgres 16, on a scratch database
+with a copy of the registry (366,805 athletes), 200,000 moments and 100,000 feed candidates. A stand-in for
+`docker compose` passed `exec` to that Postgres and to a throwaway Redis, and ran the migrations for
+`migrate` (`RESTORE_COMPOSE`, `RESTORE_DB`). The dump was taken four migrations back. The database was then
+brought to head and given rows the dump didn't have: a feed sweep, a player, and a renamed player.
+- The old way, `pg_restore --clean --if-exists` over it, exited 1. `player` kept the new rows, and the
+  migrations stopped on `feed_sweep` already existing.
+- With the script, in 14 seconds, all 40 of the dump's tables came back with its row counts, and `player`
+  with its checksum. The migrations brought it to head, and `alembic check` found nothing to change.
+- The database it replaced was kept whole. In Redis, only `session:*` and `card:*` went; budgets, locks
+  and the job queue stayed.
+- A file that isn't a dump stopped nothing. A dump cut short, and a migration made to fail, each left the
+  live database as it was and started everything again.
 
 The Grafana alerts were rehearsed on another such machine, with Alloy 1.20.1 from Grafana's repository.
 Grafana Cloud was played by a local Prometheus with its remote-write receiver, Grafana 12 and Mailpit

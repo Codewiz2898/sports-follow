@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useAccount } from './account'
 import { api, subscribe, type AlertLevel, type Card, type FollowedMatch, type FollowedTeam, type FollowTarget, type PlayerMoment, type StreamEvent } from './api'
 import { wanted } from './notifications'
+import { listed } from './resync'
 
 interface FollowingState {
   cards: Card[]
@@ -37,6 +39,7 @@ const TOAST_MS = 8000
 const RETRY_MS = 2000
 const RETRY_MAX_MS = 60_000
 const SAME_MS = 10_000  // a game's own moment this soon after one of the fan's players' of its kind in the game is that one
+const SETTLE_MS = 5_000  // a list the server sent this soon after a follow or unfollow here may be from before it
 const AWAY_MS = 30_000  // away from the app, or without its stream, this long: what came meanwhile is looked for on coming back
 
 /** A team's tag, as a game's own moment told from its side names it (PlayerMoment.sides). */
@@ -80,12 +83,24 @@ function withLocal(players: Card[], prev: Card[]): Card[] {
   return [...players, ...prev.filter((c) => !players.some((p) => p.player_id === c.player_id))]
 }
 
+/** Each card shown brought up to date from a list the server sent, its level as shown; none comes or goes. */
+function refreshed(players: Card[], prev: Card[]): Card[] {
+  const fresh = new Map(players.map((c) => [c.player_id, c]))
+  return prev.map((c) => {
+    const f = fresh.get(c.player_id)
+    return f && f.version >= c.version ? { ...c, ...f, alerts: c.alerts } : c
+  })
+}
+
 /**
  * The fan's followed players, kept live over ONE stream (/api/me/stream) for all of them.
  * The stream's channel set is fixed at connect time, so it reconnects when the follow list changes.
  * Every connect opens with the players' cards as they are now, so a reconnect is also a resync.
  */
 export function FollowingProvider({ children }: { children: ReactNode }) {
+  const { recheck } = useAccount()
+  const recheckRef = useRef(recheck)
+  recheckRef.current = recheck
   const [cards, setCards] = useState<Card[]>([])
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -120,13 +135,22 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   loadedRef.current = loaded
   const listeners = useRef(new Set<(e: StreamEvent) => void>())
   const alertWrites = useRef(new Map<number, { latest: number; saved: AlertLevel; queue: Promise<void> }>())
+  // This app's follows and unfollows under way, and when the last one ended: a list the server sends meanwhile may
+  // be from before one, so it's taken as the list (BUG-165) only once they're settled.
+  const following = useRef({ busy: 0, ended: 0 })
+  const teamLevels = useRef(new Set<number>())  // the teams whose level this app is changing
+  const settled = () => following.current.busy === 0 && Date.now() - following.current.ended > SETTLE_MS
+  /** The fan's players from a list the server sent: the list itself once this app's own changes have settled (a
+   * player followed or dropped on another device comes or goes), else the cards shown kept and brought up to date. */
+  const fromServer = useCallback((players: Card[], prev: Card[], loose: (players: Card[], prev: Card[]) => Card[]) =>
+    (settled() ? listed(players, prev, (id) => alertWrites.current.has(id)) : loose(players, prev)), [])
 
   const reload = useCallback(() => api.following().then((r) => {
-    setCards((prev) => withLocal(r.players, prev))
+    setCards((prev) => fromServer(r.players, prev, withLocal))
     setTeams(r.teams ?? [])
     setLoaded(true)
     setFailed(false)
-  }, () => setFailed(true)), [])
+  }, () => setFailed(true)), [fromServer])
 
   useEffect(() => { reload() }, [reload])
   const reloadRef = useRef(reload)
@@ -173,25 +197,24 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
 
   const apply = useCallback((e: StreamEvent) => {
     if (e.type === 'following') {
-      // First on every (re)connect: each card as it is now, so a score or result published while the
-      // stream was down (a locked phone, a restart) isn't missed. Who the fan follows, and their alert
-      // levels, stay as this app has them, unless the list never loaded (a player was followed since):
-      // then this is the list.
-      const fresh = new Map(e.players.map((c) => [c.player_id, c]))
+      // First on every (re)connect: the fan's list as it is now, each card with it, so a score or result published
+      // while the stream was down (a locked phone, a restart) isn't missed. It's the list (fromServer: a player
+      // followed or dropped on another device comes or goes, BUG-165), unless this app's own follows haven't
+      // settled, or the list never loaded (a player was followed since): then the cards shown are kept too.
+      // Connecting again may also mean this device was signed out elsewhere: who it is is asked again (BUG-162).
+      recheckRef.current()
       if (!loadedRef.current) {
         setCards((prev) => withLocal(e.players, prev))
         setLoaded(true)
         setFailed(false)
-      } else setCards((prev) => prev.map((c) => {
-        const f = fresh.get(c.player_id)
-        return f && f.version >= c.version ? { ...c, ...f, alerts: c.alerts } : c
-      }))
+      } else setCards((prev) => fromServer(e.players, prev, refreshed))
       setProgress((p) => ({ ...p, ...Object.fromEntries(e.players.filter((c) => c.status !== 'building').map((c) => [c.player_id, []])) }))
       if (e.matches) { setMatches(e.matches); setMatchesLoaded(true) }
-      // Each team's games and results as they are now; its level as this app has it.
+      // The teams as the server has them now, as Following's list brings them (reload); a level being changed here
+      // as shown till the server has it.
       if (e.teams) {
-        const theirs = new Map(e.teams.map((t) => [t.team_id, t]))
-        setTeams((prev) => (loadedRef.current ? prev.map((t) => { const f = theirs.get(t.team_id); return f ? { ...t, ...f, alerts: t.alerts } : t }) : e.teams ?? prev))
+        const theirs = e.teams
+        setTeams((prev) => theirs.map((t) => (teamLevels.current.has(t.team_id) ? { ...t, alerts: prev.find((x) => x.team_id === t.team_id)?.alerts ?? t.alerts } : t)))
       }
     } else if (e.type === 'match') {
       // A followed game's board and where it's at, as its poll found it; the rest stays as the list has it.
@@ -239,7 +262,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
       }))
     }
     for (const onEvent of listeners.current) onEvent(e)
-  }, [])
+  }, [fromServer])
 
   const listen = useCallback((onEvent: (e: StreamEvent) => void) => {
     listeners.current.add(onEvent)
@@ -279,19 +302,26 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     const was = teamsRef.current.find((t) => t.team_id === teamId)?.alerts ?? 'key'
     const show = (value: AlertLevel) => setTeams((prev) => prev.map((t) => (t.team_id === teamId ? { ...t, alerts: value } : t)))
     show(level)
-    try { await api.setTeamAlerts(teamId, level) } catch (e) { show(was); throw e }
+    teamLevels.current.add(teamId)
+    try { await api.setTeamAlerts(teamId, level) } catch (e) { show(was); throw e } finally { teamLevels.current.delete(teamId) }
   }, [])
 
-  const follow = useCallback(async (target: FollowTarget) => {
+  /** A follow or unfollow of this app's, counted while it's on its way (`following`). */
+  const changing = useCallback(async <T,>(work: () => Promise<T>): Promise<T> => {
+    following.current.busy++
+    try { return await work() } finally { following.current.busy--; following.current.ended = Date.now() }
+  }, [])
+
+  const follow = useCallback((target: FollowTarget) => changing(async () => {
     const { card } = await api.follow(target)
     setCards((prev) => (prev.some((c) => c.player_id === card.player_id) ? prev.map((c) => (c.player_id === card.player_id ? card : c)) : [...prev, card]))
     return card
-  }, [])
+  }), [changing])
 
-  const unfollow = useCallback(async (playerId: number) => {
+  const unfollow = useCallback((playerId: number) => changing(async () => {
     await api.unfollow(playerId)
     setCards((prev) => prev.filter((c) => c.player_id !== playerId))
-  }, [])
+  }), [changing])
 
   // A level shows the moment it's tapped. Its PUTs go one at a time per player, and one already
   // replaced by a newer tap isn't sent, so fast taps can't land out of order: the server ends on the

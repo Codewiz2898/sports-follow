@@ -251,7 +251,7 @@ def test_a_common_surname_or_a_nickname_names_a_player_only_with_their_side():
 
 
 def s(sid: int, hours: float, title: str, description: str = "", name: str = "Asha Verma") -> news.Story:
-    return news.Story(sid, NOW - timedelta(hours=hours), frozenset(news.story_words(title, description, [name])))
+    return news.story(sid, NOW - timedelta(hours=hours), title, description, [name])
 
 
 def test_the_same_story_within_a_day_is_one_group_and_another_story_is_not():
@@ -262,6 +262,27 @@ def test_the_same_story_within_a_day_is_one_group_and_another_story_is_not():
         s(4, 40, "Unbeaten century from Verma powers Riverside past Eastern Stars", "Another victory"),  # two days earlier
     ])
     assert groups == [[4], [1, 2], [3]]
+
+
+def test_a_storys_words_keep_its_figures_and_read_a_name_and_a_word_however_written():
+    # BUG-249: "Bavuma's 179" from two outlets shared nothing: the figure was dropped and "Bavuma's" was a word.
+    words = news.story_words("Verma's 179 lights up the 2026-27 season", "The 29-year-old, aged 29, faced 2 overs in 2026", ["Asha Verma"])
+    assert "179" in words and not {"verma", "vermas", "2026", "27", "29", "2"} & words
+    assert news.story_words("Wickets fall as she gives up hope", "") == news.story_words("A wicket falls, giving up hoping", "")
+
+
+def test_a_date_or_a_small_figure_shared_with_only_a_series_words_is_another_story():
+    # BUG-249's review: "25 October" in one story and "25 per cent" in another, with the opponent and the nation in
+    # both, made an injury and a fine one item, and the ranking hid one of them. A day of the month isn't a figure;
+    # nor, among a series' stories, is a small number that only its usual words come with.
+    hamstring = s(1, 10, "Kohli to miss third ODI against Australia with hamstring strain", "India hope he is fit for the first Test on 25 October", name="Virat Kohli")
+    fined = s(2, 8, "Kohli fined 25 per cent of match fee for dissent against Australia", "The India batter disputed an lbw decision", name="Virat Kohli")
+    assert news.clusters([hamstring, fined]) == [[1], [2]]
+    for date in ("October 25", "Oct. 25", "25th October", "on the 25th of October"):
+        assert not {"25", "25th"} & news.story_words("Kohli fit for the first Test", f"He returns {date}")
+    squad = s(3, 9, "India name their squad for Australia", "Kohli and Bumrah return for India against Australia", name="Virat Kohli")
+    out = s(4, 6, "Kohli out for 25 as Australia beat India", "Australia's quicks were too good for India's top order", name="Virat Kohli")
+    assert news.clusters([hamstring, fined, squad, out]) == [[1], [3], [2], [4]]
 
 
 def test_a_story_is_scored_by_the_judges_interest_and_how_many_outlets_ran_it():

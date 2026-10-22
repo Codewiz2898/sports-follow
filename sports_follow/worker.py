@@ -22,6 +22,7 @@ from typing import Any
 
 from arq import cron, func
 from arq.connections import RedisSettings
+from arq.constants import in_progress_key_prefix
 
 from . import accounts, bus, campaigns, db, engine, history, league, live, livecards, logs, match, metrics, notify, photos, pipeline, predictions, predictions_push, registry, retention, shutdown, sidelined, starters, structured, teams, tracing
 from .adapters import budget
@@ -66,6 +67,7 @@ def _logged(fn, quiet: bool = False, deep: bool = True):
 
     @functools.wraps(fn)
     async def job(ctx, *args, trace: dict | None = None, **kwargs):
+        await _in_progress_for(ctx, fn.__name__)
         given = signature.bind_partial(ctx, *args, **kwargs).arguments
         fields = {k: given[k] for k in FIELDS if k in given}
         logs.begin(rid=(trace or {}).get("rid") or logs.new_id(), job=fn.__name__, **fields)
@@ -99,6 +101,28 @@ def _logged(fn, quiet: bool = False, deep: bool = True):
             return result
 
     return job
+
+
+def _timeout(name: str) -> float:
+    """The seconds arq lets a job of this name run before cancelling it: the timeout it was given (func() or cron()),
+    or the worker's job_timeout. The longest, where it's given more than one."""
+    jobs: list[Any] = [*WorkerSettings.functions, *WorkerSettings.cron_jobs]  # a job, or arq's Function or CronJob of one
+    given = [getattr(job, "timeout_s", None) or WorkerSettings.job_timeout for job in jobs if getattr(job, "coroutine", job).__name__ == name]
+    return max(given, default=WorkerSettings.job_timeout)
+
+
+async def _in_progress_for(ctx, name: str) -> None:
+    """arq marks a job it starts as in progress, so no worker starts it again and its id can't be queued again, for
+    the longest timeout of any job (the weekly import's six hours); only a worker that ends the job takes the mark
+    off. After a worker died mid-job (an OOM kill, a host reboot), a job queued under a fixed id (a source's poll
+    lane, the engine lane, the moment sweep, the history lane, a player's refresh) was stuck for six hours: no live
+    scores from that source meanwhile (BUG-272). The mark lasts as long as this job may run instead, with arq's own
+    ten seconds over, and then the next worker runs it again."""
+    redis, job_id = ctx.get("redis"), ctx.get("job_id")
+    if redis is None or not job_id:
+        return
+    with contextlib.suppress(Exception):  # Redis not answering fails the job's own steps, not this
+        await redis.pexpire(in_progress_key_prefix + job_id, int((_timeout(name) + 10) * 1000))
 
 
 async def in_lane(lane: str, fn, *args):
@@ -390,12 +414,14 @@ async def tick(ctx) -> None:
     due = await _in_tick_pool(pipeline.due_work)
     for player_id in due.builds:
         await ctx["redis"].enqueue_job("build_card", player_id)
+    # One refresh of a player or a team waits at a time, as the API queues them too: while the queue was behind, each
+    # tick queued another, and each read the source again once it ran (BUG-175).
     for player_id in due.refreshes:
-        await ctx["redis"].enqueue_job("refresh_structured", player_id)
+        await ctx["redis"].enqueue_job("refresh_structured", player_id, _job_id=f"refresh-structured:{player_id}")
     for player_id in due.profiles:
         await ctx["redis"].enqueue_job("reread_profile", player_id, _job_id=f"reread-profile:{player_id}")
     for team_id in due.teams:
-        await ctx["redis"].enqueue_job("refresh_team", team_id)
+        await ctx["redis"].enqueue_job("refresh_team", team_id, _job_id=f"refresh-team:{team_id}")
     for event_id in due.polls:
         await ctx["redis"].enqueue_job("poll_event", event_id)
     for system in due.lanes:

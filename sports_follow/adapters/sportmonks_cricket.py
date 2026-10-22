@@ -51,21 +51,30 @@ _OFF = {"Cancl.", "Postp.", "Aban."}
 # Called off, or washed out: the board says so (state's cancelled), and a prediction on it is voided
 # (sports.cricket), where a postponed one waits.
 _CALLED_OFF = {"Cancl.", "Aban."}
+_ABANDONED = "Aban."
+_DELAYED = "Delayed"  # rain, bad light, a wet outfield: before the toss, or once play has started
 _BREAKS = {"Innings Break", "Lunch", "Tea Break", "Dinner", "Int."}
 _OVERS = {"T20I": 20, "T20": 20, "ODI": 50, "List A": 50, "T10": 10}
 _FORMATS = {"Test/5day": "Test", "4day": "First-class"}
 
 
-def _status(value: str | None) -> str:
-    """Sportmonks match status ("NS", "2nd Innings", "Stump Day 2", "Finished", "Aban.") -> ours."""
+def _status(value: str | None, played: bool = False) -> str:
+    """Sportmonks match status ("NS", "2nd Innings", "Stump Day 2", "Finished", "Aban.") -> ours. Once a ball has
+    been bowled (played), a "Delayed" match is still on, waiting for play to resume, and an abandoned one is over
+    with no result and its scorecard, as ESPN's adapter has it; before, they're to come and called off."""
     value = value or ""
-    if value in _FINAL:
+    if value in _FINAL or (value == _ABANDONED and played):
         return "final"
     if value in _OFF:
-        return "postponed"  # as ESPN's adapter: an abandoned match has no result to show
-    if value.endswith("Innings") or value.startswith("Stump") or value in _BREAKS:
+        return "postponed"  # as ESPN's adapter: a match called off before play has no result to show
+    if value.endswith("Innings") or value.startswith("Stump") or value in _BREAKS or (value == _DELAYED and played):
         return "live"
-    return "scheduled"  # "NS", "Delayed"
+    return "scheduled"  # "NS", "Delayed" before play
+
+
+def _played(x: dict[str, Any]) -> bool:
+    """Whether a match has had a ball bowled: an innings on its board with runs, wickets or overs."""
+    return any(r.get("score") or r.get("wickets") or r.get("overs") for r in x.get("runs") or [])
 
 
 def _time(value: str | None) -> datetime | None:
@@ -116,7 +125,7 @@ def parse_fixture(x: dict[str, Any]) -> Fixture:
     """A fixture -> ours, with what the sport ranks a league match by (sports.cricket): whether it's between
     nations, and whether a super over decided it."""
     home, away = _team(x, "localteam"), _team(x, "visitorteam")
-    status = _status(x.get("status"))
+    status = _status(x.get("status"), _played(x))
     runs = x.get("runs") or []
     result = None
     if status == "final":
@@ -241,10 +250,10 @@ def parse_lines(x: dict[str, Any]) -> dict[str, Line]:
 def parse_match(x: dict[str, Any]) -> Snapshot:
     """A fixture with teams, runs, line-ups, batting and bowling -> snapshot with the full scorecard."""
     home, away = _team(x, "localteam"), _team(x, "visitorteam")
-    status = _status(x.get("status"))
+    status = _status(x.get("status"), _played(x))
     names = {t.get("id"): t for t in (home, away)}
     runs = sorted(x.get("runs") or [], key=lambda r: r.get("inning") or 0)
-    in_play = status == "live" and x.get("status") not in _BREAKS and not str(x.get("status")).startswith("Stump")
+    in_play = status == "live" and x.get("status") not in (*_BREAKS, _DELAYED) and not str(x.get("status")).startswith("Stump")
     innings = [{
         "team": (names.get(r.get("team_id")) or {}).get("name"),
         "abbr": (names.get(r.get("team_id")) or {}).get("code"),
@@ -263,7 +272,7 @@ def parse_match(x: dict[str, Any]) -> Snapshot:
         return f"{i['abbr'] or i['team']} {i['runs']}{wk} ({i['overs']} ov)"
 
     if status == "final":
-        clock_label = x.get("note") or "Result"
+        clock_label = x.get("note") or ("No result" if x.get("status") in _CALLED_OFF else "Result")
     elif status == "live":
         clock_label = " · ".join(b for b in (x.get("status"), _chase(x, innings)) if b)
     else:
@@ -423,8 +432,8 @@ def squad_match(rows: list[dict[str, Any]], now: datetime | None = None) -> dict
 
     seasoned = [x for x in rows if x.get("season_id")]
     # A match a day past its start that still says it's to come was never played: no one's next.
-    ahead = sorted((x for x in seasoned if _status(x.get("status")) in ("scheduled", "live") and start(x) > now - timedelta(days=1)), key=start)
-    behind = sorted((x for x in seasoned if _status(x.get("status")) == "final"), key=start, reverse=True)
+    ahead = sorted((x for x in seasoned if _status(x.get("status"), _played(x)) in ("scheduled", "live") and start(x) > now - timedelta(days=1)), key=start)
+    behind = sorted((x for x in seasoned if _status(x.get("status"), _played(x)) == "final"), key=start, reverse=True)
     return next(iter(ahead or behind), None)
 
 
@@ -438,6 +447,10 @@ class SportmonksCricket(Adapter):
     provider = sportmonks.PROVIDER
     covers = "Cricket"
     live_cadence = 10  # one livescores request for every live match: 360 an hour, of the 2,000 it allows
+    # A player's fixtures are only the matches they're picked for (in_match: the XI once it's out, else the squad), and
+    # a read lists them all or fails: a match still to come or on that a refresh no longer lists is one they've been
+    # left out of, and they're taken out of it (structured._refresh).
+    picked_only = True
     # A match livescores leaves out is read on its own every round while it's in play and changing, else
     # once this many seconds have passed: every minute's round, before the toss or through a long break.
     ALONE_EVERY = 50
@@ -620,12 +633,7 @@ class SportmonksCricket(Adapter):
         return data["data"]
 
     def snapshot(self, locator: dict[str, Any], final: bool = False) -> Snapshot:
-        # A short cache lets every followed player in one match share each poll's fetch. A finished match
-        # is kept a day, but a copy cached before it finished is read again.
-        x = self._match(locator["fixture"], 24 * 3600 if final else 5)
-        if final and _status(x.get("status")) != "final":
-            x = self._match(locator["fixture"], 5)
-        return parse_match(x)
+        return self.read_snapshot(lambda ttl: parse_match(self._match(locator["fixture"], ttl)), final, 5)
 
     def snapshots(self, locators: dict[Any, dict[str, Any]]) -> dict[Any, Snapshot]:
         """Many matches at once: the live lane's fetch a round. Every match in play comes in one livescores
