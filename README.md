@@ -128,8 +128,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`follow_player(background_only=True)`), and nothing else it says is kept: no news items and no news
   alerts, whose news is the publishers' (`news.py`). `python -m sports_follow.wiki Q213854 cricket` prints one player's profile.
 - **Search answers from the registry.** `GET /api/search` (`sports_follow/search.py`) reads Postgres only:
-  players on Sports Follow (those more signed-in fans follow first, and "N following" counts them: a cookie's
-  follow only breaks a tie, so a script's can't steer it; teams the same), then registry athletes by popularity, with a trigram index for typos ("did you
+  players on Sports Follow (those more signed-in fans follow first, and "N following" counts them, an inbox's
+  plus-address accounts as one: a cookie's follow only breaks a tie, so a script's can't steer it; teams the same), then registry athletes by popularity, with a trigram index for typos ("did you
   mean"). ESPN's search and Lichess's FIDE search are asked only when the registry has fewer than three
   matches. Two athletes with the typed name get a picker with birth years.
 - **Following binds the exact athlete.** A registry athlete is looked up in their live source by the id

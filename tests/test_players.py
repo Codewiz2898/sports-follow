@@ -608,6 +608,30 @@ def test_search_ranks_players_by_their_signed_in_fans_and_anyones_follows_only_b
     assert "follows" not in search.public(ranked[0])  # what breaks a tie isn't said
 
 
+def test_search_counts_an_inbox_as_one_fan_as_starters_do(db):
+    """BUG-296 with BUG-293: "N following", and the order search, For you and the Feed's sweeps rank by, counted
+    accounts, and me+1@ and me+2@ are one inbox's two accounts, while starters counted inboxes. Followers are counted
+    by inbox everywhere now (models.followers)."""
+    from sports_follow import models, search
+
+    emails = ["me+1@gmail.com", "m.e@googlemail.com", "me@gmail.com", "you@example.com", "them@example.com"]
+    db.add_all([Account(email=e, fan_id=f"acct-{i}") for i, e in enumerate(emails)])
+    db.flush()
+
+    def page(pid: int, name: str, followers: list[str]) -> None:
+        db.add(Player(id=pid, slug=name.lower().replace(" ", "-"), name=name, sport="Football"))
+        db.flush()
+        db.add_all([PlayerCard(player_id=pid, status="ready", card={}), PlayerAlias(alias=name.lower().replace(" ", "-"), player_id=pid),
+                    *[Follow(fan_id=f, player_id=pid, alert_rules={}) for f in followers]])
+
+    page(27, "Mohamed Salah", ["acct-0", "acct-1", "acct-2", "cookie-1"])  # one inbox's three accounts, and a cookie
+    page(26, "Mohammed Sallah", ["acct-3", "acct-4"])  # two people
+    db.commit()
+    ranked = search.rank("moha", search.local(db, "moha", None, None), [])
+    assert [(r.name, r.followers) for r in ranked] == [("Mohammed Sallah", 2), ("Mohamed Salah", 1)]
+    assert {pid: (inboxes, follows) for pid, inboxes, follows in db.execute(models.followers(Follow.player_id, Follow.fan_id))} == {27: (1, 4), 26: (2, 2)}
+
+
 def test_one_inbox_is_one_fan_however_many_accounts_its_plus_addresses_made(db, pools):
     """BUG-296: two signed-in fans following a page made it a starter for every new fan, and me+1@ and me+2@ reach one
     inbox: one person's two accounts were two fans. Followers are counted by inbox now (accounts.inbox_of)."""
