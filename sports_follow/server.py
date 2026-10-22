@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Annotated, Any, TypeVar, cast
 from urllib.parse import urlparse
 
+import anyio
 import redis.asyncio as aredis
 from arq import create_pool
 from arq.connections import ArqRedis, RedisSettings
@@ -66,6 +67,7 @@ STREAMS_PER_FAN = 8
 STREAMS_PER_ADDRESS = 60  # an IPv6 /64's
 STREAMS_PER_IPV4 = 250  # an IPv4 address's
 STREAMS_PER_PROCESS = 1000
+STREAM_CLOSE_SECONDS = 5  # the longest an ended stream waits to give its connection back (a Redis that doesn't answer)
 REDIS_CONNECTIONS = 100  # the API's other Redis connections, in each process: past them a command waits its turn
 
 state: dict[str, Any] = {}
@@ -2900,10 +2902,13 @@ async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[s
     """Every message on the channels, after `first()`: what they cover as it is now, read once
     subscribed so nothing published in between is missed. Each reconnect starts here, so it is how an
     app catches up; a word on the channel `again` sends `first()` again. Holds no database connection, and
-    one Redis connection, from the streams' own pool; its route takes its places first (_hold_streams)."""
+    one Redis connection, from the streams' own pool; its route takes its places first (_hold_streams).
+    A client going away cancels the stream, and cancels each wait in its cleanup too, so the connection's
+    return to the pool is shielded from it: unshielded, every stream that ended kept its connection, and a
+    process's thousandth was refused one (BUG-184's round-two reopen)."""
     pubsub = state["streams"].pubsub()
-    await pubsub.subscribe(*channels)
     try:
+        await pubsub.subscribe(*channels)
         for event in await first():
             yield f"data: {json.dumps(event, default=str)}\n\n"
         while not await request.is_disconnected():
@@ -2917,8 +2922,9 @@ async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[s
                 continue
             yield f"data: {msg['data']}\n\n"
     finally:
-        await pubsub.unsubscribe()
-        await pubsub.aclose()
+        # aclose() drops the connection, which ends its subscriptions, and gives it back to the pool.
+        with anyio.move_on_after(STREAM_CLOSE_SECONDS, shield=True):
+            await pubsub.aclose()
 
 
 def _hold_streams(request: Request, fan: str | None) -> list[str]:

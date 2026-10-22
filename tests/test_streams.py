@@ -75,11 +75,8 @@ class PubSub:
     async def get_message(self, ignore_subscribe_messages, timeout):
         await asyncio.sleep(0)
 
-    async def unsubscribe(self):
-        self.log.append("unsubscribe")
-
     async def aclose(self):
-        pass
+        self.log.append("close")
 
 
 class Redis:
@@ -167,7 +164,7 @@ def test_the_fan_stream_opens_with_the_fans_players_and_holds_no_session(api):
     assert held == 0 and api.opened == ["thread"] * 4  # the follow ids, the players, the followed games, the teams: each closed at once
     # Read once subscribed, so a card published while the stream connects can't fall in a gap. The fan's own channel
     # too: a follow on another device (BUG-165).
-    assert api.redis.log == ["subscribe player:1 player:2 follows:fan", "mget card:1 card:2", "unsubscribe"]  # every card in one request (BUG-269)
+    assert api.redis.log == ["subscribe player:1 player:2 follows:fan", "mget card:1 card:2", "close"]  # every card in one request (BUG-269)
 
 
 def test_a_fan_who_follows_nothing_hears_so_first(api, monkeypatch):
@@ -258,6 +255,47 @@ def ended(response) -> None:
         await response({"type": "http", "method": "GET", "path": "/api/me/stream", "headers": []}, receive, send)
 
     asyncio.run(run())
+
+
+class OverTheNetwork(PubSub):
+    """A stream's pubsub whose every call waits on the network, as a real one's does, and which notes when its
+    connection goes back to the pool."""
+
+    async def get_message(self, ignore_subscribe_messages, timeout):
+        await asyncio.sleep(timeout)  # nothing published
+
+    async def aclose(self):
+        await asyncio.sleep(0.001)
+        self.log.append("connection back")
+
+
+def dropped(response, log: list[str]) -> None:
+    """A stream's answer run as the server runs it, its client going away once it's streaming."""
+
+    async def run():
+        async def receive():
+            while not any(line.startswith("subscribe") for line in log):
+                await asyncio.sleep(0.001)
+            await asyncio.sleep(0.01)  # streaming, waiting for the next message
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            pass
+
+        await response({"type": "http", "method": "GET", "path": "/api/players/1/stream", "headers": []}, receive, send)
+
+    asyncio.run(run())
+
+
+def test_a_stream_whose_client_went_away_gives_its_redis_connection_back(api, monkeypatch):
+    """BUG-184, round two: a client going away cancels its stream, and the cancellation reached the waits in its
+    cleanup too, so the connection never went back to the streams' pool: every stream that ended kept one, the
+    counter of open streams went down all the same, and a process's thousandth stream since it started was
+    refused a connection, live updates gone for every fan on it."""
+    monkeypatch.setattr(api.redis, "pubsub", lambda: OverTheNetwork(api.redis.log))
+    for _ in range(3):
+        dropped(asyncio.run(server.player_stream(1, Request())), api.redis.log)
+    assert api.redis.log.count("connection back") == 3 and not server.streaming
 
 
 def test_a_fan_an_address_and_the_process_hold_only_so_many_streams_and_one_that_ends_frees_its_place(api, monkeypatch):
