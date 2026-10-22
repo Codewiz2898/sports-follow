@@ -252,10 +252,14 @@ function teamKey(name: string): string {
  * the winning side ("India won by 8 wkts", "Match tied (India won the Super Over)"), so the player's
  * teams decide by whole name ("India A" and "Mumbai Indians" aren't India), the same way the server
  * reads them (sports/cricket.py: winner_outcome). Another winner is a loss only where one of the game's
- * sides (`sides`, where known) is one of the player's teams: an IPL final isn't India's.
+ * sides (`sides`, where known) is one of the player's teams: an IPL final isn't India's. A game given by forfeit or a
+ * walkover ("Won by forfeit", "Lost (w/o)") wasn't played, so it's neither, as the server reads it (sports/base.py
+ * outcome); nor is a bare "Won" or "Lost", as every source puts the score after it: a walkover kept before walkovers
+ * were told apart ("Lost ", sports/tennis.py).
  */
 export function outcome(result: string, teams: string[] = [], sides?: string[]): 'W' | 'D' | 'L' | null {
   const r = result.trim()
+  if (/\(w\/o\)| by forfeit\b/i.test(r) || /^(won|lost)$/i.test(r)) return null
   if (/^won\b/i.test(r)) return 'W'
   if (/^lost\b/i.test(r)) return 'L'
   if (/^(drew|draw|drawn|tied)\b/i.test(r)) return 'D'
