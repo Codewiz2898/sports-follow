@@ -11,7 +11,7 @@ from sports_follow import predictions, share, sports
 from sports_follow.adapters import espn_cricket, espn_soccer, lichess_chess, pandascore_esports as ps, sportmonks_cricket as sc, sportmonks_football as sm
 from sports_follow.sports.base import Ask
 
-from .test_new_adapters import CARLSEN, LAZAVIK, load
+from .test_new_adapters import CARLSEN, LAZAVIK, load, tiebreak
 from .test_pandascore import FINAL, LIVE, NRG, SEN, _game, _match
 from .test_sportmonks import AWAY, HOME, _match as football_match
 from .test_sportmonks_cricket import AFG, CHASE, FIRST, IND, _match as cricket_match
@@ -58,6 +58,19 @@ def test_chess_closes_at_the_first_move_and_settles_from_the_recorded_result():
     # Game 1: Carlsen won with White. Game 2: a draw. Game 4: Carlsen won with Black.
     assert [CHESS.answer("result", s.status, s.state) for s in (board(0), board(1), board(3))] == [CARLSEN, "draw", CARLSEN]
     assert all(board(g).status == "final" for g in (0, 1, 3))
+
+
+def test_a_tiebreak_rounds_who_wins_is_its_matchs_winner_not_its_last_games():
+    # A tiebreak round's games show one at a time, so "Who wins?" was asked of game 1 alone (BUG-213). Carlsen wins
+    # game 1, Lazavik games 2 and 3, game 4 is drawn: no answer till the round's over, then the match's winner,
+    # Lazavik 2½–1½, from either player's fixture; and its questions are game 1's board's all through.
+    played = [("1-0",), ("1-0", "1-0"), ("1-0", "1-0", "0-1"), ("1-0", "1-0", "0-1", "½-½")]
+    seen = [lichess_chess.parse_board(tiebreak(*results), CARLSEN, NOW) for results in played]
+    assert [CHESS.answer("result", s.status, s.state) for s in seen] == [None, None, None, None]
+    over = [lichess_chess.parse_board(tiebreak(*played[-1], finished=True), fide, NOW) for fide in (CARLSEN, LAZAVIK)]
+    assert [CHESS.answer("result", s.status, s.state) for s in over] == [LAZAVIK, LAZAVIK]
+    assert {CHESS.question_board(s.state) for s in (*seen, *over)} == {"mJnv1YBU"}
+    assert CHESS.question_board(board(status="*").state) == CHESS.board(board(status="*").state) == "mJnv1YBU"  # one game: its own
 
 
 # ---------------------------------------------------------------- esports: who takes each map

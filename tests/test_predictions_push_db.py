@@ -11,9 +11,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select, text
 
-from sports_follow import notify, predictions, predictions_push
+from sports_follow import campaigns, notify, predictions, predictions_push
 from sports_follow.adapters import pandascore_esports as ps
-from sports_follow.models import (Campaign, Event, EventPlayer, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerIdentity, PushSubscription,
+from sports_follow.models import (Athlete, Campaign, Event, EventPlayer, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerIdentity, PushSubscription,
                                   Question, Team, TeamFollow)
 from sports_follow.moments import Found
 
@@ -61,9 +61,11 @@ def campaign(db, start: datetime, players: list[str] | None = None, teams: list[
 
 
 def carlsen(db) -> None:  # noqa: F811
-    db.add(Player(id=1, slug="carlsen", name="Magnus Carlsen", sport="Chess", wikidata_qid="Q106807"))
+    """Carlsen as a campaign's players are here: made from his source's pick, his registry id his "wikidata" identity
+    (registry.link), not on the player (only one the research agent built has it there)."""
+    db.add(Player(id=1, slug="carlsen", name="Magnus Carlsen", sport="Chess"))
     db.flush()
-    db.add(EventPlayer(event_id=1, player_id=1))
+    db.add_all([PlayerIdentity(player_id=1, system="wikidata", external_id="Q106807", confidence=1.0), EventPlayer(event_id=1, player_id=1)])
     db.commit()
 
 
@@ -92,6 +94,31 @@ def test_make_your_pick_goes_once_before_a_campaigns_game_to_who_should_hear_it(
     assert {(n.fan_id, n.kind, n.delivered) for n in db.scalars(select(Notification))} == {("asha", "pick", 1), ("sana", "pick", 1)}
     predictions_push.run(start - timedelta(minutes=70))
     assert heard(pushed) == {}  # once a game
+
+
+def test_a_campaigns_players_are_found_as_its_page_finds_them(db):  # noqa: F811
+    """A campaign's players by their registry ids (BUG-190): one made from a source's pick holds theirs as a "wikidata"
+    identity (Gukesh), one bound only by the id the registry has for them in the source (Sindarov), one the research
+    agent built has it on the player itself (Rapport); a two-sport athlete's player in another sport isn't this
+    campaign's (Bumrah's cricket page holds his registry id: his chess page has it on the player)."""
+    db.execute(text("TRUNCATE athlete RESTART IDENTITY CASCADE"))
+    start = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=90)
+    db.add_all([Athlete(qid=qid, sport=sport, name=name, search_text=name.lower(), ids=ids) for qid, sport, name, ids in (
+        ("Q56026072", "chess", "Gukesh D", {}), ("Q64010574", "chess", "Javokhir Sindarov", {"lichess_chess": "14205483"}),
+        ("Q2104735", "chess", "Richard Rapport", {}), ("Q16227998", "cricket", "Jasprit Bumrah", {}), ("Q16227998", "chess", "Jasprit Bumrah", {}))])
+    db.add_all([Player(id=1, slug="gukesh-d", name="Gukesh D", sport="Chess"), Player(id=2, slug="javokhir-sindarov", name="Javokhir Sindarov", sport="Chess"),
+                Player(id=3, slug="richard-rapport", name="Richard Rapport", sport="Chess", wikidata_qid="Q2104735"),
+                Player(id=4, slug="jasprit-bumrah", name="Jasprit Bumrah", sport="Cricket"), Player(id=5, slug="jasprit-bumrah-chess", name="Jasprit Bumrah", sport="Chess", wikidata_qid="Q16227998"),
+                Player(id=6, slug="magnus-carlsen", name="Magnus Carlsen", sport="Chess")])
+    db.flush()
+    db.add_all([PlayerIdentity(player_id=1, system="wikidata", external_id="Q56026072", confidence=1.0),
+                PlayerIdentity(player_id=2, system="lichess_chess", external_id="14205483", confidence=1.0),
+                PlayerIdentity(player_id=4, system="wikidata", external_id="Q16227998", confidence=1.0),
+                PlayerIdentity(player_id=6, system="wikidata", external_id="Q106807", confidence=1.0)])  # not in it
+    db.commit()
+    campaign(db, start, players=["Q56026072", "Q64010574", "Q2104735", "Q16227998"])
+    assert campaigns.player_ids(db, start) == {1, 2, 3, 5}
+    assert campaigns.player_ids(db, start + timedelta(days=1)) == set()  # no game of its schedule then
 
 
 def test_a_campaign_players_game_off_its_schedule_gets_no_reminder(db, redis, pushed):  # noqa: F811

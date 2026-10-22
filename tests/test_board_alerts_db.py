@@ -22,11 +22,11 @@ from sqlalchemy.orm import sessionmaker
 
 from sports_follow import bus, engine, livecards, notify, server, structured
 from sports_follow.adapters import KNOWN, Snapshot, lichess_chess
-from sports_follow.models import Event, EventPlayer, Follow, Moment, NotificationMute, Player, PlayerIdentity, PushSubscription
+from sports_follow.models import Event, EventPlayer, Follow, MatchFollow, Moment, NotificationMute, Player, PlayerIdentity, PushSubscription
 
 from .test_fcm import fake_fcm  # noqa: F401  (the fixture)
 from .test_match_follow import Store
-from .test_new_adapters import CARLSEN, LAZAVIK, load
+from .test_new_adapters import CARLSEN, LAZAVIK, load, tiebreak
 from .test_predictions import NOW, board
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
@@ -413,6 +413,39 @@ def test_a_mini_match_is_one_notification_through_its_games(db, polls):
     assert [title for fan, title, *_ in polls.pushed if fan == "both"] == ["Magnus Carlsen is playing", "Magnus Carlsen is winning", "Denis Lazavik is winning"]
     assert [title for fan, title, *_ in polls.pushed if fan == "carlsen"] == ["Magnus Carlsen is playing", "Magnus Carlsen is winning", "Magnus Carlsen is in trouble"]
     assert len({tag for *_, tag, _ in polls.pushed}) == 1  # every push of the match, either side's, on one notification
+
+
+def test_a_tiebreak_round_tells_who_won_its_match_once_its_over_not_its_first_game(db, polls, monkeypatch):
+    # A World Championship's tiebreak round, its games shown one at a time (BUG-210): Carlsen wins game 1 with White,
+    # Lazavik games 2 and 3. Through the source's own reads: game 1 over with game 2 not out yet tells nothing and the
+    # board is still polled; once the round's over, each fan hears the match, 1–2, once, and so does a fan following
+    # the game itself.
+    round_now: dict = {}
+    monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: round_now)
+    chess = lichess_chess.LichessChess()
+    db.add_all([MatchFollow(fan_id="watcher", event_id=1, alert_rules={}, keys=[]),
+                PushSubscription(fan_id="watcher", endpoint="https://fcm.googleapis.com/fcm/send/watcher", p256dh="k", auth="a")])
+    phones(db)
+
+    def look(*results: str, **when: bool) -> None:
+        round_now.clear()
+        round_now.update(tiebreak(*results, **when))
+        for event_id in (1, 2):
+            poll(event_id, chess.snapshot({"round": ROUND, "fide": SIDES[event_id][1]}))
+
+    look("*", to_come=True)
+    look("*")
+    polls.pushed.clear()  # the start
+    look("1-0")
+    assert heard(polls.pushed) == {} and {db.get(Event, e).status for e in (1, 2)} == {"live"}  # type: ignore[union-attr]
+    look("1-0", "*")
+    look("1-0", "1-0")
+    assert heard(polls.pushed) == {}
+    look("1-0", "1-0", "0-1", finished=True)
+    db.expire_all()
+    assert {db.get(Event, e).status for e in (1, 2)} == {"final"}  # type: ignore[union-attr]
+    assert heard(polls.pushed) == {"carlsen": ["Magnus Carlsen: Lost the match 1–2 vs Denis Lazavik"], "lazavik": ["Denis Lazavik: Won the match 2–1 vs Magnus Carlsen"],
+                                   "both": ["Denis Lazavik: Won the match 2–1 vs Magnus Carlsen"], "watcher": ["Magnus Carlsen vs Denis Lazavik: Denis Lazavik won the match (3 games)"]}
 
 
 def test_the_same_two_meeting_again_later_are_another_game(db, polls):
