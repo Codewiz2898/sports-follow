@@ -336,6 +336,8 @@ def test_a_video_made_for_kids_isnt_kept_and_one_kept_before_is_gone(fake):
     assert candidates.refused(got["forkids0000"], "IN") == candidates.gone(got["forkids0000"], "IN") == "made for kids"
     assert candidates.refused(got["notforkids0"], "IN") is None
     assert "status" in fake.asked[0].url.params["part"].split(",")
+    # What a stored row keeps of it says so too, so the Feed doesn't serve one kept before (feed.judged).
+    assert not SOURCE.allowed(got["forkids0000"].raw) and SOURCE.allowed(got["notforkids0"].raw) and SOURCE.allowed(None)
 
 
 def test_a_video_source_brings_its_icon_for_its_cards():

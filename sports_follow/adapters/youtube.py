@@ -307,6 +307,11 @@ class YouTube(VideoSource):
         width, height = _count(size.get("width")), _count(size.get("height"))
         return bool(width and height and height > width)
 
+    def allowed(self, details: dict[str, Any] | None = None) -> bool:
+        """Not made for kids (status.madeForKids, as the candidate keeps what videos.list said: III.E.4.j): one stored
+        before it was refused for that, or made so since, isn't served while it waits for its next read to drop it."""
+        return ((details or {}).get("status") or {}).get("madeForKids") is not True
+
     @classmethod
     def available(cls) -> bool:
         return bool(key())

@@ -355,7 +355,7 @@ def test_a_poll_keeps_pool_players_videos_and_a_teams_video_for_its_players_as_t
 
 def test_a_served_video_brings_its_sources_icon_and_one_made_for_kids_goes_at_its_next_read(world):
     """Each video item carries its source's icon for its card, linked there to the video where it plays (YouTube's
-    III.F.2); a stored video YouTube now says is made for kids is dropped the next time it's read (III.E.4.j)."""
+    III.F.2); a stored video made for kids isn't served, and is dropped the next time it's read (III.E.4.j)."""
     from sports_follow import feed
 
     kohli = player("Virat Kohli")
@@ -368,6 +368,12 @@ def test_a_served_video_brings_its_sources_icon_and_one_made_for_kids_goes_at_it
     assert served.item.video is not None and served.item.video.mark is not None and SOURCE.mark is not None
     mark = served.item.video.mark
     assert (mark.name, mark.min_height, [(p.fill, p.d) for p in mark.paths]) == (SOURCE.mark.name, SOURCE.mark.min_height, list(SOURCE.mark.paths))
+    # Kept before the filter, with the status it was read with: not served even before its next read drops it.
+    with db_module.session() as s:
+        s.execute(update(FeedCandidate).values(candidate=FeedCandidate.candidate.op("||")(
+            text("""'{"details": {"status": {"embeddable": true, "madeForKids": true}}}'::jsonb"""))))
+    with db_module.session() as s:
+        assert feed.judged(s, [kohli], NOW).get(kohli, []) == []
     world.videos["kidsrow0001"] = video("kidsrow0001")
     world.videos["kidsrow0001"]["status"]["madeForKids"] = True
     assert candidates._again(SOURCE, ["kidsrow0001"], NOW) == {"read": 0, "dropped": 1}  # pyright: ignore[reportPrivateUsage]

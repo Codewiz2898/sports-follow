@@ -579,6 +579,12 @@ class VideoSource:
         picture): the apps show and play it upright. A source that can't say: wide."""
         return False
 
+    def allowed(self, details: dict[str, Any] | None = None) -> bool:
+        """Whether one of its videos may be served, by what facts said of it last (details, as for picture): False for
+        one the source's terms keep off the feed, which goes at its next read too (candidates.gone). A source that
+        can't say: True."""
+        return True
+
     @classmethod
     def available(cls) -> bool:
         """Whether this build can run it: a source with a key needs its key."""

@@ -647,8 +647,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   serve a sport. A source of videos for the feed (`adapters/youtube.py`) is a `VideoSource` instead
   (`adapters/base.py`): it describes itself the same way, plus the shape of its channel ids
   (`channel_pattern`), lists a channel's latest `uploads` and what it says of up to 50 videos at once
-  (`facts`), how its player plays one (`embed`), a still of it (`picture`) and whether it's upright (`upright`),
-  and its one line is its place in `adapters.VIDEOS`. A source of news for the feed (`adapters/publisher_rss.py`)
+  (`facts`), how its player plays one (`embed`), a still of it (`picture`), whether it's upright (`upright`) and
+  whether its terms let it be served (`allowed`: not YouTube's made for kids), and its icon (`mark`), which every
+  card of its videos shows linked to the video there; one with API terms of its own adds its part to Privacy and
+  Terms (both apps' pages name it in their words, and `web/src/legal.ts` holds the links). Its one line is its
+  place in `adapters.VIDEOS`. A source of news for the feed (`adapters/publisher_rss.py`)
   is a `NewsSource`: the shape of the feed addresses it reads (`feed_pattern`) and a feed's latest `articles`, one
   line in `adapters.NEWS`. Parsing that two sources of a sport share lives in `sports_follow/sports/`, so removing a
   source never breaks another. `tests/test_sources.py` fails if shared code names a source: its system,
@@ -724,9 +727,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   sets each channel's trust. The feed only reads the table and never waits on the curator. YouTube's
   free quota is 10,000 units a day (reset at midnight Pacific), counted as the `youtube-data` budget with 1,000
   never spent: the channel poll is 48 units a channel a day (its uploads playlist every half hour: 4,848 for the
-  101 channels the sports list now), and reading what's new and what's stored again a few hundred more, so about
-  5,200 of the 9,000 spendable. Each channel a sport adds costs 48 a day: about 75 more fit before the poll needs a
-  slower cadence or more quota (`tests/test_moment_search.py` holds the poll and the searches' reads to it). Searches
+  101 channels the sports list now, and 101 more for a curator restarted mid-day), and reading what's new and what's
+  stored again a few hundred more, so about 5,450 of the 9,000 spendable with the searches' reads. Each channel a
+  sport adds costs 48 a day: about 70 more fit before the poll needs a slower cadence or more quota
+  (`tests/test_moment_search.py` holds all of it to that). Searches
   have a quota of their own (BHA-342; YouTube moved `search.list` to it on 1 June 2026): 100 a day, 1 unit each,
   none of the 10,000, counted as the `youtube-search` budget with 5 never spent. Both are counted from midnight
   Pacific, as YouTube counts them; the Google Cloud console's quota page for the YouTube Data API v3 (APIs &

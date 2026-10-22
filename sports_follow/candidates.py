@@ -576,7 +576,8 @@ def poll(now: datetime | None = None) -> dict[str, int]:
             try:
                 uploads[channel] = source.uploads(channel)
             except budget.RateLimited as exc:
-                log.warning("feed: %s: %s; its other channels wait for the next poll", source.system, exc)
+                left = len(listed) - list(listed).index(channel)  # this one and those after it
+                log.warning("feed: %s: %s; its other %d channel(s) wait for the next poll", source.system, exc, left, extra={"channels_left": left})
                 break
             except AdapterError as exc:
                 totals["unread"] += 1

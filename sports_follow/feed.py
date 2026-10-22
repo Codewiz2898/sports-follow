@@ -271,8 +271,10 @@ def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, 
                 if known is not None and known.kind == "article":
                     c = _story(r, now)
                 else:
-                    embed = source.embed(r.external_id) if source else None
                     details = (r.candidate or {}).get("details")
+                    if source and not source.allowed(details):
+                        continue  # its source's terms keep it off the feed (YouTube's made for kids); its next read drops it
+                    embed = source.embed(r.external_id) if source else None
                     picture = source.picture(r.external_id, details) if source else None
                     c = _video(embed, source.name if source else "", r, now, picture, upright=bool(source and source.upright(details)),
                                mark=_mark(source.mark) if source and source.mark else None)
