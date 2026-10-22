@@ -126,7 +126,7 @@ def _indexed(column: Column) -> bool:
 
 def test_deleting_old_moments_finds_what_points_at_them_by_an_index():
     # Each moment deleted has every foreign key to it checked: without an index, each check read the whole table
-    # (100,000 feed candidates made deleting 5,000 moments take 88 s, BUG-219).
+    # (with 100,000 feed candidates, deleting 5,000 moments took 49 s, BUG-219).
     pointing = [fk.parent for t in Base.metadata.tables.values() for fk in t.foreign_keys if fk.column.table.name == "moment"]
     assert {f"{c.table.name}.{c.name}" for c in pointing} >= {"feed_candidates.moment_id", "moment.corrects"}
     assert [f"{c.table.name}.{c.name}" for c in pointing if not _indexed(c)] == []
