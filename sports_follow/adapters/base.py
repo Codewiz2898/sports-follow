@@ -427,7 +427,8 @@ class Adapter:
     # Optional, for a source that can list everything it has on now, league-wide, in a request or a few:
     #   def live_now(self) -> list[LiveGame]
     # the games in play now, whoever follows them, each game's players in the order the source would put
-    # them forward, for "Live now" (live.py). Asked at most once a minute, and only while fans are looking.
+    # them forward, for "Live now" (live.py). Asked at most once a minute, and only while fans are looking (or as
+    # keep_up_read, below, says).
     # Where a game's source_id isn't the Fixture.source_id a followed player's card has it under, set its
     # fixtures to those (a chess board is a fixture of each player's), or Today shows that game twice.
     # Live now is for the big games: where the source rates its events (an esports tournament's tier), leave
@@ -441,7 +442,11 @@ class Adapter:
     # handed Live now's last read of it (its games as live.read keeps them, and that read's age in seconds; [] and
     # infinity when there's none) about once a minute by the worker (live.keep_up); it keeps up those, and any
     # it kept up before, as it sees fit, and returns how many it did. Keep within the source's allowance and put
-    # pages and polls first: nobody waits on it.
+    # pages and polls first: nobody waits on it. And beside it:
+    #   def keep_up_read(self) -> float | None
+    # how old (seconds) Live now's read may get before the worker makes it anew, whoever is looking, and hands keep_up
+    # that one, so a game that starts while nobody looks is kept up from early on too: once that long at most, a
+    # live_now() each time. None (or no such method): only fans' looks make it.
     #
     # Optional, for a source that can read one game by its id in a request or two:
     #   def match(self, source_id: str) -> LiveGame | None

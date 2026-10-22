@@ -228,7 +228,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   drawn from readings of OpenDota's live list: every poll and read takes one, and the worker one a minute for each
   Dota 2 series Live now has listed (`keep_up_live`), whether or not anyone has it open, so a page opened mid-map has
   the line from early in the map. That's one OpenDota request a minute for them all while any is on, and none while
-  OpenDota's minute or day is down to the third kept for pages and polls. The page shows Live now's copy
+  OpenDota's minute or day is down to the third kept for pages and polls. While nobody looks at Live now, the worker
+  makes its PandaScore read itself every 5 minutes (`keep_up_read`), so a series that starts then is found early in
+  its first map: about 12 PandaScore requests an hour (13 at most, twice that with over 100 series on at once),
+  about 290 a day if nobody looked all day, and none while fans look or while Dota 2 is off. The page shows Live now's copy
   until the first read comes, and looks again while it's in view. A sport turned off has no match pages.
 - **Watch live** (`sports_follow/watch.py`, the match page's Watch block). A source that lists a game's
   broadcasts puts them on its fixtures (`Fixture.streams`: each one's page, its language, whether the
@@ -648,7 +651,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `keep_up` beside it for a source that keeps something of its games on between reads, whoever is looking (handed
   Live now's last read of it and that read's age once a minute by the worker, `keep_up_live` and `live.keep_up`;
   it stays inside its allowance with pages and polls first; PandaScore's keeps each live Dota 2 map's gold line
-  from OpenDota's live list, so its page opened mid-map has the line from early on),
+  from OpenDota's live list, so its page opened mid-map has the line from early on; with `keep_up_read` saying how
+  old that read may get, the worker makes it anew once it's older, whoever is looking: PandaScore's every 5 minutes
+  while Dota 2 runs, so a series that starts while nobody looks is found),
   `locator` for following a game by itself (the locator its live polls take, from a fixture's id alone, so
   a game nobody follows a player in can be polled; `sports_follow/matches.py`; without it, only a game a
   followed player's fixtures bring can be followed that way, and its others say alerts aren't available),

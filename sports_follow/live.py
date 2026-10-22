@@ -4,8 +4,9 @@ now" rail in the welcome and on Today (web/src/components/LiveNow.tsx), and the 
 A source that can list what it has on (an adapter's live_now()) is read by the worker (worker.read_live),
 at most once every FRESH seconds and only while fans are looking: the API serves what was last read, from
 Redis, and when that's older than FRESH it asks for a read, once a minute whatever came of the last. So a
-page never waits on a source, nothing is asked of one while nobody looks, and one that's down isn't asked
-on every look. A read older than SERVE isn't served: its games may be over.
+page never waits on a source, nothing is asked of one while nobody looks (but by a source that keeps up its
+games, as below), and one that's down isn't asked on every look. A read older than SERVE isn't served: its
+games may be over.
 
 The read also ranks each game's players, so the API's work stays small: the registry's best known first
 (by the source's id, or by name in the sport), then the order the source puts them forward in; an athlete
@@ -21,7 +22,8 @@ again at once when a source's read changes), and a fan's look adds only which of
 
 A source that keeps something of its games on between reads (a map's line drawn from readings of another
 source's live list, so a page opened mid-map has it from early on) is handed its last read's games each minute
-by the worker, whoever is looking (keep_up).
+by the worker, whoever is looking (keep_up). Where it says how old that read may get (keep_up_read), the worker
+makes it anew once it's older, so a game that starts while nobody looks is kept up from early on too.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.orm import Session
 
 from . import bus, matches, registry, search, sports
-from .adapters import ADAPTERS, Adapter, LiveGame, PlayerRef, budget
+from .adapters import ADAPTERS, Adapter, AdapterError, LiveGame, PlayerRef, budget
 from .db import session
 from .models import Athlete, Event, Follow
 
@@ -140,19 +142,41 @@ def keep_up(now: datetime | None = None) -> int:
     """Each source that keeps something of its games on now between reads (an adapter's keep_up: a map's line
     drawn from readings of a live list) is handed its last read's games and how old that read is ([] and forever
     without one: nobody has looked for a while), about once a minute (worker.keep_up_live), whether or not anyone
-    is looking; what it keeps up, and what that costs it, is its own. Returns how many games were kept up. One
-    source failing leaves the others theirs."""
+    is looking; what it keeps up, and what that costs it, is its own. One that says how old its read may get for
+    that (keep_up_read) is read first once it's older, whoever is looking, as a fan's look would ask (_kept_read).
+    Returns how many games were kept up. One source failing leaves the others theirs."""
     now = now or datetime.now(timezone.utc)
     kept = 0
     for adapter in sources():
         if not callable(getattr(adapter, "keep_up", None)):
             continue
-        read_ = last_read(adapter.system)
         try:
+            read_ = _kept_read(adapter, now)
             kept += cast(Any, adapter).keep_up((read_ or {}).get("games") or [], _age(read_, now))
         except Exception:
             log.exception("live: %s couldn't keep up its games", adapter.system)
     return kept
+
+
+def _kept_read(adapter: Adapter, now: datetime) -> dict[str, Any] | None:
+    """The source's last read, made anew first when it's older than the source's keep_up_read says (None: as fans'
+    looks left it) and none was asked for in that time, whatever came of it: a source that's down is asked again
+    once that long, not each minute. A read that fails leaves the last, and what the source kept up goes on."""
+    read_ = last_read(adapter.system)
+    every = cast(Any, adapter).keep_up_read() if callable(getattr(adapter, "keep_up_read", None)) else None
+    if every is None or _age(read_, now) <= every:
+        return read_
+    try:
+        if not bus.sync_redis().set(f"live:kept:{adapter.system}", "1", nx=True, ex=max(1, int(every))):
+            return read_
+        read(adapter.system, now)
+    except AdapterError as exc:
+        log.info("live: %s not read for keeping up: %s", adapter.system, exc)
+        return read_
+    except Exception:  # Redis or the database down: what the source kept up goes on from the last read, if it can
+        log.warning("live: %s couldn't be read for keeping up", adapter.system, exc_info=True)
+        return read_
+    return last_read(adapter.system)
 
 
 def _raw(system: str) -> str | None:
