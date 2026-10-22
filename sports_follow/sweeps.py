@@ -6,7 +6,8 @@ second run in the day only does what a missed first one didn't):
 
 - The gap search: each followed player with nothing the Feed would serve published in the last week
   (feedstats.covered), searched for by the name fans write (candidates.search_name) and their sport's words
-  (Sport.video_words), for videos of the last GAP_DAYS, most watched first. The most followed go first, up to FEED_GAP_SEARCHES a DAY; one
+  (Sport.video_words), for videos of the last GAP_DAYS, most watched first. The most followed go first (by signed-in fans,
+  then by anyone: models.followers), up to FEED_GAP_SEARCHES a DAY; one
   whose last gap search kept nothing waits GAP_BACKOFF before the next, so a cap that binds moves on to others.
 - The wide sweep: every followed player, gaps or not, for videos of the last WIDE_DAYS (six months), most watched
   first: what fans watched this season, which the ranking weighs for its age (rank.py) and the Feed fades only as it
@@ -48,7 +49,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import candidates, db, feedpool, feedstats, metrics, searches, shutdown, sports
+from . import candidates, db, feedpool, feedstats, metrics, models, searches, shutdown, sports
 from .adapters import AdapterError, VideoSource, budget
 from .config import FEED_COUNTRY, FEED_FAMOUS_SEARCHES, FEED_GAP_SEARCHES, FEED_MOMENT_SEARCHES, FEED_POOL_SEARCHES, FEED_WIDE_SEARCHES
 from .models import FeedCandidate, FeedSweep, Follow, Player
@@ -86,7 +87,8 @@ def run(now: datetime | None = None) -> dict[str, int]:
         if not everyone:
             return counts
         players = [p for p in everyone if not p.pooled]
-        followers: dict[int, int] = {pid: n for pid, n in session.execute(select(Follow.player_id, func.count()).group_by(Follow.player_id))}
+        # Signed-in fans' follows first, then anyone's (models.followers): a script's cookies only break a tie.
+        followers = {pid: (accounts, follows) for pid, accounts, follows in session.execute(models.followers(Follow.player_id, Follow.fan_id))}
         gaps = gap_due(session, players, followers, now)
         wide = wide_due(session, players, followers, now, {p.player_id for p in gaps})
         famous = famous_due(session, players, followers, now)
@@ -103,21 +105,28 @@ def run(now: datetime | None = None) -> dict[str, int]:
     return counts
 
 
-def _ranked(players: list[candidates.Followed], followers: dict[int, int], last: dict[int, datetime]) -> list[candidates.Followed]:
-    """The most followed first; of those followed alike, the longest since their last sweep (never, first)."""
-    return sorted(players, key=lambda p: (-followers.get(p.player_id, 0), last.get(p.player_id, _EVER), p.player_id))
+def _ranked(players: list[candidates.Followed], followers: dict[int, tuple[int, int]], last: dict[int, datetime]) -> list[candidates.Followed]:
+    """The most followed first (by signed-in fans, then by anyone); of those followed alike, the longest since their
+    last sweep (never, first)."""
+    return sorted(players, key=lambda p: (*_most(followers, p.player_id), last.get(p.player_id, _EVER), p.player_id))
 
 
-def _rotated(players: list[candidates.Followed], followers: dict[int, int], last: dict[int, datetime]) -> list[candidates.Followed]:
-    """The longest since their last sweep first (never, first); of those swept alike, the most followed."""
-    return sorted(players, key=lambda p: (last.get(p.player_id, _EVER), -followers.get(p.player_id, 0), p.player_id))
+def _rotated(players: list[candidates.Followed], followers: dict[int, tuple[int, int]], last: dict[int, datetime]) -> list[candidates.Followed]:
+    """The longest since their last sweep first (never, first); of those swept alike, the most followed (as _ranked)."""
+    return sorted(players, key=lambda p: (last.get(p.player_id, _EVER), *_most(followers, p.player_id), p.player_id))
+
+
+def _most(followers: dict[int, tuple[int, int]], player_id: int) -> tuple[int, int]:
+    """A sort key that puts the most followed first: their signed-in fans, then every follow (models.followers)."""
+    accounts, follows = followers.get(player_id, (0, 0))
+    return -accounts, -follows
 
 
 def _since(session: Session, stream: str, since: datetime) -> int:
     return session.scalar(select(func.count()).where(FeedSweep.stream == stream, FeedSweep.ran_at > since)) or 0
 
 
-def gap_due(session: Session, players: list[candidates.Followed], followers: dict[int, int], now: datetime) -> list[candidates.Followed]:
+def gap_due(session: Session, players: list[candidates.Followed], followers: dict[int, tuple[int, int]], now: datetime) -> list[candidates.Followed]:
     """The players a gap search is for now, in order, as many as FEED_GAP_SEARCHES leaves in the last DAY: those with
     nothing the Feed would serve this week, but one searched for in the last GAP_EVERY, or in the last GAP_BACKOFF by
     a search that kept nothing."""
@@ -139,7 +148,7 @@ def _last(session: Session, stream: str, first: bool = False) -> dict[int, datet
     return {pid: when for pid, when in session.execute(select(FeedSweep.player_id, at).where(FeedSweep.stream == stream).group_by(FeedSweep.player_id))}
 
 
-def wide_due(session: Session, players: list[candidates.Followed], followers: dict[int, int], now: datetime,
+def wide_due(session: Session, players: list[candidates.Followed], followers: dict[int, tuple[int, int]], now: datetime,
               gap_searched: Iterable[int] = ()) -> list[candidates.Followed]:
     """The players the wide sweep is for now, in order: every one not searched for in the last WIDE_EVERY, as many
     as FEED_WIDE_SEARCHES leaves in the last DAY and no more than a seventh of the players a day. One this run
@@ -164,7 +173,7 @@ def wide_due(session: Session, players: list[candidates.Followed], followers: di
     return _rotated(due, followers, last)[:left]
 
 
-def famous_due(session: Session, players: list[candidates.Followed], followers: dict[int, int], now: datetime) -> list[candidates.Followed]:
+def famous_due(session: Session, players: list[candidates.Followed], followers: dict[int, tuple[int, int]], now: datetime) -> list[candidates.Followed]:
     """The players the famous sweep is for now, in order: those not swept in the last FAMOUS_EVERY, as many as
     FEED_FAMOUS_SEARCHES leaves in the last WEEK, and no more than its seventh does in the last DAY."""
     per_day = math.ceil(FEED_FAMOUS_SEARCHES / 7)

@@ -11,7 +11,7 @@ import pytest
 from sports_follow import admin, candidates, config, controls, feed, server, sports, titles
 from sports_follow.adapters import VIDEOS
 from sports_follow.feed import Candidate
-from sports_follow.models import FeedCandidate, Follow, Moment, Player, PlayerCard
+from sports_follow.models import Account, FeedCandidate, Follow, Moment, Player, PlayerCard
 
 from .test_admin import admin_cookie, password, sign_in  # noqa: F401  (password is a fixture)
 from .test_api import api  # noqa: F401  (a fixture)
@@ -157,6 +157,24 @@ def test_for_yous_others_are_the_fans_sports_first_then_a_big_moment_today_then_
     assert list(feed.others(db, [mine], NOW).items()) == [(hundred, 0), (star, 1), (quiet, 1), (keeper, 3)]
     assert list(feed.others(db, [], NOW).items()) == [(hundred, 0), (keeper, 1), (star, 1), (quiet, 1), (mine, 1)]  # following nobody: every sport alike
     assert list(feed.others(db, [mine], NOW + timedelta(days=2)))[0] == star  # the hundred's day is over
+
+
+@needs_db
+def test_for_yous_most_followed_are_counted_by_signed_in_fans_and_anyones_follows_only_break_a_tie(db):  # noqa: F811
+    # Nine cookies' follows (one script's) put a player into every fan's For you ahead of one a signed-in fan follows
+    # (BUG-293). Accounts an admin hasn't blocked count, as starters count them; anyone's follows break a tie.
+    from sqlalchemy import text
+
+    db.execute(text("TRUNCATE feed_candidates RESTART IDENTITY CASCADE"))
+    pushed = made_player(db, "Pushed Player", followers=9)
+    real = made_player(db, "Smriti Mandhana")
+    blocked = made_player(db, "Blocked Pick")
+    quiet = made_player(db, "Richa Ghosh", followers=2)
+    db.add_all([Account(email="a@example.com", fan_id="acct-a"), Account(email="b@example.com", fan_id="acct-b", blocked_at=NOW)])
+    db.flush()
+    db.add_all([Follow(fan_id="acct-a", player_id=real, alert_rules={}), Follow(fan_id="acct-b", player_id=blocked, alert_rules={})])
+    db.commit()
+    assert list(feed.others(db, [], NOW)) == [real, pushed, quiet, blocked]
 
 
 @needs_db

@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -68,6 +68,9 @@ def vapid_subject(site: str) -> str:
 
 VAPID_SUBJECT = os.environ.get("SPORTS_FOLLOW_VAPID_SUBJECT") or vapid_subject(SITE_URL)
 MAX_FAILURES = 5
+# A device failing otherwise than gone is removed only once it has failed every push this long (_health): longer than
+# any push service's outage, or this server's own trouble reaching them.
+FAILING_FOR = timedelta(days=1)
 # The kinds of a fan's notification rows that aren't moments' (predictions_push.py: "Make your pick", how a pick went):
 # the noise rules for moments (alerts.plan) don't count them as the game's pushes, nor their lines as its story.
 CALLS = ("pick", "called")
@@ -754,21 +757,28 @@ def _settle(results: list[tuple[int, int, int | str | None]]) -> None:
 
 
 def _health(db: Session, device_id: int, error: int | str | None) -> None:
-    """A device the push service says is gone (404, 410) is removed; one that keeps failing is removed after MAX_FAILURES.
-    A message too big for the push service (413) isn't counted against the device, nor a refusal of this
-    server's own key (401: an FCM key that's wrong or revoked would otherwise remove every Android device), nor the
-    push service holding back a device sent more than its quota (429: FCM's for a busy fan's phone). A failure is
-    added to the count in the database, so batches writing back at once each count theirs (BUG-187)."""
+    """A device the push service says is gone (404, 410) is removed. One that keeps failing otherwise is removed only
+    once it has failed every push for FAILING_FOR, MAX_FAILURES of them at least: a push service's own trouble (FCM's
+    500 or 503, which FCM says to wait out; a timeout, a refused connection) fails every device at once, so an outage of
+    minutes or hours on a match day mustn't remove them all (BUG-298). Its failures are counted all the same, so its
+    pushes go by _doubt meanwhile. A message too big for the push service (413) isn't counted against the device, nor a
+    refusal of this server's own key (401: an FCM key that's wrong or revoked would otherwise remove every Android
+    device), nor the push service holding back a device sent more than its quota (429: FCM's for a busy fan's phone).
+    A failure is added to the count in the database, so batches writing back at once each count theirs (BUG-187)."""
+    now = datetime.now(timezone.utc)
     if error is None:
-        db.execute(update(PushSubscription).where(PushSubscription.id == device_id).values(last_ok_at=datetime.now(timezone.utc), failures=0))
+        db.execute(update(PushSubscription).where(PushSubscription.id == device_id).values(last_ok_at=now, failures=0, failing_since=None))
     elif error in (404, 410):
         db.execute(delete(PushSubscription).where(PushSubscription.id == device_id))
     elif error in (401, 413, 429):
         return  # this server's key, a message too big for the push service, or one holding pushes back: not the device's fault
     else:
-        failures = db.scalar(update(PushSubscription).where(PushSubscription.id == device_id).values(failures=PushSubscription.failures + 1).returning(PushSubscription.failures))
+        # Its first failure since a push went through (or since it subscribed again) starts the clock.
+        began = case((PushSubscription.failures == 0, now), else_=func.coalesce(PushSubscription.failing_since, now))
+        failures = db.scalar(update(PushSubscription).where(PushSubscription.id == device_id)
+                             .values(failures=PushSubscription.failures + 1, failing_since=began).returning(PushSubscription.failures))
         if failures is not None and failures >= MAX_FAILURES:
-            db.execute(delete(PushSubscription).where(PushSubscription.id == device_id))
+            db.execute(delete(PushSubscription).where(PushSubscription.id == device_id, PushSubscription.failing_since <= now - FAILING_FOR))
 
 
 def transports() -> tuple[str, ...]:

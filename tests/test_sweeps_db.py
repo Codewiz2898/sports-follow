@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import create_engine, delete, select, text, update
 
 from sports_follow import bus, db as db_module, sweeps
-from sports_follow.models import FeedCandidate, FeedSweep, Follow, Player, PlayerAlias
+from sports_follow.models import Account, FeedCandidate, FeedSweep, Follow, Player, PlayerAlias
 from tests.test_feed_fetch import NOW, listing, video
 from tests.test_feed_metrics import counts, measured  # noqa: F401
 from tests.test_feed_fetch_db import Redis
@@ -33,7 +33,7 @@ def world(monkeypatch):
 
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE feed_sweep, feed_search, feed_candidates, moment, event, follow, player_alias, player_identity, player RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE feed_sweep, feed_search, feed_candidates, moment, event, follow, player_alias, player_identity, player, account RESTART IDENTITY CASCADE"))
     monkeypatch.setattr(db_module, "SessionLocal", db_module.sessionmaker(bind=engine, expire_on_commit=False))
     made = Searching()
     monkeypatch.setattr(youtube, "_client", httpx.Client(transport=httpx.MockTransport(made)))
@@ -147,6 +147,25 @@ def test_the_days_cap_takes_the_most_followed_and_a_search_runs_once_a_day(world
     only(monkeypatch, gap=20, famous=0)
     assert sweeps.run(NOW + timedelta(hours=3))["gap searched"] == 1  # with room: the one left, not Bravo and Charlie again
     assert [p for p, *_ in swept()] == [b, c, a]
+
+
+def test_the_days_gap_searches_go_to_signed_in_fans_players_first_and_cookies_only_break_a_tie(world, monkeypatch):
+    # Six cookies' follows (one script's) took the day's gap searches ahead of a player a signed-in fan follows: each is
+    # one of YouTube's 100 searches a day (BUG-293). Accounts an admin hasn't blocked count, as starters count them.
+    only(monkeypatch, gap=2, famous=0)
+    pushed = player("Pushed Player", followers=6)
+    real = player("Smriti Mandhana", followers=0)
+    blocked = player("Blocked Pick", followers=0)
+    quiet = player("Richa Ghosh", followers=2)
+    with db_module.session() as s:
+        s.add_all([Account(email="a@example.com", fan_id="acct-a"), Account(email="b@example.com", fan_id="acct-b", blocked_at=NOW)])
+        s.flush()
+        s.add_all([Follow(fan_id="acct-a", player_id=real, alert_rules={}), Follow(fan_id="acct-b", player_id=blocked, alert_rules={})])
+    assert sweeps.run(NOW)["gap searched"] == 2
+    assert [p for p, *_ in swept()] == [real, pushed]
+    only(monkeypatch, gap=20, famous=0)
+    assert sweeps.run(NOW + timedelta(hours=3))["gap searched"] == 2
+    assert [p for p, *_ in swept()] == [real, pushed, quiet, blocked]  # a blocked account's follow is as a cookie's
 
 
 def test_a_search_that_kept_nothing_waits_a_few_days_and_whats_stored_isnt_kept_again(world, monkeypatch):
