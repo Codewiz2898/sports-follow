@@ -2780,10 +2780,28 @@ def player_feed(player_id: RowId, response: Response, fan: str = Depends(fan_id)
     return found
 
 
-@app.post("/api/players/{player_id}/feed/{item_id}/feedback")
+FEEDBACK_PER_ADDRESS = 300  # words on Feed items from one client address in an hour, by fans without an account: a request with no cookie is a new fan each time
+FEEDBACK_PER_IPV6_48 = 1200  # an hour, from one IPv6 /48's /64s together (_address_limits)
+FEEDBACK_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
+FEEDBACK_PER_ACCOUNT = 300  # a signed-in fan's in an hour, wherever from: fans behind one carrier address don't use up each other's
+
+
+async def _feedback_counted(request: Request, fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of)) -> None:
+    """For the Feed's feedback route: one word on an item, counted before it's kept (each is a row), against a
+    signed-in fan's own hour (FEEDBACK_PER_ACCOUNT), else their address's (FEEDBACK_PER_ADDRESS, and an IPv6 /48's
+    ceiling: _address_limits), as picks are. Past it, a 429."""
+    hour = int(time.time() // 3600)
+    if signed is not None:
+        await _take(f"feed-feedback:fan:{fan}:{hour}", FEEDBACK_PER_ACCOUNT, 7200, "That's a lot of feedback for one hour. Try again in a while.")
+    else:
+        await _take_address("feed-feedback", _address_limits(client_address(request), FEEDBACK_PER_ADDRESS, FEEDBACK_PER_IPV6_48, FEEDBACK_UNKNOWN_ADDRESS), str(hour),
+                            7200, "That's a lot of feedback from your network. Try again in a while.")  # fmt: skip
+
+
+@app.post("/api/players/{player_id}/feed/{item_id}/feedback", dependencies=[Depends(_feedback_counted)])
 def feed_feedback(player_id: RowId, item_id: str, body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     """What the fan said about an item from its "…" sheet ({"verdict": one of feed.VERDICTS}): it leaves
-    their feed at once, and the judge learns from it later."""
+    their feed at once, and the judge learns from it later. So many an hour (_feedback_counted)."""
     verdict = body.get("verdict")
     try:
         feed.feedback(db, fan, player_id, item_id, verdict if isinstance(verdict, str) else "")

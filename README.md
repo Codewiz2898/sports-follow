@@ -424,8 +424,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   on Overview is absent (as is `GET /api/me/feed`, a followed player's top video or post, never news, which
   only Android builds from before its Feed tab read). The "…" on a card says why
   it's there and takes the fan's word (`POST /api/players/<id>/feed/<item>/feedback`: not interested, not about
-  the player, a report), kept per fan in `feed_feedback`, which hides it from them at once, moves to their
-  account when they sign in, and goes with the player or the account. Every card has a picture where there is
+  the player, a report), kept per fan in `feed_feedback`, which hides it from them at once (under every player
+  holding the video, but "not about the player" under that one alone), moves to their account when they sign in,
+  and goes with the player or the account; 300 an hour from an address (an IPv6 /64, its /48's /64s together
+  1,200), or from a signed-in fan's account. Every card has a picture where there is
   one (`picture`): a video's is YouTube's thumbnail (`VideoSource.picture`, hqdefault, which every video has)
   behind a play button, and the player, from youtube-nocookie.com, loads only once it's tapped; a story's is
   the image its publisher's feed attaches (`publisher_rss.image`: media:content, media:thumbnail, an image
