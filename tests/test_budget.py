@@ -15,9 +15,10 @@ import httpx
 import pytest
 
 from sports_follow import controls, history, pipeline, registry, search, server, structured, tools, worker
-from sports_follow.adapters import ADAPTERS, PlayerRef, budget, lichess_chess, liquipedia, pandascore, pubg, sportmonks
+from sports_follow.adapters import ADAPTERS, KNOWN, PlayerRef, budget, lichess_chess, liquipedia, pandascore, pubg, sportmonks
 
 from .test_api import api  # noqa: F401  (the fixture)
+from .test_new_adapters import load
 
 ADAPTERS_DIR = Path(__file__).resolve().parent.parent / "sports_follow" / "adapters"
 SMALL = budget.Budget("small", windows=(budget.Window(3600, 20, margin=2),), reserve=8)
@@ -80,6 +81,32 @@ def test_fans_in_a_loop_never_spend_what_live_games_keep(scarce):
         budget.take(scarce, "x", lane_name="live")
     with pytest.raises(budget.RateLimited):
         budget.take(scarce, "x", lane_name="live")  # the margin, never spent
+
+
+@pytest.mark.parametrize("with_token", [True, False], ids=["token", "no-token"])
+def test_a_cold_chess_preview_and_its_follow_fit_in_lichesss_fans_share(api, monkeypatch, with_token):
+    # Lichess's fans' share holds what a fan's preview of a chess player nobody has previewed costs, and the follow
+    # after it: their FIDE record, read once (a chess preview reads no games: preview_fixtures), with or without the token.
+    kept = lichess_chess._budget(with_token)
+    monkeypatch.setattr(lichess_chess, "BUDGET", kept)
+    monkeypatch.setattr(lichess_chess, "SPACING", 0.0)
+    monkeypatch.setattr(search, "_previews", {})
+    monkeypatch.setitem(ADAPTERS, "lichess_chess", KNOWN["lichess_chess"])
+    monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: (5, True))
+    asked = []
+
+    def lichess(request):
+        asked.append(str(request.url))
+        assert str(request.url) == "https://lichess.org/api/fide/player?q=46616543", request.url
+        return httpx.Response(200, json=load("lichess/fide-search-id-gukesh"))
+
+    monkeypatch.setattr(lichess_chess, "_client", httpx.Client(transport=httpx.MockTransport(lichess)))
+    shown = api.call("GET", "/api/athletes/lichess_chess/46616543", fan="fan")
+    assert shown.status_code == 200 and shown.json()["name"] == "Gukesh D"
+    assert api.call("POST", "/api/follows", fan="fan", body={"system": "lichess_chess", "athlete_id": "46616543"}).status_code == 200
+    assert asked == ["https://lichess.org/api/fide/player?q=46616543"]
+    [fans] = [r for r in budget.usage([kept, lichess_chess.FIDE]) if r["lane"] == "fan"]
+    assert (fans["source"], fans["sent_h"], fans["refused_h"]) == ("lichess", 1, 0) and 1 <= kept.fan < kept.reserve
 
 
 def test_a_source_saying_slow_down_pauses_every_lane():

@@ -75,9 +75,15 @@ def token() -> str | None:
 # Lichess counts broadcast reads in three-minute windows, so after a 429 nothing asks for three minutes. A
 # quarter of each minute is kept for followed players' live boards: background reads (refreshes, Live now, match
 # pages) stop short of it, and so does polling a board nobody follows a player in (matches.py, spare()). Fans'
-# chess searches, previews and follows take at most half of it, so the boards keep the rest whatever fans do.
-BUDGET = budget.Budget("lichess", windows=(budget.Window(60, 120, margin=10) if token() else budget.Window(60, 10, margin=1),), urls=() if token() else (API,), pause=180,
-                       reserve=30 if token() else 3, fan=15 if token() else 1)
+# chess searches, previews and follows take at most half of it, so the boards keep the rest whatever fans do: a
+# preview reads the player's FIDE record and no games (preview_fixtures), one request, which a follow then reuses.
+def _budget(with_token: bool) -> budget.Budget:
+    if with_token:
+        return budget.Budget("lichess", windows=(budget.Window(60, 120, margin=10),), pause=180, reserve=30, fan=15)
+    return budget.Budget("lichess", windows=(budget.Window(60, 10, margin=1),), urls=(API,), pause=180, reserve=3, fan=1)
+
+
+BUDGET = _budget(token() is not None)
 # Lichess's FIDE player pages and its player endpoint ignore the token: one limit, about 60 requests a
 # minute, holds every caller from a datacenter together, a server like ours included, so others can spend
 # it (lila: Fide.scala, Limiters.enumeration.fidePlayer). Requests there are counted apart and kept few,
