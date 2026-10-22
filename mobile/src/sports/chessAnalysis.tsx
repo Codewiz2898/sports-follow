@@ -10,7 +10,7 @@ import { Linking, Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, 
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Circle, Defs, Line, Path, Polygon, RadialGradient, Rect, Stop } from 'react-native-svg'
 import { safeHref } from '../../../web/src/format'
-import { evalScore, PIECES, position, standardCastling, whiteShare, type ChessEval, type ChessState } from '../../../web/src/sports/facts/chess'
+import { evalScore, position, standardCastling, whiteShare, type ChessEval, type ChessState } from '../../../web/src/sports/facts/chess'
 import { checked, ended, fenAt, lineFrom, lineWhere, lookFromWhite, movedOn, numberedMoves, openingLine, PIECE_NAMES, playable, played, playedOn, samePosition, sanLine, squareWords, stepped, targets, type ChessLine, type EngineLook, type Opening } from '../../../web/src/sports/facts/chessLine'
 import type { LiveStatus } from '../api'
 import { BackIcon, ChevronIcon, CloseIcon, FirstIcon, LastIcon, RefreshIcon, SwapIcon } from '../icons'
@@ -231,9 +231,10 @@ export default function ChessAnalysis({ state, live, flip, opening, leave }: { s
 
   // Android's back: lets go of a promotion or a picked piece first, then closes.
   const back = () => {
-    if (promoting) setPromoting(null)
-    else if (picked) setPicked(null)
-    else leave()
+    if (promoting || picked) {
+      setPromoting(null)
+      setPicked(null)
+    } else leave()
   }
   const head = (words: string) => (
     <View style={s.head}>
@@ -245,7 +246,9 @@ export default function ChessAnalysis({ state, live, flip, opening, leave }: { s
     </View>
   )
   const frame = (children: ReactNode) => (
-    <Modal visible animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={back}>
+    // Its own window, over the screen while the screen is in front: a screen pushed over it (a notification's, a
+    // link's) shows, and the board comes back with the screen.
+    <Modal visible={focused} animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={back}>
       <ScrollView style={{ backgroundColor: colour.surface }} contentContainerStyle={{ paddingTop: insets.top + 14, paddingBottom: insets.bottom + 24, paddingHorizontal: PAD, gap: 14 }}>
         {children}
       </ScrollView>

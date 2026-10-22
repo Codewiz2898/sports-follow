@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
-import { chess as facts, chessMiddle, evalDepth, followedSide, gameMoves, movesAbout, position, standardCastling, type ChessColour, type ChessPage, type ChessSide, type ChessState } from '../../../web/src/sports/facts/chess'
-import { fenAt, lineOfGame, playedOn, samePosition, type Opening } from '../../../web/src/sports/facts/chessLine'
+import { chess as facts, chessMiddle, evalDepth, followedSide, movesAbout, position, standardCastling, type ChessColour, type ChessPage, type ChessSide, type ChessState } from '../../../web/src/sports/facts/chess'
+import { replayedMoves, type Opening } from '../../../web/src/sports/facts/chessLine'
 import { SwapIcon } from '../icons'
 import { colour, num, t } from '../theme'
 import { Btn } from '../ui'
@@ -29,33 +29,12 @@ const BIG = 560
 // The game's moves under it: a few lines, scrolled to the newest (the web's .chess.big .chess-line).
 const MOVES_HEIGHT = 112
 
-/** A game's moves on its match page (ChessPage: in pairs, and while it's on those its source added since, as the
- * board gave each, "d5e3"), replayed as chess from the start, each in SAN (the web's useReplay), with the board's
- * own last move where they're one short of it: a page's look lags the board a little. Null where they don't
- * replay (a Freestyle game's, or one set up from a position): then the pairs show as words. A finished game's must
- * end where its board does; a live game's may lag it. */
-function replay(page: ChessPage | undefined, state: ChessState): string[] | null {
-  const pairs = page?.moves ?? []
-  const added = page?.more ?? []
-  const from = pairs.length ? gameMoves(pairs) : []
-  if (!from || (!from.length && !added.length) || !state.fen || !standardCastling(state.fen)) return null
-  const start = lineOfGame(from, from.length)
-  let game = start && playedOn(start, added)
-  if (!game || game.plies.length < from.length + added.length) return null // one of them doesn't play
-  if (!samePosition(fenAt(game), state.fen) && state.last_move) {
-    const on = playedOn(game, [state.last_move])
-    if (samePosition(fenAt(on), state.fen)) game = on
-  }
-  if (state.result && !samePosition(fenAt(game), state.fen)) return null
-  return game.plies.map((m) => m.san)
-}
-
 /** The game's moves under its match page's board (the web's MovesPanel), in the band's colours: each, once they
  * replay, opening the analysis after it (`open`), the last (where the board is) marked; where they don't, the
  * pairs as words, and those added since as the board gave them. Its opening and how it ended, or of a
  * mini-match the game's number, over them. Kept scrolled to the newest as moves come, unless the fan has scrolled
  * back. */
-function MovesPanel({ page, sans, open, pal }: { page: ChessPage; sans: string[] | null; open: (moves: string[], ply: number) => void; pal: Palette }) {
+function MovesPanel({ page, sans, open, pal }: { page: ChessPage; sans: ReturnType<typeof replayedMoves>; open: (moves: string[], ply: number) => void; pal: Palette }) {
   const list = useRef<ScrollView>(null)
   const pinned = useRef(true) // at the newest: false once the fan scrolls back, true again at the end
   const about = [page.game ? `Game ${page.game}` : null, movesAbout(page)].filter(Boolean).join(' · ')
@@ -69,15 +48,14 @@ function MovesPanel({ page, sans, open, pal }: { page: ChessPage; sans: string[]
         onContentSizeChange={() => { if (pinned.current) list.current?.scrollToEnd({ animated: false }) }}
         onScroll={(e) => { const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent; pinned.current = contentSize.height - contentOffset.y - layoutMeasurement.height < 24 }}>
         <View style={c.moves}>
-          {sans ? sans.map((san, i) => {
-            const said = `${Math.floor(i / 2) + 1}${i % 2 ? '...' : '.'} ${san}`
+          {sans ? sans.map((m, i) => {
             const now = i + 1 === sans.length
             return (
               <View key={i} style={c.pair}>
-                {i % 2 === 0 ? <Text style={[t.small, c.nums, { color: pal.muted }]}>{i / 2 + 1}.</Text> : null}
-                <Pressable onPress={() => open(sans, i + 1)} accessibilityRole="button" accessibilityLabel={`Play on from ${said}`} accessibilityState={{ selected: now }} hitSlop={4}
+                {m.number ? <Text style={[t.small, c.nums, { color: pal.muted }]}>{m.number}</Text> : null}
+                <Pressable onPress={() => open(sans.map((x) => x.san), i + 1)} accessibilityRole="button" accessibilityLabel={`Play on from ${m.said}`} accessibilityState={{ selected: now }} hitSlop={4}
                   style={({ pressed }) => [c.move, now ? { backgroundColor: pal.text } : pressed && { backgroundColor: pal.raised }]}>
-                  <Text style={[t.small, c.nums, { color: now ? pal.ground : pal.text }]}>{san}</Text>
+                  <Text style={[t.small, c.nums, { color: now ? pal.ground : pal.text }]}>{m.san}</Text>
                 </Pressable>
               </View>
             )
@@ -105,7 +83,7 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page, pal }: 
   const moves = explore ? (page as ChessPage | undefined) : undefined
   const pairs = moves?.moves?.join('\n') ?? ''
   const more = moves?.more?.join(' ') ?? ''
-  const sans = useMemo(() => (playable ? replay(moves, state) : null),
+  const sans = useMemo(() => (playable ? replayedMoves(moves, state) : null),
     // By their words: the page's next look, with the same moves, doesn't replay them again.
     [playable, pairs, more, state.fen, state.last_move, state.result])
   if (!state.white || !state.black) return null

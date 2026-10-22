@@ -4,7 +4,7 @@ import { SwapIcon } from '../components/Icons'
 import { usePwa } from '../pwa'
 import './chess.css'
 import type { Opening } from './facts/chessLine'
-import { chess as facts, chessMiddle, evalDepth, evalScore, evalWords, followedSide, gameMoves, movesAbout, PIECES, position, standardCastling, whiteShare, type ChessColour, type ChessEval, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
+import { chess as facts, chessMiddle, evalDepth, evalScore, evalWords, followedSide, movesAbout, PIECES, position, standardCastling, whiteShare, type ChessColour, type ChessEval, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
 import type { BoardProps, SportView } from './view'
 
 // The analysis board (Play from here), with chess.js and the engine's worker: loaded when a fan opens one.
@@ -51,42 +51,32 @@ function phrases(text?: string | null) {
   return text?.split(' · ').map((part, i) => <span key={i}>{i > 0 && ' · '}<span className="nowrap">{part}</span></span>)
 }
 
-/** A game's moves on its match page (ChessPage: in pairs, and while it's on those its source added since, as the
- * board gave each, "d5e3"), replayed as chess from the start, each in SAN, with the board's own last move where
- * they're one short of it: a page's look lags the board a little. Replaying takes chess.js, which comes in the
- * analysis board's own chunk of the rules (facts/chessLine.ts). Null until it has, and where they don't replay
- * (a Freestyle game's, or one set up from a position): then the pairs show as words. A finished game's must end
- * where its board does; a live game's may lag it. */
-function useReplay(page: ChessPage | undefined, state: ChessState): string[] | null {
-  const [sans, setSans] = useState<string[] | null>(null)
+// A game's moves, replayed (facts/chessLine.ts replayedMoves): each in SAN, numbered.
+type Replayed = { san: string; number: string | null; said: string }[]
+
+/** A game's moves on its match page, replayed as chess (replayedMoves, the Android app's too): that takes chess.js,
+ * which comes in the analysis board's own chunk of the rules (facts/chessLine.ts). Null until it has, and where
+ * they don't replay: then the pairs show as words. */
+function useReplay(page: ChessPage | undefined, state: ChessState): Replayed | null {
+  const [sans, setSans] = useState<Replayed | null>(null)
   const { fen, last_move: last, result } = state
   // By their words: the page's next look, with the same moves, doesn't replay them again.
   const pairs = page?.moves?.join('\n') ?? ''
   const more = page?.more?.join(' ') ?? ''
   useEffect(() => {
-    // From the start: by the pairs, or with none yet (a game kept from its first move), by the added ones alone.
-    const from = pairs ? gameMoves(pairs.split('\n')) : []
-    const added = more ? more.split(' ') : []
-    if (!from || (!from.length && !added.length) || !fen || !standardCastling(fen)) {
+    // With nothing to replay, or a position chess.js won't play, the pairs are words at once.
+    if ((!pairs && !more) || !fen || !standardCastling(fen)) {
       setSans(null)
       return
     }
     let current = true
     // The last list stays while the next replays (no flicker each look), and goes where it doesn't.
-    const words = () => { if (current) setSans(null) }
     import('./facts/chessLine')
-      .then(({ fenAt, lineOfGame, playedOn, samePosition }) => {
-        const start = lineOfGame(from, from.length)
-        let game = start && playedOn(start, added)
-        if (!game || game.plies.length < from.length + added.length) return words()  // one of them doesn't play
-        if (!samePosition(fenAt(game), fen) && last) {
-          const on = playedOn(game, [last])
-          if (samePosition(fenAt(on), fen)) game = on
-        }
-        if (result && !samePosition(fenAt(game), fen)) return words()
-        if (current) setSans(game.plies.map((p) => p.san))
+      .then(({ replayedMoves }) => {
+        const moves = { moves: pairs ? pairs.split('\n') : [], more: more ? more.split(' ') : [] }
+        if (current) setSans(replayedMoves(moves, { fen, last_move: last, result }))
       })
-      .catch(words)
+      .catch(() => { if (current) setSans(null) })
     return () => { current = false }
   }, [pairs, more, fen, last, result])
   return sans
@@ -96,7 +86,7 @@ function useReplay(page: ChessPage | undefined, state: ChessState): string[] | n
  * analysis board after it (`open`), and the last (where the board is) marked; while they don't (or chess.js is
  * on its way), the pairs as words, and those added since as the board gave them (a Freestyle game's: "d6d7"). Its opening and how it ended, or of a mini-match the game's number, over them. Kept scrolled to the
  * newest as moves come, unless the fan has scrolled back. */
-function MovesPanel({ page, sans, open }: { page: ChessPage; sans: string[] | null; open: (moves: string[], ply: number) => void }) {
+function MovesPanel({ page, sans, open }: { page: ChessPage; sans: Replayed | null; open: (moves: string[], ply: number) => void }) {
   const list = useRef<HTMLOListElement>(null)
   const pinned = useRef(true)  // at the newest: false once the fan scrolls back, true again at the end
   const count = sans?.length ?? (page.moves?.length ?? 0) + (page.more?.length ?? 0)
@@ -119,15 +109,12 @@ function MovesPanel({ page, sans, open }: { page: ChessPage; sans: string[] | nu
         {about && <span className="tiny muted">{about}</span>}
       </span>
       <ol ref={list} className="chess-line" aria-label="Moves" onScroll={(e) => { const ol = e.currentTarget; pinned.current = ol.scrollHeight - ol.scrollTop - ol.clientHeight < 24 }}>
-        {sans ? sans.map((san, i) => {
-          const said = `${Math.floor(i / 2) + 1}${i % 2 ? '...' : '.'} ${san}`
-          return (
-            <li key={i}>
-              {i % 2 === 0 && <span className="muted">{i / 2 + 1}.</span>}
-              <button type="button" className="chess-move" aria-current={i + 1 === sans.length} aria-label={`Play on from ${said}`} title={`Play on from ${said}`} onClick={() => open(sans, i + 1)}>{san}</button>
-            </li>
-          )
-        }) : [...(page.moves ?? []), ...(page.more ?? [])].map((m, i) => <li key={i}>{m}</li>)}
+        {sans ? sans.map((m, i) => (
+          <li key={i}>
+            {m.number && <span className="muted">{m.number}</span>}
+            <button type="button" className="chess-move" aria-current={i + 1 === sans.length} aria-label={`Play on from ${m.said}`} title={`Play on from ${m.said}`} onClick={() => open(sans.map((x) => x.san), i + 1)}>{m.san}</button>
+          </li>
+        )) : [...(page.moves ?? []), ...(page.more ?? [])].map((m, i) => <li key={i}>{m}</li>)}
       </ol>
     </div>
   )
