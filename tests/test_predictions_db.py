@@ -868,6 +868,24 @@ def test_friends_play_in_a_league_by_its_invite_and_its_table_counts_from_its_ma
     assert db.scalars(select(League)).all() == []
 
 
+def test_names_keep_only_what_can_be_seen_and_one_with_nothing_to_see_is_refused(db, redis):
+    """BUG-112: a NUL in a league's or a member's name was a 500 (Postgres keeps none), and a name of zero-width spaces
+    alone was taken. What can't be seen is taken out now (not the joiners Indic scripts and emoji are drawn with), and
+    a name with nothing left to see is refused, as an empty one is."""
+    gang = predictions.create(db, "acct-asha", "Der\x00by‮", "​Asha")
+    predictions.join(db, "acct-ravi", gang.code, "Ra\x00vi\ud800")
+    predictions.join(db, "acct-sita", gang.code, "Sita 👩‍💻")
+    db.commit()
+    db.expire_all()
+    assert db.get_one(League, gang.id).name == "Derby"
+    assert dict(db.execute(select(LeagueMember.fan_id, LeagueMember.name)).all()) == {"acct-asha": "Asha", "acct-ravi": "Ravi", "acct-sita": "Sita 👩‍💻"}
+    for blank in ("​​", "\x00", "‍", " ⁠\t"):
+        with pytest.raises(predictions.Refused) as nothing:
+            predictions.join(db, "acct-dev", gang.code, blank)
+        assert (nothing.value.status, nothing.value.message) == (400, "Give your name.")
+        db.rollback()
+
+
 def test_signing_in_brings_every_pick_and_those_on_games_under_way_count_in_no_league(db, redis):
     """BUG-091 (BHA-413): signing in (to join a friend's league mid-game, say) brought only the picks on games still to
     start: the rest stayed with the device's anonymous id, which no device holds after, so the fan lost those calls,

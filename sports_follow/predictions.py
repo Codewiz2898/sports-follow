@@ -32,6 +32,7 @@ is its members' points on the questions settled since it was made.
 from __future__ import annotations
 
 import secrets
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -594,9 +595,16 @@ def _code() -> str:
     return "".join(secrets.choice(CODE) for _ in range(CODE_LEN))
 
 
+JOINERS = ("\u200c", "\u200d")  # zero-width (non-)joiners: Indic scripts and emoji are drawn with them
+
+
 def _name(raw: Any, most: int, what: str) -> str:
-    name = " ".join(str(raw or "").split())
-    if not name:
+    """A name as given, its spaces made single, with what can't be seen taken out (control and format characters,
+    but the JOINERS, and halves of characters): Postgres keeps no NUL, and an invisible name, or one that turns the
+    text after it around, isn't a name. Raises Refused for one with nothing left to see, or too long."""
+    kept = "".join(c for c in str(raw or "") if c.isspace() or unicodedata.category(c) not in ("Cc", "Cf", "Cs") or c in JOINERS)
+    name = " ".join(kept.split())
+    if not any(unicodedata.category(c)[0] in "LNPS" for c in name):
         raise Refused(400, f"Give {what}.")
     if len(name) > most:
         raise Refused(400, f"{what[0].upper()}{what[1:]} can be {most} characters at most.")
