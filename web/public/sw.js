@@ -1,11 +1,12 @@
 // The app's service worker: it opens instantly, and offline it shows the last update of
 // your players. Live data stays live: scores and streams always go to the network.
 //
-// Pages: network first, the cached app shell when offline (the app is one page, so "/" serves every
-// route); only the app's page is kept as the shell, and an address of the API opened as a page (a photo, a
-// share picture) passes through. Built assets: cache first (their names change with their content), in a
-// cache of the build's own, which goes when the next build takes over. Fonts and other files: served from
-// cache while refreshed. /api/me/following, player cards and the sports (/api/sports): network first, the
+// Pages: the network, and offline the app shell (the app is one page, so "/" serves every route): the build's
+// own page, which its worker stores as it installs, with the build's files, so offline the app opens as one build,
+// whole, from a fan's first visit and right after every deploy (BUG-305, BUG-310). An address of the API opened as
+// a page (a photo, a share picture) passes through. Built assets: cache first (their names change with their
+// content), in a cache of the build's own, which goes when the next build takes over. Fonts and other files:
+// served from cache while refreshed. /api/me/following, player cards and the sports (/api/sports): network first, the
 // last answer offline. The sports' colours (/api/sports.css): from cache while refreshed. Players' photos
 // (/api/photos/): cache first, like built assets. Every other /api call and every live stream passes
 // straight through.
@@ -21,7 +22,14 @@ const VERSION = 'v3'  // v3: the stann icons, so the v2 caches go (v2: the Match
 // This build of the app, stamped in by vite.config.ts: every deploy that changes anything changes this
 // file, so the browser installs the new worker and the app offers Reload (pwa.tsx).
 const BUILD = 'dev'
-const SHELL = `shell-${VERSION}`
+// This build's files (/assets/), stamped in with BUILD: stored as the worker installs, and those too big to fetch
+// unasked (the chess engine's), stored when first used. Either is taken from the cache of the build before when
+// it had it: a file's name is its content.
+const BUILD_FILES = []
+const BUILD_FILES_LATER = []
+// The build's page, of a cache of the build's own as its files are: the page the app opens as offline is always
+// the one those files are for (BUG-305).
+const SHELL = `shell-${BUILD}`
 const FILES = `files-${VERSION}`
 const DATA = `data-${VERSION}`
 // This build's files (/assets/): a cache of its own, so those of the builds before it go when it takes over,
@@ -34,9 +42,24 @@ const OFFLINE_DATA = /^\/api\/(me\/following|players\/\d+\/card|sports)$/
 const SPORTS_CSS = '/api/sports.css'
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(SHELL).then((cache) => cache.addAll(['/', '/manifest.webmanifest', '/icons/icon-192.png'])))
+  // The build's page and files, before it takes over: a file it can't fetch fails the install, and the browser tries
+  // again later, the build in charge staying meanwhile, whole.
+  event.waitUntil(Promise.all([caches.open(SHELL).then((cache) => cache.addAll(['/', '/manifest.webmanifest', '/icons/icon-192.png'])), storeBuild()]))
   // No skipWaiting here: an open tab keeps its version until the fan taps "Reload" (see pwa.tsx).
 })
+
+// This build's files into its cache: one a build before kept is copied over, the rest fetched, but for those
+// stored when first used (BUILD_FILES_LATER).
+async function storeBuild() {
+  const cache = await caches.open(ASSETS)
+  const fetching = []
+  for (const path of [...BUILD_FILES, ...BUILD_FILES_LATER]) {
+    const kept = await caches.match(path)
+    if (kept) await cache.put(path, kept)
+    else if (BUILD_FILES.includes(path)) fetching.push(path)
+  }
+  await cache.addAll(fetching)
+}
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
@@ -64,7 +87,7 @@ self.addEventListener('fetch', (event) => {
     if (req.mode === 'navigate') {
       // A picture of the API's opened as a page (a player's photo, a share picture) is the network's (BUG-164).
       if (url.pathname.startsWith('/api/')) return
-      return event.respondWith(networkFirst(req, SHELL, '/', isPage))
+      return event.respondWith(pageOrShell(req))
     }
     if (url.pathname.startsWith('/assets/')) return event.respondWith(cacheFirst(req, ASSETS))
     // A player's photo: its address is its content, so the copy kept is always right.
@@ -82,17 +105,26 @@ self.addEventListener('fetch', (event) => {
   }
 })
 
-// The app's own page, which alone may be kept as the shell: offline, the app opens as whatever was kept (BUG-164).
-const isPage = (res) => (res.headers.get('content-type') || '').startsWith('text/html')
+// A page: the network's, else the build's own page, stored as its worker installed. A page opened online isn't kept:
+// it may be a newer build's, whose files this build's cache hasn't (BUG-305), or not the app's page at all (BUG-164).
+async function pageOrShell(req) {
+  try {
+    return await fetch(req)
+  } catch (err) {
+    const shell = await caches.open(SHELL).then((cache) => cache.match('/'))
+    if (shell) return shell
+    throw err
+  }
+}
 
-async function networkFirst(req, cacheName, key, keep = () => true) {
+async function networkFirst(req, cacheName) {
   const cache = await caches.open(cacheName)
   try {
     const res = await fetch(req)
-    if (res.ok && keep(res)) cache.put(key || req, res.clone())
+    if (res.ok) cache.put(req, res.clone())
     return res
   } catch (err) {
-    const hit = await cache.match(key || req)
+    const hit = await cache.match(req)
     if (hit) return hit
     throw err
   }
