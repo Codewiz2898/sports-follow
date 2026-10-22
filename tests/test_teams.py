@@ -440,7 +440,7 @@ def test_the_fan_stream_carries_a_teams_games_from_a_day_and_a_half_before_they_
     monkeypatch.setattr(server, "_stream", lambda channels, first, request, again=None: subscribed.append(channels) or "stream")
     monkeypatch.setattr(server, "_sse", lambda body, places=None: body)
     monkeypatch.setattr(server, "streaming", server.Counter())  # the stream's places, given back by its answer
-    assert asyncio.run(server.my_stream(SimpleNamespace(client=None), fan="gooner")) == "stream"
+    assert asyncio.run(server.my_stream(SimpleNamespace(client=None, cookies={}), fan="gooner")) == "stream"
     assert subscribed == [[f"match:{key['pitch:100']}", "follows:gooner"]]  # and the fan's own channel (BUG-165)
 
 

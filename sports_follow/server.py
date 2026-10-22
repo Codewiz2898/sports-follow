@@ -59,18 +59,23 @@ HEARTBEAT = 15
 PING = "event: ping\ndata:\n\n"
 # A live stream (_stream) holds a Redis connection while it's open, from a pool of the streams' own, so one
 # client can't hold enough to starve the worker's polling, locks and limits (BUG-184). So many are open at
-# once for one fan, for one client address and in this process; past that the next is refused, and the app tries
-# again a little later. A connection a phone dropped can stay open some minutes before the server hears of it, so
-# a fan's share allows for a few. An IPv6 /64 is a household; an IPv4 address can be a phone network's, shared by
-# thousands of its fans (carrier-grade NAT, as India's networks use), so it holds more.
+# once for one fan, for one client address, for its prefix and in this process; past that the next is refused, and
+# the app tries again a little later. A connection a phone dropped can stay open some minutes before the server hears
+# of it, so a fan's share allows for a few. An IPv6 /64 is a household; an IPv4 address can be a phone network's,
+# shared by thousands of its fans (carrier-grade NAT, as India's networks use), so it holds more. A prefix's
+# addresses together (an IPv4 /24's, an IPv6 /48's) hold well under the process's, so a few networks can't hold every
+# fan's; and a player's stream opened with neither a fan's cookie nor a session (the app's page always has one) is
+# one of the few kept for those, the rest being fans' (BUG-299).
 STREAMS_PER_FAN = 8
 STREAMS_PER_ADDRESS = 60  # an IPv6 /64's
 STREAMS_PER_IPV4 = 250  # an IPv4 address's
+STREAMS_PER_PREFIX = 300  # an IPv4 /24's or an IPv6 /48's addresses together
+STREAMS_WITHOUT_FAN = 200  # streams with no fan, together
 STREAMS_PER_PROCESS = 1000
 REDIS_CONNECTIONS = 100  # the API's other Redis connections, in each process: past them a command waits its turn
 
 state: dict[str, Any] = {}
-streaming: Counter[str] = Counter()  # this process's open streams: by "fan:<id>", by "address:<address>", and "all"
+streaming: Counter[str] = Counter()  # this process's open streams: by "fan:<id>", "address:<address>", "prefix:<its /24 or /48>", "fanless" and "all"
 
 
 @asynccontextmanager
@@ -3099,19 +3104,41 @@ async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[s
             await pubsub.aclose()
 
 
+def _prefix(address: str) -> str:
+    """A client address's prefix, whose addresses' streams together have a ceiling (STREAMS_PER_PREFIX): an IPv4
+    address's /24, an IPv6 /64's /48."""
+    network = ipaddress.ip_network(address, strict=False)
+    return str(network.supernet(new_prefix=24 if network.version == 4 else 48))
+
+
+def _brought(request: Request, fan: str) -> bool:
+    """Whether a request brought its fan, an account's (only a session gives one) or its fan cookie's, rather than
+    fan_id making one up for it: a request with neither is a new fan each time, whose own share holds nothing back."""
+    if fan.startswith(accounts.FAN_PREFIX):
+        return True
+    value = request.cookies.get(FAN_COOKIE) or ""
+    return value == fan or (_signed(value) or ("", 0))[0] == fan
+
+
 def _hold_streams(request: Request, fan: str | None) -> list[str]:
-    """Places for one more open stream: the fan's (when the route has one), its client address's (a public
-    one) and this process's. Past the fan's or the address's share a 429, past the process's a 503, and then
-    it holds none. The stream's answer gives them back when it ends (_Stream)."""
+    """Places for one more open stream: the fan's, when the request brought one (_brought), else one of the few kept
+    for streams with no fan (STREAMS_WITHOUT_FAN); its client address's and its prefix's (a public one's); and this
+    process's. Past the fan's, the address's or the prefix's share a 429, past the fanless streams' or the process's
+    a 503, and then it holds none. The stream's answer gives them back when it ends (_Stream)."""
     address = client_address(request)
+    fan = fan if fan is not None and _brought(request, fan) else None
     shares = {f"fan:{fan}": STREAMS_PER_FAN} if fan else {}
     if address:
         shares[f"address:{address}"] = STREAMS_PER_ADDRESS if ":" in address else STREAMS_PER_IPV4
+        shares[f"prefix:{_prefix(address)}"] = STREAMS_PER_PREFIX
     if any(streaming[key] >= share for key, share in shares.items()):
+        if address and streaming[f"prefix:{_prefix(address)}"] >= STREAMS_PER_PREFIX:
+            _at_ceiling("streams", _prefix(address))
         raise HTTPException(429, "Too many live updates open at once from here. Close some, and they come back.")
-    if streaming["all"] >= STREAMS_PER_PROCESS:
+    pooled = {"all": STREAMS_PER_PROCESS, **({} if fan else {"fanless": STREAMS_WITHOUT_FAN})}
+    if any(streaming[key] >= share for key, share in pooled.items()):
         raise HTTPException(503, "Live updates are busy. The app tries again in a moment.")
-    places = [*shares, "all"]
+    places = [*shares, *pooled]
     streaming.update(places)
     return places
 
@@ -3153,7 +3180,10 @@ async def player_stream(player_id: RowId, request: Request) -> StreamingResponse
         card = await read_card(player_id)
         return [{"type": "card", "player_id": player_id, "card": card}] if card else []
 
-    places = _hold_streams(request, None)  # it needs no cookie: its address's share holds it
+    # It needs no cookie. With a fan's cookie or session it's held in that fan's share; without either, in the few kept
+    # for streams with no fan, so scripts can't hold every fan's (BUG-299).
+    signed = await account_of(request)
+    places = _hold_streams(request, signed.fan_id if signed else await asyncio.to_thread(_cookie_fan, request))
     return _sse(_stream([bus.channel(player_id)], first, request), places)
 
 
