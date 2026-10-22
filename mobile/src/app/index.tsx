@@ -151,6 +151,11 @@ export default function TodayScreen() {
   const sports = useSports()
   const welcomed = useWelcomed()
   const focused = useIsFocused()
+  const { epoch } = useAccount()
+  // A visit to Today: it stays mounted under every page opened from it, so its Players to follow starts over each time
+  // it's back in front, and for another fan (the web's unmounts with the page).
+  const [visit, setVisit] = useState(0)
+  useEffect(() => { if (focused) setVisit((n) => n + 1) }, [focused])
   const [refreshing, setRefreshing] = useState(false)
 
   // A fan who follows only games by themselves, or only teams, has a Today of their own too.
@@ -227,7 +232,7 @@ export default function TodayScreen() {
           <Text style={s.heroText}>Any athlete in any sport: the live score and their own numbers while they play, then fixtures, results and news.</Text>
           <Btn label="Find a player" icon={<SearchIcon size={18} color={colour.bg} />} kind="primary" onPress={() => router.push('/search')} style={{ alignSelf: 'flex-start' }} />
         </View>
-        <StartersSection few game={game?.key ?? null} />
+        <StartersSection key={`${epoch}:${visit}`} few game={game?.key ?? null} />
       </Page>
     )
   }
@@ -314,7 +319,7 @@ export default function TodayScreen() {
       </ErrorBoundary>
 
       {/* While they follow few players, every sport's; then their sports' they follow nobody in yet. */}
-      <StartersSection few={cards.length > 0 && cards.length < FEW} game={game?.key ?? null} />
+      <StartersSection key={`${epoch}:${visit}`} few={cards.length > 0 && cards.length < FEW} game={game?.key ?? null} />
     </Page>
   )
 }

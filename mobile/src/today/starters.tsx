@@ -134,7 +134,7 @@ export function StartersSection({ few, game = null }: { few: boolean; game?: str
   const { sports } = useStarters()
   const catalog = useSports()
   const { cards, teams, sports: yours } = useFollowing()
-  const stays = useRef(new Set<string>()) // the fan's sports offered on this visit: following one from it keeps it
+  const stays = useRef(new Set<string>()) // the fan's sports offered on this visit (Today keys it by visit and fan): following one from it keeps it
   if (!sports?.length) return null
   const followed = followedSports(cards, teams, (x) => catalog.info(x).key)
   const offered = startersOffered(sports, yours, followed, few, game, stays.current)

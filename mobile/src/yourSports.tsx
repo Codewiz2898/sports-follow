@@ -2,8 +2,8 @@
 // first step and the Edit sheet), the Edit sheet itself (Following's, and Today's game search's way here), and the
 // fan's sports at the top of Following. What they decide is web/src/yourSports.ts's; only the drawing is here.
 
-import { useEffect, useState, type ReactNode } from 'react'
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { useState, type ReactNode } from 'react'
+import { Modal, PixelRatio, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { longestWordEms } from '../../web/src/format'
 import { followedSports, sheetSummary, tickedAtFirst, tileGroups, toggled, toSave, yoursShown } from '../../web/src/yourSports'
@@ -24,9 +24,10 @@ function SportTile({ sport, on, onPress, mini }: { sport: SportInfo; on: boolean
   const beside = mini ? 18 : 24 // the corner mark's room
   const base = mini ? 17 : 30
   // Inside its padding, the ring a pick draws (on every tile, so a tick doesn't change the size) and the mark's room;
-  // a little to spare, as Android's measure of the slanted face runs wider than the web's.
+  // a little to spare, as Android's measure of the slanted face runs wider than the web's; and the phone's font scale,
+  // which Android multiplies every size by.
   const room = width - (mini ? 24 : 28) - 6 - beside
-  const size = width ? Math.max(12, Math.min(base, room / (longestWordEms(sport.label) * 1.06))) : base
+  const size = width ? Math.max(12, Math.min(base, room / (longestWordEms(sport.label) * 1.06 * PixelRatio.getFontScale()))) : base
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={sport.label} accessibilityState={{ selected: on }} onPress={onPress} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
       style={[s.tile, mini && s.mini, { backgroundColor: tone.sport }, on && { borderWidth: 3, borderColor: tone.on }]}>
@@ -66,22 +67,17 @@ export function SportTiles({ tiles, picked, onPick, across = 2 }: { tiles: Sport
  * Following's Edit (and Today's game search's way here), the web's YourSportsSheet: the fan's sports, ticked, to add or
  * drop one. With none saved yet, the sports of who they follow are ticked. Nothing is saved until Save, which sends
  * any of theirs this app shows no tile for too (yourSports.toSave). From the bottom, as the app's other sheets; Back,
- * or a tap above it, closes it.
+ * or a tap above it, closes it. Shown while it's there (`{editing ? <YourSportsSheet …/> : null}`), its ticks from
+ * what's saved as it opens.
  */
-export function YourSportsSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function YourSportsSheet({ onClose }: { onClose: () => void }) {
   const insets = useSafeAreaInsets()
   const sports = useSports()
   const { sports: saved, cards, teams, saveSports } = useFollowing()
   const tiles = sports.running()
-  const [picked, setPicked] = useState<string[]>([])
+  const [picked, setPicked] = useState(() => tickedAtFirst(saved, followedSports(cards, teams, (x) => sports.info(x).key), sports.running()))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // Each time it opens, from what's saved now.
-  useEffect(() => {
-    if (!open) return
-    setPicked(tickedAtFirst(saved, followedSports(cards, teams, (x) => sports.info(x).key), sports.running()))
-    setError(null)
-  }, [open]) // only on opening: what the fan ticks meanwhile is theirs
   const save = async () => {
     setSaving(true)
     setError(null)
@@ -96,7 +92,7 @@ export function YourSportsSheet({ open, onClose }: { open: boolean; onClose: () 
   }
   const before = saved.filter((k) => tiles.some((x) => x.key === k))
   return (
-    <Modal visible={open} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={onClose}>
+    <Modal visible transparent animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={onClose}>
       <Pressable style={s.backdrop} onPress={onClose} accessibilityLabel="Close" />
       <View style={[s.sheet, { paddingBottom: 20 + insets.bottom, maxHeight: '92%' }]} accessibilityViewIsModal accessibilityLabel="Your sports">
         <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ gap: 14, paddingBottom: 4 }}>
@@ -137,7 +133,7 @@ export function YourSportsRow() {
         <View style={s.pills}>{shown.map((x) => <SportPill key={x.key} sport={x} />)}</View>
       ) : null}
       <Text style={s.note}>{shown.length ? 'Today gives each a chip, and keeps offering players from them.' : 'Pick the sports you watch: Today gives each a chip, and keeps offering players from them.'}</Text>
-      <YourSportsSheet open={editing} onClose={() => setEditing(false)} />
+      {editing ? <YourSportsSheet onClose={() => setEditing(false)} /> : null}
     </View>
   )
 }

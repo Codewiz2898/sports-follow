@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { inYourOrder, toggled, toSave } from '../../../web/src/yourSports'
+import type { LiveGame } from '../api'
 import { useSports, useSportsKnown } from '../catalog'
 import { useFollowing } from '../following'
 import { CheckIcon, SearchIcon } from '../icons'
@@ -104,6 +105,7 @@ export default function WelcomeScreen() {
  * then each sport picked that has none (an esports game, often): its games on now, and a way to find its players. */
 function WelcomePlayers({ picked }: { picked: string[] }) {
   const { sports: starters, failed } = useStarters()
+  const live = useLive() // one look for every sport picked below
   if (starters === null && failed) return <ErrorBox>Couldn't load players to suggest. Try again in a moment, or find one yourself.</ErrorBox>
   if (starters === null) return <Spinner />
   const theirs = picked.length ? inYourOrder(starters.filter((x) => picked.includes(x.key)), (x) => x.key, picked) : starters
@@ -111,7 +113,7 @@ function WelcomePlayers({ picked }: { picked: string[] }) {
   return (
     <>
       {theirs.length ? <StarterPicker sports={theirs} /> : null}
-      {without.map((key) => <PickedOnNow key={key} sport={key} />)}
+      {without.map((key) => <PickedOnNow key={key} sport={key} games={live.find((x) => x.key === key)?.games ?? []} />)}
       {!theirs.length && !without.length ? (
         <Btn kind="primary" label="Find a player" icon={<SearchIcon size={18} color={colour.bg} />} onPress={() => router.push('/search')} style={{ alignSelf: 'flex-start' }} />
       ) : null}
@@ -119,13 +121,11 @@ function WelcomePlayers({ picked }: { picked: string[] }) {
   )
 }
 
-/** A sport the fan picked that has no starters: its games on now (GET /api/live), each with players to follow from it,
- * and a search for its players. */
-function PickedOnNow({ sport }: { sport: string }) {
+/** A sport the fan picked that has no starters: its games on now (`games`, GET /api/live's), each with players to follow
+ * from it, and a search for its players. */
+function PickedOnNow({ sport, games }: { sport: string; games: LiveGame[] }) {
   const info = useSports().info(sport)
-  const live = useLive().find((x) => x.key === sport)
   const follow = useFollowToggle()
-  const games = live?.games ?? []
   return (
     <Section title={info.label} right={games.length ? <Eyebrow>On now</Eyebrow> : undefined}>
       {games.map((g) => <OtherGame key={g.key} game={{ ...g, sport }} label={info.label} follow={follow} fill />)}

@@ -85,7 +85,9 @@ export function GameChips({ row, game, onPick }: { row: GameRow; game: SportInfo
   }, [])
   // All, picked from further down (No … games today's "All games"), takes the row back to its start, where All is.
   useEffect(() => { if (picked) bring(picked); else line.current?.scrollTo({ x: 0, animated: true }) }, [picked, bring])
-  if (!row.chips.length && !row.more.length) return null
+  // The sheet stays if the row goes while the fan edits (a refresh leaving one game or none).
+  const sheet = editing ? <YourSportsSheet onClose={() => setEditing(false)} /> : null
+  if (!row.chips.length && !row.more.length) return sheet
   const find = row.more.length > 0
   const chips = game && !row.chips.includes(game) ? [...row.chips, game] : row.chips
   const placed = (key: string) => (x: number, width: number) => {
@@ -121,7 +123,7 @@ export function GameChips({ row, game, onPick }: { row: GameRow; game: SportInfo
       ) : null}
       <FindGame open={finding} games={row.more} onPick={onPick} onClose={() => setFinding(false)}
         onYourSports={sportsLoaded ? () => { setFinding(false); setEditing(true) } : undefined} />
-      <YourSportsSheet open={editing} onClose={() => setEditing(false)} />
+      {sheet}
     </View>
   )
 }
