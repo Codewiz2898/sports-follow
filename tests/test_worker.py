@@ -20,7 +20,7 @@ from arq.worker import Worker, create_worker
 
 import pytest
 
-from sports_follow import db, engine, history, livecards, logs, notify, pipeline, predictions_push, shutdown, structured, worker
+from sports_follow import db, engine, history, livecards, logs, notify, pipeline, predictions_push, shutdown, structured, teams, worker
 
 
 def test_every_job_slot_gets_a_thread(monkeypatch):
@@ -303,7 +303,134 @@ def test_every_thread_that_reaches_the_database_gets_a_connection():
         db.size_pool(15)
 
 
-# ---------------------------------------------------------------- cron runs (BUG-022, BUG-024)
+# ---------------------------------------------------------------- a backed-up queue, a worker that died (BUG-175, BUG-272)
+
+
+def _nothing_else_due(monkeypatch) -> None:
+    """The tick finds no engine lane, unsent moment or history work: only what a test's due_work gives."""
+    monkeypatch.setattr(engine, "needs_lane", lambda: False)
+    monkeypatch.setattr(notify, "pending", lambda: [])
+    monkeypatch.setattr(notify, "held_due", lambda: [])
+    monkeypatch.setattr(history, "has_work", lambda: False)
+
+
+def test_a_backed_up_queue_reads_a_players_or_teams_source_once_however_many_ticks_find_them_due(monkeypatch):
+    """While every job slot is busy, each tick found the same stale player and followed team due, and queued another
+    refresh of each: nothing marks one queued until it runs. Once slots freed, every one of them read the source again,
+    spending a source's allowance just when the worker was behind (BUG-175). One refresh of each waits at a time."""
+    monkeypatch.setattr(pipeline, "due_work", lambda: pipeline.Due(refreshes=[5], teams=[7]))
+    _nothing_else_due(monkeypatch)
+    reads: list[tuple[str, int]] = []
+    monkeypatch.setattr(structured, "refresh", lambda player_id: reads.append(("player", player_id)))
+    monkeypatch.setattr(teams, "refresh", lambda team_id: reads.append(("team", team_id)))
+    redis = MemoryArq()
+
+    async def backed_up() -> None:
+        for _ in range(3):  # three minutes with every slot taken
+            await worker.tick({"redis": redis})
+        # Then slots free, and a worker runs what was queued.
+        arq_worker = create_worker(worker.WorkerSettings, redis_pool=redis, handle_signals=False, poll_delay=0.05, burst=True, cron_jobs=[], on_startup=None, on_shutdown=None)
+        await arq_worker.main()
+        await arq_worker.close()
+
+    asyncio.run(backed_up())
+    assert sorted(reads) == [("player", 5), ("team", 7)]
+
+
+class Expiring(MemoryArq):
+    """MemoryArq whose keys keep how long they have left to live, for a test to let time pass (later)."""
+
+    def __init__(self):
+        super().__init__()
+        self.ttl: dict[str, float] = {}  # seconds left, by key
+
+    async def set(self, key, value, nx=False, ex=None, px=None):
+        if not await super().set(key, value, nx=nx):
+            return None
+        self.ttl.pop(key, None)
+        if ex is not None or px is not None:
+            self.ttl[key] = ex if ex is not None else px / 1000
+        return True
+
+    async def psetex(self, key, ms, value):
+        return await self.set(key, value, px=ms)
+
+    async def setex(self, key, seconds, value):
+        return await self.set(key, value, ex=seconds)
+
+    async def expire(self, key, seconds):
+        return await self.pexpire(key, seconds * 1000)
+
+    async def pexpire(self, key, ms):
+        if key in self.data:
+            self.ttl[key] = ms / 1000
+        return key in self.data
+
+    async def delete(self, *keys):
+        for key in keys:
+            self.ttl.pop(key, None)
+        return await super().delete(*keys)
+
+    def later(self, seconds: float) -> None:
+        """`seconds` pass: whatever had less left to live is gone."""
+        for key, left in list(self.ttl.items()):
+            if left <= seconds:
+                del self.ttl[key]
+                self.data.pop(key, None)
+            else:
+                self.ttl[key] = left - seconds
+
+
+def test_a_lane_whose_worker_died_mid_poll_runs_again_within_its_own_timeout(monkeypatch):
+    """arq marks a running job in progress, so no worker starts it again and its id can't be queued again, for the
+    longest timeout of any job (the weekly import's six hours), and only a worker that ends the job takes the mark off.
+    So after a worker died mid-poll (an OOM kill, a host reboot), a source's poll lane, queued under a fixed id, was
+    stuck for six hours: no live scores or alerts from that source (BUG-272). The mark lasts as long as the job may
+    run, and the next worker runs the lane again."""
+    lane = "sportmonks_football"
+    monkeypatch.setattr(pipeline, "due_work", lambda: pipeline.Due(lanes=[lane]))
+    _nothing_else_due(monkeypatch)
+    polling, killed = threading.Event(), threading.Event()
+    rounds: list[str] = []
+
+    def poll_lane(system: str) -> None:
+        rounds.append(system)
+        polling.set()
+        killed.wait(5)
+
+    monkeypatch.setattr(structured, "poll_lane", poll_lane)
+    # The worker's own settings, so its jobs' timeouts, but not the cron jobs that run at startup: they'd read sources.
+    crons = [c for c in worker.WorkerSettings.cron_jobs if not c.run_at_startup]
+
+    def a_worker(redis: MemoryArq) -> Worker:
+        return create_worker(worker.WorkerSettings, redis_pool=redis, handle_signals=False, poll_delay=0.05, cron_jobs=crons, on_startup=None, on_shutdown=None)
+
+    async def run(arq_worker: Worker, until) -> None:
+        running = asyncio.ensure_future(arq_worker.main())
+        await until()
+        running.cancel()
+        await asyncio.wait([running])
+        await arq_worker.close()
+
+    async def killed_and_back() -> float | None:
+        redis = Expiring()
+        dead: list[Expiring] = []
+
+        async def mid_poll() -> None:
+            await asyncio.to_thread(polling.wait, 5)
+            dead.append(copy.deepcopy(redis))  # the worker is killed now: this is what it leaves in Redis
+            killed.set()
+
+        await worker.tick({"redis": redis})
+        await run(a_worker(redis), mid_poll)
+        left = dead[0].ttl.get(f"arq:in-progress:poll-lane:{lane}")
+        dead[0].later(16 * 60)  # the server is up again a quarter of an hour on
+        await worker.tick({"redis": dead[0]})  # (the lane is still queued from before: the tick can't queue another)
+        await run(a_worker(dead[0]), lambda: asyncio.sleep(0.5))
+        return left
+
+    left = asyncio.run(killed_and_back())
+    assert rounds == [lane, lane], f"the lane was marked in progress for {left} s"
 
 
 class Queue:

@@ -569,6 +569,7 @@ def test_only_a_follower_can_refresh_and_only_once_a_minute_per_player(api, monk
     assert refresh("fan-a").status_code == 429
     assert refresh("fan-b").status_code == 429  # the player was just re-read, for every follower
     assert api.queue.jobs == [("refresh_structured", 1)]
+    assert api.queue.options["_job_id"] == "refresh-structured:1"  # the tick's id: one refresh of a player waits at a time (BUG-175)
     del api.redis.data["refresh:1"]  # a minute later
     assert refresh("fan-b").json() == {"queued": True}
     assert len(api.queue.jobs) == 2
@@ -589,7 +590,7 @@ def test_a_request_is_logged_once_under_an_id_its_jobs_take_along(api, monkeypat
     answer = api.call("POST", "/api/players/1/refresh", fan="fan-a")
     rid = answer.headers["x-request-id"]
     assert answer.json() == {"queued": True}
-    assert api.queue.jobs == [("refresh_structured", 1)] and api.queue.options == {"trace": {"rid": rid}}  # the worker logs it under rid
+    assert api.queue.jobs == [("refresh_structured", 1)] and api.queue.options["trace"] == {"rid": rid}  # the worker logs it under rid
     [line] = _request_lines(caplog)
     assert line.getMessage().startswith("POST /api/players/1/refresh 200 ")
     assert (line.route, line.status, line.duration_ms >= 0) == ("/api/players/{player_id}/refresh", 200, True)
