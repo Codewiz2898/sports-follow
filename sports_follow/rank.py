@@ -572,8 +572,7 @@ def _stories(session: Session, rows: Sequence[Any], published: dict[int, datetim
     outlet: dict[int, str] = {}
     for r in rows:
         kept = r.candidate or {}
-        words = news.story_words(str(kept.get("title") or ""), str(kept.get("description") or ""), drop.get(r.player_id, []))
-        by_player.setdefault(r.player_id, []).append(news.Story(r.id, published[r.id], frozenset(words)))
+        by_player.setdefault(r.player_id, []).append(news.story(r.id, published[r.id], str(kept.get("title") or ""), str(kept.get("description") or ""), drop.get(r.player_id, [])))
         outlet[r.id] = naming.fold(str(kept.get("channel") or "")) or str(kept.get("channel_id") or r.url)
     out = {}
     for stories in by_player.values():

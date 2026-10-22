@@ -174,6 +174,74 @@ def test_the_best_story_of_a_group_is_served_with_its_outlets_as_the_feeds_the_p
     assert candidates.check(NOW)["dropped"] == 0
 
 
+# Stories from three publishers' real feeds of 16-21 Oct 2026 (BUG-249), their words retold here, their facts (who,
+# when, the figures) kept: (player, outlet, published, headline, description). Few words of the same story are the
+# same from one outlet to the next ("Bavuma's 179" from three, "give up hope" from two); a series' words are in all
+# its stories ("Australia", "Gqeberha", "second Test"), whichever day they tell.
+GUARDIAN, CRICINFO, HINDU = "The Guardian", "ESPNcricinfo", "The Hindu"
+TOLD = {
+    "bavuma day 2, live": ("Temba Bavuma", GUARDIAN, "2026-10-19T16:17", "South Africa reach 97-5 against Australia at stumps on day two of the men's second Test after rain delays – as it happened",
+                           "Australia pick up three wickets late on but Temba Bavuma is unbeaten on 41. The radar doesn't look promising for tomorrow either…"),
+    "bavuma day 2": ("Temba Bavuma", CRICINFO, "2026-10-19T16:45", "Bavuma resists but Boland's four puts Australia in control",
+                     "With 146 overs lost to rain in Gqeberha so far, Australia believe they have time to win the Test and make it 2-0"),
+    "bavuma 179, live": ("Temba Bavuma", GUARDIAN, "2026-10-20T15:51", "Australia limp to 3-1 after South Africa declare on 425-9 on day three of the men's second Test – as it happened",
+                         "Bavuma's brilliant 179 took South Africa to 425-9 declared before Rabada struck late to leave Australia 3-1 at stumps. 47th over: South Africa 106-5 (Bavuma 42, Mulder 10). Bavuma looks set to settle in; Cummins tries a couple of bouncers…"),
+    "bavuma 179": ("Temba Bavuma", GUARDIAN, "2026-10-20T16:21", "Australia on the back foot as Bavuma plays a captain's innings for South Africa",
+                   "A superb 179 puts the hosts in charge on day three, and Maddison falls for a duck before the close. In Durban it was Australia's lower order that frustrated South Africa; here in Gqeberha…"),
+    "bavuma 179, cricinfo": ("Temba Bavuma", CRICINFO, "2026-10-20T16:51", "Bavuma's flawless 179 turns the Test on its head",
+                             "Jansen and Harmer also made half-centuries, giving South Africa a chance to push for a win that levels the series"),
+    "bavuma 179, hindu": ("Temba Bavuma", HINDU, "2026-10-21T05:16", "AUS vs SA 2nd Test: Bavuma fights adversity to put South Africa in control",
+                          "The captain's defiant innings showed off his batting as South Africa recovered from 110-6 in the morning session of the third day to declare on 425-"),
+    "bavuma dreams": ("Temba Bavuma", CRICINFO, "2026-10-21T19:17", "'We want to go for the win' - Bavuma's 179 gives South Africa a chance to dream",
+                      "South Africa are the only side who can realistically win, though enforcing the follow-on may decide the outcome"),
+    "mandhana era": ("Smriti Mandhana", CRICINFO, "2026-10-16T13:18", "Raipur the stage for the start of India's Mandhana era",
+                     "Zimbabwe, yet to win a T20I this year, play their first bilateral series against India"),
+    "mandhana toss": ("Smriti Mandhana", CRICINFO, "2026-10-16T13:31", "Niki Prasad debuts for India as Mandhana chooses to chase against Zimbabwe",
+                      "India went in with Anushka Sharma at No. 3, Harmanpreet Kaur at No. 4 and Prasad at No. 5"),
+    "mandhana series": ("Smriti Mandhana", HINDU, "2026-10-19T06:17", "Shafali, Mandhana shine as India beat Zimbabwe by nine wickets for an unbeatable 2-0 series lead",
+                        "Shafali and captain Smriti Mandhana (47 not out) shared a rousing opening stand as India chased 103 in 8.5 overs"),
+    "mandhana series, cricinfo": ("Smriti Mandhana", CRICINFO, "2026-10-19T07:37", "Bowlers, Shafali and Mandhana power India to series win",
+                                  "India cruised home after holding Zimbabwe to 102 for 8"),
+    "shami hope": ("Mohammed Shami", HINDU, "2026-10-20T13:17", "Shami not giving up hope of an India recall",
+                   "The veteran pacer's absence from Bengal's Ranji game against Services had set off more talk about his fitness"),
+    "shami hope, cricinfo": ("Mohammed Shami", CRICINFO, "2026-10-20T17:02", "Shami: 'I'm still at my peak, why would I give up hope of playing for India?'",
+                             "Left out of the tour of New Zealand, Shami insists he is fully fit and bowling with good rhythm"),
+    "rabada back": ("Kagiso Rabada", CRICINFO, "2026-10-17T18:31", "Rabada's back to bolster South Africa as Australia chase a series win",
+                    "South Africa get a big boost with their leading quick fit, but both sides wait to name their XIs with the weather uncertain"),
+    "rabada smith": ("Kagiso Rabada", GUARDIAN, "2026-10-17T23:50", "'Testosterone to burn': Kagiso Rabada plays down his 2018 clash with Australia's Steve Smith",
+                     "The bowler says there's no hate as he returns to St George's Park, where the pair clashed during a heated series in Gqeberha"),
+    "rabada toss": ("Kagiso Rabada", CRICINFO, "2026-10-18T08:08", "Lyon left out as Australia go all-pace and bowl first on a damp day",
+                    "Kagiso Rabada returns for South Africa, with Keshav Maharaj squeezed out as they look to level the series"),
+}  # fmt: skip
+
+
+def test_the_same_story_from_several_outlets_is_one_group_and_the_days_other_stories_are_not(world):
+    # BUG-249: the same story from two outlets was almost never grouped, so the Feed and the page repeated it, each
+    # from "1 outlet": numbers didn't count ("179"), "Bavuma's" wasn't Bavuma, and a series' words drowned the rest.
+    maker, _ = world
+    ids = {name: player(name, [side]) for name, side in (("Temba Bavuma", "South Africa"), ("Smriti Mandhana", "India"),
+                                                         ("Mohammed Shami", "India"), ("Kagiso Rabada", "South Africa"))}  # fmt: skip
+    with db_module.session() as s:
+        for key, (who, outlet, at, title, description) in TOLD.items():
+            s.add(FeedCandidate(player_id=ids[who], source="publisher_rss", external_id=news.external_id(f"https://{key}"), url=f"https://example.com/{key}",
+                                candidate={"title": title, "description": description, "channel": outlet, "channel_id": f"https://{outlet}/rss",
+                                           "published": f"{at}:00+00:00"}, features={"outlets": 1}, verdict=said()))  # fmt: skip
+    s = maker()
+    try:
+        rows = s.execute(select(FeedCandidate.id, FeedCandidate.player_id, FeedCandidate.url, FeedCandidate.candidate)).all()
+        published = {r.id: datetime.fromisoformat(r.candidate["published"]) for r in rows}
+        found = rank._stories(s, rows, published)  # pyright: ignore[reportPrivateUsage]
+    finally:
+        s.close()
+    key = {r.id: r.url.removeprefix("https://example.com/") for r in rows}
+    groups = {frozenset(key[g] for g in group) for _, group in found.values()}
+    together = [{"bavuma 179, live", "bavuma 179", "bavuma 179, cricinfo", "bavuma 179, hindu"}, {"mandhana series", "mandhana series, cricinfo"},
+                {"shami hope", "shami hope, cricinfo"}]  # fmt: skip
+    assert groups == {*map(frozenset, together), *(frozenset([k]) for k in TOLD if not any(k in t for t in together))}
+    outlets = {key[r]: n for r, (n, _) in found.items()}
+    assert (outlets["bavuma 179, hindu"], outlets["shami hope"], outlets["bavuma day 2"], outlets["mandhana era"]) == (3, 2, 1, 1)
+
+
 def test_removing_a_player_takes_their_stories_and_the_prune_keeps_only_the_evergreen_old_ones(world):
     _, feeds = world
     asha = player("Asha Verma", ["Riverside XI"])
