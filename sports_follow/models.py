@@ -450,7 +450,8 @@ class FeedCandidate(Base):
     features: Mapped[dict] = mapped_column(JSONB, default=dict)
     fetched_at: Mapped[datetime] = _now()
     checked_at: Mapped[datetime] = _now()  # when the source last said it's still there and still plays here
-    verdict: Mapped[dict | None] = mapped_column(JSONB)  # the judge's (L1), once it has read it
+    # The judge's (L1), once it has read it. None is SQL's NULL, which the judge's queue reads (rank.judge), not JSON's null.
+    verdict: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
     # The ranking's number (rank.py), from the verdict, the features and the channel's trust; NULL: never served.
     score: Mapped[float | None] = mapped_column(Float)
     judged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

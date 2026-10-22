@@ -50,7 +50,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -102,7 +102,9 @@ DAYS = (TODAY, YESTERDAY, THIS_WEEK, THIS_MONTH, EARLIER)  # the fan's Feed's gr
 PAGE = 20  # items on a page of the fan's Feed, unless the app asks for fewer (or up to MAX_PAGE)
 MAX_PAGE = 50
 CURSOR_AGE = timedelta(days=2)  # a cursor older than this carries on in today's order, from its last item
-CURSOR_TAIL = 5  # a page's last items its cursor keeps: the next page carries on after the last of them still there
+# The last items served that a page's cursor keeps (_served): the next page carries on after each player's last of them.
+CURSOR_TAIL = PAGE
+CURSOR_LENGTH = 600  # a cursor's characters at most (the route's limit): CURSOR_TAIL items' ids and its time and place fit
 FOLLOWING, FOR_YOU = "following", "for_you"  # the fan's Feed's tabs (page): their players only, or mixed with others
 TABS = (FOLLOWING, FOR_YOU)
 # For you: of every MIX[0] + MIX[1] items, MIX[0] from players the fan follows and MIX[1] from players they don't, while
@@ -458,42 +460,61 @@ def page(db: Session, fan: str, player: int | None = None, cursor: str | None = 
     every few items: those of the last OTHERS_WINDOW best first whatever their day, in turns, then older ones by day;
     with a player picked it's FOLLOWING's.
 
-    cursor: where the last page ended (Page.cursor), which carries on after its last item (the last of its last few
-    still in the feed, should it have left every fan's since) in the order as it was at the cursor's time: its days and fading, what the fan had hidden by then (an item hidden since keeps its place,
-    unserved), and only the rows that had come in by then (a newer one waits for the next first page). The judge's
-    scores aren't kept with it, so a rescore meanwhile (views growing) can still move an item across the page's end,
-    and For you's others are chosen again (a follow meanwhile moves a player across). ValueError for a cursor this
-    never made, or a tab that isn't one."""
+    cursor: where the last page ended (Page.cursor), which carries on with what the pages before didn't serve
+    (_served: each player's items after their last one served, so one gone from every fan's feed since doesn't take
+    the item that moves up into its place with it) in the order as it was at the cursor's time: its days and fading,
+    what the fan had hidden by then (an item hidden since keeps its place, unserved), and only the rows that had come
+    in by then (a newer one waits for the next first page). The judge's scores aren't kept with it, so a rescore
+    meanwhile (views growing) can still move an item across the page's end. For you's others are chosen again for
+    each page: one the fan follows meanwhile carries on among their own players from their last one served, and one
+    new among them comes in where the last page ended. ValueError for a cursor this never made, or a tab that isn't one."""
     if tab not in TABS:
         raise ValueError(f"The feed's tabs are {', '.join(TABS)}.")
     real = now or datetime.now(timezone.utc)
-    at, start, after = _read_cursor(cursor, real) if cursor else (real, 0, ())
+    at, offset, after = _read_cursor(cursor, real) if cursor else (real, 0, ())
     limit = max(0, min(limit, MAX_PAGE))
     everyone, circles = _everyone(db, fan, at, tz, player, cursor is not None, mix=tab == FOR_YOU and player is None)
     ordered = [(e, m, gone) for e, m, gone in everyone if player is None or e.player.id == player]
-    if after:
-        # After the last of the page's last items still in the feed: one gone from every feed since (an admin's hide,
-        # the weekly check, fans' apps saying it won't play) takes its place with it, so nothing after it is skipped.
-        # None of them still there: as many places back as they were.
-        place = {e.item.id: i for i, (e, _, _) in enumerate(ordered)}
-        start = next((place[i] + 1 for i in reversed(after) if i in place), max(0, start - len(after)))
+    served = _served(ordered, after, offset) if after else set()  # places in it of what the earlier pages served
     chunk: list[tuple[Entry, int | None]] = []
-    end = start
+    end = 0
     while end < len(ordered) and len(chunk) < limit:
         e, m, gone = ordered[end]
-        end += 1
-        if not gone:
+        if not gone and end not in served:
             chunk.append((e, m))
+            served.add(end)
+        end += 1
     moments = _moments(db, {m for _, m in chunk if m is not None})
     items = []
     for e, m in chunk:
         if m in moments:
             e = e.model_copy(update={"moment": moments[m].title, "match": moments[m].url if moments[m].url.startswith("/match/") else None})
         items.append(e)
-    more = any(not gone for _, _, gone in ordered[end:])
-    nxt = _write_cursor(at, end, [e.item.id for e in items[-CURSOR_TAIL:]]) if items and more else None
+    more = any(not gone and i not in served for i, (_, _, gone) in enumerate(ordered) if i >= end)
+    nxt = _write_cursor(at, end, [ordered[i][0].item.id for i in sorted(served)[-CURSOR_TAIL:]]) if items and more else None
     newest = max((c.newest for c in circles if c.newest), default=None)
     return Page(items=items, cursor=nxt, count=sum(not gone for _, _, gone in ordered), newest=newest, players=circles, tab=tab, layout=layout())
+
+
+def _served(ordered: list[tuple[Entry, int | None, bool]], last: Sequence[str], offset: int) -> set[int]:
+    """The places in the feed's order of what the pages before served, from the last few they served (a cursor's, in
+    their order) and how far they read (offset). Something gone from every feed since (an admin's hide, the weekly
+    check, fans' apps saying it won't play) closes the players' turns up round its gap (_turns, _mix), so items move
+    up past where the last page ended; but each player's own items keep their order. So it's each player's items up
+    to their last one among those last few still there, and for a player with none of them, whatever comes before
+    the first of them (less the places of those ahead of it now gone). None of them still there: the first offset
+    less as many places as there were of them."""
+    place = {e.item.id: i for i, (e, _, _) in enumerate(ordered)}
+    there = [place[i] for i in last if i in place]
+    if not there:
+        return set(range(max(0, offset - len(last))))
+    # Those gone ahead of the first still there held places a player with none of them left may have moved up into.
+    first = min(there) - next(n for n, i in enumerate(last) if i in place)
+    upto: dict[int, int] = {}  # each player's last place among them
+    for i in there:
+        who = ordered[i][0].player.id
+        upto[who] = max(upto.get(who, i), i)
+    return {i for i, (e, _, _) in enumerate(ordered) if i <= upto.get(e.player.id, first - 1)}
 
 
 def layout() -> str:
@@ -505,7 +526,8 @@ def layout() -> str:
 
 def others(db: Session, followed: Sequence[int], now: datetime) -> dict[int, int]:
     """The players For you mixes in for a fan who follows these, OTHERS at most, each with its tier, in order: of the
-    players the Feed serves a video of, in a sport that runs, those the fan doesn't follow; the fan's sports first
+    players the Feed serves a video of, in a sport that runs, followed by someone or in the pool now (feedpool.ids:
+    one who left it isn't read again, candidates.check, and soon goes), those the fan doesn't follow; the fan's sports first
     (every sport alike for one who follows nobody), then those with a big moment in the last BIG_FOR (a key one of
     BIG_MOMENT or more, not taken back), then the most followed on the app (by signed-in fans, then by anyone:
     models.followers), then by the pool's order (feedpool.ids:
@@ -523,7 +545,7 @@ def others(db: Session, followed: Sequence[int], now: datetime) -> dict[int, int
                                                         Moment.created_at <= now, Moment.kind.not_in(rank.NOT_A_HEAD), Moment.id.not_in(taken_back))))  # fmt: skip
     place = {pid: i for i, pid in enumerate(feedpool.ids())}
     pool = [(2 * (bool(theirs) and sports.family(sport) not in theirs) + (pid not in big), -accounts, -follows, place.get(pid, len(place)), pid)
-            for pid, sport, accounts, follows in rows if pid not in mine and sports.on(sport)]  # fmt: skip
+            for pid, sport, accounts, follows in rows if pid not in mine and sports.on(sport) and (follows or pid in place)]  # fmt: skip
     return {pid: tier for tier, *_, pid in sorted(pool)[:OTHERS]}
 
 
@@ -554,6 +576,7 @@ def _everyone(db: Session, fan: str, now: datetime, tz: int, player: int | None 
     if not ids and not strangers:
         return [], []
     everyone = [*ids, *strangers]
+    off = _off(db, ids)  # a turned-off sport's: not even their card's news (others() takes none of theirs)
     cards = {pid: card for pid, card in db.execute(select(PlayerCard.player_id, PlayerCard.card).where(PlayerCard.player_id.in_(everyone))).all()}
     kept = judged(db, everyone, now)
     # By item, whichever player it was hidden from: a story two players hold is one card.
@@ -570,7 +593,7 @@ def _everyone(db: Session, fan: str, now: datetime, tz: int, player: int | None 
     followed = set(ids)
     for pid in everyone:
         card = cards.get(pid)
-        if card is None or pid in whose:
+        if card is None or pid in whose or pid in off:
             continue
         held = kept.get(pid, [])
         if pid in followed:
@@ -684,15 +707,15 @@ def _day(c: Candidate, now: datetime, tz: int) -> str:
 
 
 def _write_cursor(at: datetime, offset: int, last: Sequence[str]) -> str:
-    """A next page's cursor: the time the feed was put in order at, how many items came before, and the page's last
-    few (CURSOR_TAIL), the last of them last."""
+    """A next page's cursor: the time the feed was put in order at, how far it was read, and the last items served
+    (CURSOR_TAIL), in their order."""
     raw = json.dumps([int(at.timestamp()), offset, list(last[-CURSOR_TAIL:])], separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
 def _read_cursor(cursor: str, now: datetime) -> tuple[datetime, int, tuple[str, ...]]:
-    """A cursor's time (now instead, once it's over CURSOR_AGE old or ahead of now), offset and the page's last few
-    items, the last of them last (one made before it kept them all: its last alone); ValueError for one this never made."""
+    """A cursor's time (now instead, once it's over CURSOR_AGE old or ahead of now), offset and the last items served,
+    in their order (one made before it kept them: its last alone); ValueError for one this never made."""
     try:
         raw = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
     except (binascii.Error, ValueError, UnicodeDecodeError) as exc:
@@ -825,16 +848,30 @@ def _vouched(db: Session, found: tuple[str, str]) -> bool:
 
 def _candidates(db: Session, player_id: int, card: dict[str, Any], now: datetime | None = None) -> list[Candidate]:
     """Everything the player's feed could show anyone: the judge's kept items, then the card's news, unless the
-    judge kept stories of theirs (news.py), which are the news then."""
+    judge kept stories of theirs (news.py), which are the news then. Nothing while their sport is turned off."""
+    if _off(db, [player_id]):
+        return []
     kept = judged(db, [player_id], now).get(player_id, [])
     return [*kept, *([] if any(c.item.kind == "news" for c in kept) else _news(card))]
 
 
+def _off(db: Session, player_ids: Iterable[int]) -> set[int]:
+    """The players among these whose sport is turned off (sports.on): their feed is empty, the card's news too, until
+    it's back on. judged() has nothing of theirs, which mustn't be read as nothing judged yet."""
+    ids = sorted(set(player_ids))
+    if not ids:
+        return set()
+    return {pid for pid, sport in db.execute(select(Player.id, Player.sport).where(Player.id.in_(ids))).all() if not sports.on(sport)}
+
+
 def _unhidden(db: Session, fan: str, player_id: int, candidates: list[Candidate]) -> list[Candidate]:
-    """The candidates this fan hasn't hidden, each once, safe to link to."""
+    """The candidates this fan hasn't hidden, each once, safe to link to. A video two players hold is one video: what
+    the fan said of it under either (not interested, a report, won't play) hides it under both, as their Feed does;
+    "not about this player" only under the player it was said of, whose teammate it may well be about."""
     if not candidates:
         return []
-    return _unseen(candidates, set(db.scalars(select(FeedFeedback.item_id).where(FeedFeedback.fan_id == fan, FeedFeedback.player_id == player_id))))
+    said = or_(FeedFeedback.player_id == player_id, FeedFeedback.verdict != "not_about_player")
+    return _unseen(candidates, set(db.scalars(select(FeedFeedback.item_id).where(FeedFeedback.fan_id == fan, said))))
 
 
 def _unseen(candidates: list[Candidate], hidden: set[str]) -> list[Candidate]:

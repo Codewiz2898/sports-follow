@@ -17,8 +17,9 @@ among its channel's latest.
 
 A day after a video is kept, its views and likes are read again (second_reads), so its pace can be told from the
 two reads; the curator reads them again every few hours while it's under two days old (fresh_reads), for the
-ranking (rank.py). Every stored video is read again once a week (check), and dropped once it's gone: removed, made
-private, no longer embeddable, age-restricted, made for kids, or no longer playing in FEED_COUNTRY.
+ranking (rank.py). Every stored video of a followed or pool player is read again once a week (check), and dropped
+once it's gone: removed, made private, no longer embeddable, age-restricted, made for kids, or no longer playing in
+FEED_COUNTRY. One nobody follows any more and the pool has left is never read again, and goes within a month.
 
 A candidate is one row per player and video, so it goes with the player (ON DELETE CASCADE).
 """
@@ -32,7 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from sqlalchemy import delete, exists, func, null, or_, select
+from sqlalchemy import delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -506,15 +507,10 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
     stored: dict[str, dict[str, Any]] = {}
     have: set[tuple[int, str]] = set()
     with db.session() as session:
-        rows = session.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features,
-                                      FeedCandidate.unplayable_at, FeedCandidate.review)
+        rows = session.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features)
                                .where(FeedCandidate.source == source.system, FeedCandidate.external_id.in_(ids)))  # fmt: skip
-        for pid, vid, url, kept, numbers, unplayable, said in rows:
-            stored.setdefault(vid, {"url": url, "candidate": kept or {}, "features": numbers or {}, "unplayable_at": unplayable, "review": None})
-            if unplayable is not None:  # a fan's app said it won't play inside it (feed.unplayable): every row of it keeps that
-                stored[vid]["unplayable_at"] = unplayable
-            if said == "hidden":  # an admin hid the video (rank.review): so is every row of it
-                stored[vid]["review"] = said
+        for pid, vid, url, kept, numbers in rows:
+            stored.setdefault(vid, {"url": url, "candidate": kept or {}, "features": numbers or {}})
             have.add((pid, vid))
     new = [f for f in found if (f.player_id, f.upload.video_id) not in have]
     if not new:
@@ -528,6 +524,7 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
     counts["refused"] = len(why)
     stored_for: list[str] = []  # a sport for each row stored
     with db.session() as session:
+        _marks(session, source, stored)  # as they are now, not before the source was asked: a hide meanwhile holds
         for f in new:
             vid = f.upload.video_id
             if vid in skip or vid in why:
@@ -555,6 +552,21 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
                 log.info("feed: %s %s for player %s not kept: %s", source.system, vid, f.player_id, type(exc).__name__)
     feedstats.keep_counted(stream, found, have, skip, why, facts, stored_for)
     return counts
+
+
+def _marks(session: Session, source: VideoSource, stored: dict[str, dict[str, Any]]) -> None:
+    """What every row of each stored video keeps, read into stored: whether a fan's app said it won't play inside it
+    (feed.unplayable) and whether an admin hid the video (rank.review), on any row of it."""
+    for vid in stored:
+        stored[vid] |= {"unplayable_at": None, "review": None}
+    if not stored:
+        return
+    for vid, unplayable, said in session.execute(select(FeedCandidate.external_id, FeedCandidate.unplayable_at, FeedCandidate.review)
+                                                 .where(FeedCandidate.source == source.system, FeedCandidate.external_id.in_(sorted(stored)))):  # fmt: skip
+        if unplayable is not None:
+            stored[vid]["unplayable_at"] = unplayable
+        if said == "hidden":
+            stored[vid]["review"] = said
 
 
 def poll(now: datetime | None = None) -> dict[str, int]:
@@ -647,8 +659,7 @@ def _again(source: VideoSource, ids: list[str], now: datetime) -> dict[str, int]
                 if (row.candidate or {}).get("paid") is not paid:
                     row.candidate = {**(row.candidate or {}), "paid": paid}
                     if paid:  # declared after it was judged: unserved until the judge says again (the rules: a promo)
-                        # SQL's NULL (null()), which the judge's queue reads (rank.judge): None would store JSON's null.
-                        row.verdict, row.judged_at, row.score = null(), None, None
+                        row.verdict, row.judged_at, row.score = None, None, None  # back in the judge's queue (rank.judge)
                 row.checked_at = now
         counts["read"] += len(part) - len(dead)
         counts["dropped"] += len(dead)
@@ -684,10 +695,12 @@ def fresh_reads(now: datetime | None = None) -> dict[str, int]:
 
 
 def check(now: datetime | None = None) -> dict[str, int]:
-    """Read again every stored video not read for RECHECK_AFTER, for each running video source, and drop those
-    gone (removed, private, no longer embeddable, age-restricted, made for kids, or blocked in FEED_COUNTRY). Run daily, so each video is read
-    once a week, and a run cut short is taken up the next day. A row no check has read for STALE_AFTER goes
-    too, whatever its source's state."""
+    """Read again every stored video not read for RECHECK_AFTER of a player someone follows or the pool holds
+    (feedpool.ids), for each running video source, and drop those gone (removed, private, no longer embeddable,
+    age-restricted, made for kids, or blocked in FEED_COUNTRY). Run daily, so each video is read once a week, and a
+    run cut short is taken up the next day. A row no check has read for STALE_AFTER goes too, whatever its source's
+    state: so a player nobody follows any more and the pool has left (whose videos aren't fetched either) has
+    theirs go within a month, unread."""
     now = now or datetime.now(timezone.utc)
     totals = {"read": 0, "dropped": 0}
     # Rows no check could read for a month (their source turned off, or without its key) go: what's shown must
@@ -699,9 +712,10 @@ def check(now: datetime | None = None) -> dict[str, int]:
     if stale:
         log.info("feed: dropped %d candidate(s) no check has read for %d days", len(stale), STALE_AFTER.days)
         totals["dropped"] += len(stale)
+    pool = feedpool.ids()
     for source in videos():
         with db.session() as session:
-            ids = _stale(session, source, now)
+            ids = _stale(session, source, now, pool)
         counts = _again(source, ids, now)
         totals["read"] += counts["read"]
         totals["dropped"] += counts["dropped"]
@@ -709,9 +723,11 @@ def check(now: datetime | None = None) -> dict[str, int]:
     return totals
 
 
-def _stale(session: Session, source: VideoSource, now: datetime) -> list[str]:
-    """The source's stored videos not read for RECHECK_AFTER, least lately read first."""
+def _stale(session: Session, source: VideoSource, now: datetime, pool: Iterable[int] = ()) -> list[str]:
+    """The source's stored videos not read for RECHECK_AFTER, least lately read first, of a player someone follows or
+    in the pool (these ids)."""
     oldest = func.min(FeedCandidate.checked_at)
+    wanted = or_(exists().where(Follow.player_id == FeedCandidate.player_id), FeedCandidate.player_id.in_(list(pool)))
     return list(session.scalars(
-        select(FeedCandidate.external_id).where(FeedCandidate.source == source.system).group_by(FeedCandidate.external_id)
+        select(FeedCandidate.external_id).where(FeedCandidate.source == source.system, wanted).group_by(FeedCandidate.external_id)
         .having(oldest <= now - RECHECK_AFTER).order_by(oldest).limit(READS_PER_RUN)))

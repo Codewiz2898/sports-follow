@@ -170,6 +170,30 @@ def test_the_weekly_check_drops_the_videos_gone_and_reads_the_rest_again(world):
         assert row is not None and row.checked_at == week and row.features["views"] == 9000 and len(row.features["reads"]) == 2
 
 
+def test_the_weekly_check_reads_followed_and_pool_players_videos_and_one_who_left_the_pool_ages_out(world):
+    """BUG-127: a pool player who left the pool, and whom nobody follows, kept their rows for good: every week's check
+    read their videos again (YouTube's units), so they never aged out, and rows grew with the pool's churn. Only
+    the videos of players followed or in the pool are read again now; the rest go once a month unread (STALE_AFTER)."""
+    import json
+
+    from sports_follow import feedpool
+
+    kohli = player("Virat Kohli")
+    mandhana, rohit = player("Smriti Mandhana", followed=False), player("Rohit Sharma", followed=False)
+    world.redis.data[feedpool.POOL_KEY] = json.dumps({"players": {"cricket": [mandhana, rohit]}})
+    names = {"kohli000001": "Virat Kohli's fifty", "mandhana001": "Smriti Mandhana's 117", "rohit000001": "Rohit Sharma's pull"}
+    world.uploads[CHANNEL] = uploads(*((v, t, "") for v, t in names.items()))
+    world.videos.update({v: video(v) for v in names})
+    candidates.poll(NOW)
+    assert rows() == [(kohli, "kohli000001"), (mandhana, "mandhana001"), (rohit, "rohit000001")]
+    world.redis.data[feedpool.POOL_KEY] = json.dumps({"players": {"cricket": [mandhana]}})  # Rohit leaves the pool
+    world.asked.clear()
+    assert candidates.check(NOW + timedelta(days=7)) == {"read": 2, "dropped": 0}
+    assert [r.url.params["id"] for r in world.asked if r.url.path.endswith("/videos")] == ["kohli000001,mandhana001"]
+    assert candidates.check(NOW + timedelta(days=31)) == {"read": 2, "dropped": 1}  # a month unread: gone
+    assert rows() == [(kohli, "kohli000001"), (mandhana, "mandhana001")]
+
+
 def test_removing_a_player_takes_their_candidates_and_a_poll_doesnt_bring_them_back(world):
     kohli = player("Virat Kohli")
     bumrah = player("Jasprit Bumrah")
@@ -383,6 +407,31 @@ def test_a_video_an_admin_hid_stays_hidden_when_found_for_another_player(world):
     with db_module.session() as s:
         said = dict(s.execute(select(FeedCandidate.player_id, FeedCandidate.review)).all())
     assert said == {kohli: "hidden", bumrah: "hidden"}
+
+
+def test_a_video_an_admin_hides_while_a_poll_asks_youtube_is_hidden_for_the_player_it_keeps_it_for(world, monkeypatch):
+    """BUG-288: a poll read whether a stored video was hidden, asked YouTube about the new ones, and then kept the stored
+    one for another player as it had read it: an admin's hide (or fans' apps' "won't play") meanwhile missed that row."""
+    from sports_follow import rank
+
+    kohli = player("Virat Kohli")
+    world.uploads[CHANNEL] = uploads(("kohlibumrah", "Kohli and Bumrah on the tour", ""), ("bumrahyork1", "Bumrah's yorker", ""))
+    world.videos["kohlibumrah"], world.videos["bumrahyork1"] = video("kohlibumrah"), video("bumrahyork1")
+    candidates.poll(NOW)
+    bumrah = player("Jasprit Bumrah")
+    asked = SOURCE.facts
+
+    def facts(ids, *args, **kwargs):  # an admin hides the stored one while YouTube is asked about the new one
+        with db_module.session() as s:
+            row = s.scalar(select(FeedCandidate.id).where(FeedCandidate.player_id == kohli))
+            assert row is not None and rank.review(s, row, "hidden")
+        return asked(ids, *args, **kwargs)
+
+    monkeypatch.setattr(SOURCE, "facts", facts)
+    assert candidates.poll(NOW + timedelta(minutes=30))["kept"] == 2
+    with db_module.session() as s:
+        said = {(p, v): r for p, v, r in s.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.review))}
+    assert said == {(kohli, "kohlibumrah"): "hidden", (bumrah, "kohlibumrah"): "hidden", (bumrah, "bumrahyork1"): None}
 
 
 def test_a_poll_keeps_pool_players_videos_and_a_teams_video_for_its_players_as_their_teams(world):
