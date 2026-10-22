@@ -328,6 +328,10 @@ class Adapter:
     id_pattern: re.Pattern[str] = DIGITS  # the shape of its athlete ids
     fixture_pattern: re.Pattern[str] = DIGITS  # and of its games' (Fixture.source_id), for match(): refused before anything is sent
     preview_fixtures = True  # False: a preview before following shows stats only (fixtures take many reads)
+    # True for a source whose game may go on again after it said it was over (a PUBG lobby, called over after 90
+    # minutes without a match, joined by one after a longer break): a refresh that finds it on again puts it back to
+    # live, and its next poll tells what happened since (structured.reopened). Otherwise a game seen over stays over.
+    final_may_reopen = False
     # How a player's page words this source's live scores, where the app's general sentences don't fit (a
     # source whose standings come after each match): live_note under the live board, lag_note at the page's
     # foot. Sent in the card's live block; None leaves the app's own.
