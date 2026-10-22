@@ -170,11 +170,11 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   useEffect(() => { reloadMatches() }, [reloadMatches])
 
   /** The fan's sports as the server has them now; true once it has said them (a list asked for before a save of this
-   * app's says what it replaced, so it isn't taken). */
+   * app's says what it replaced, so it isn't taken, and they're asked for again: the save may have failed). */
   const reloadSports = useCallback(() => {
     const asked = sportsSaves.current
     return api.mySports().then((r) => {
-      if (savingSports.current || asked !== sportsSaves.current) return true
+      if (savingSports.current || asked !== sportsSaves.current) return false
       setSports(r.sports)
       setSportsLoaded(true)
       return true
