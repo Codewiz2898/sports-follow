@@ -72,6 +72,10 @@ export default function ChessAnalysis({ state, live, flip, opening, leave }: { s
   const dragged = useRef(false)  // a drag just played (or dropped): the click it ends with isn't a tap
   const refocus = useRef(false)  // the keyboard was on what's gone (a promotion's pieces): back to the board
   const outside = useRef(false)  // a press that began on the backdrop (outside the dialog): its click closes
+  // The fan moves along the board's squares by keyboard: they opened it by keyboard, came onto it with Tab, or
+  // picked a piece there with Enter or Space. Until then (a mouse's or a finger's fan) the arrow keys step along
+  // the line there too; a press of the pointer ends it.
+  const keyed = useRef(Boolean(opening.keyed))
   // Its keys (shortcuts, below), heard wherever the keyboard is while it's open: a tapped button that goes leaves
   // it on the page's body, under the dialog.
   const heard = useRef<(e: globalThis.KeyboardEvent) => void>(() => {})
@@ -242,9 +246,10 @@ export default function ChessAnalysis({ state, live, flip, opening, leave }: { s
     window.addEventListener('pointerup', up)
     window.addEventListener('pointercancel', up)
   }
-  // On the board, the arrow keys move the keyboard along it as it's drawn.
+  // On the board, the arrow keys move the keyboard along it as it's drawn, once the fan moves on it by keyboard.
   const keys = (e: KeyboardEvent) => {
-    if (promoting || e.key === 'Escape') return  // the keys stay on the pieces to promote to; Escape is the dialog's
+    if (e.key === 'Enter' || e.key === ' ') keyed.current = true
+    if (promoting || e.key === 'Escape' || !keyed.current) return  // the keys stay on the pieces to promote to; Escape is the dialog's
     const by = (KEYS as Record<string, number | undefined>)[e.key]
     const at = squares.findIndex((s) => s.name === stop)
     if (by == null || at < 0 || (Math.abs(by) === 1 && Math.floor((at + by) / 8) !== Math.floor(at / 8)) || at + by < 0 || at + by > 63) return
@@ -253,9 +258,11 @@ export default function ChessAnalysis({ state, live, flip, opening, leave }: { s
     setCursor(name)
     board.current?.querySelector<HTMLElement>(`[data-sq="${name}"]`)?.focus()
   }
-  // Anywhere but the board: left and right step along the line, Home and End go to its ends, F flips the board.
+  // Anywhere but a board the fan moves on by keyboard: left and right step along the line, Home and End go to its
+  // ends, F flips the board.
   heard.current = (e) => {
-    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || promoting || board.current?.contains(e.target as Node)) return
+    if (e.key === 'Tab') keyed.current = true
+    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || promoting || (keyed.current && board.current?.contains(e.target as Node))) return
     const to = e.key === 'ArrowLeft' ? line.at - 1 : e.key === 'ArrowRight' ? line.at + 1 : e.key === 'Home' ? 0 : e.key === 'End' ? line.plies.length : null
     if (to != null) {
       e.preventDefault()
@@ -298,7 +305,10 @@ export default function ChessAnalysis({ state, live, flip, opening, leave }: { s
         else leave()
       }}
       onClose={leave}
-      onPointerDown={(e) => { outside.current = onBackdrop(e) }}
+      onPointerDown={(e) => {
+        outside.current = onBackdrop(e)
+        keyed.current = false
+      }}
       onClick={(e) => { if (outside.current && onBackdrop(e)) leave() }}
     >
       <div className="chess-study-box">

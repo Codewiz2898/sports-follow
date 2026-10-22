@@ -40,8 +40,10 @@ export function playable(fen?: string | null): boolean {
 
 /** Where an analysis starts: the game's position when the fan opened it (`base`, with the move that led there),
  * or a finished game's moves (SAN, from its start) at a ply of theirs. `asked` changes with each new start, the
- * board open or not; `focus` puts the keyboard on the board (the web's, opened by its button, not from the moves). */
-export interface Opening { base: string; last?: string | null; moves?: string[] | null; ply?: number; asked: number; focus?: boolean }
+ * board open or not; `focus` puts the keyboard on the board (the web's, opened by its button, not from the moves),
+ * and `keyed` says the button was pressed by keyboard (Enter or Space): the arrow keys move along the board's
+ * squares from the start, not along the line. */
+export interface Opening { base: string; last?: string | null; moves?: string[] | null; ply?: number; asked: number; focus?: boolean; keyed?: boolean }
 
 /** The line an analysis starts with, or null for one that can't be played here: moves that don't replay (the
  * Moves list offers only those that do), or a position that isn't one, or not by the standard rules. */
@@ -214,12 +216,13 @@ export function numbered(sans: string[], fen: string): string {
 const CASTLES: Record<string, string> = { e1h1: 'e1g1', e1a1: 'e1c1', e8h8: 'e8g8', e8a8: 'e8c8' }
 
 /** A game's moves on its match page (ChessPage: in pairs, and while it's on those its source added since, as the
- * board gave each, "d5e3"), replayed as chess from the start, each in SAN and numbered (numberedMoves), with the
+ * board gave each, "d5e3"), replayed as chess from the start, each in SAN and numbered (numberedMoves) with the
+ * position after it and its squares (the web's board steps back along them), with the
  * board's own last move where they're one short of it: a page's look lags the board a little. Null where they
  * don't replay (a Freestyle game's, or one set up from a position): the pairs show as words then. A finished
  * game's must end where its board does; a live game's may lag it. The match page's list, the web's and the
  * Android app's alike. */
-export function replayedMoves(page: Pick<ChessPage, 'moves' | 'more'> | undefined, state: Pick<ChessState, 'fen' | 'last_move' | 'result'>): { san: string; number: string | null; said: string }[] | null {
+export function replayedMoves(page: Pick<ChessPage, 'moves' | 'more'> | undefined, state: Pick<ChessState, 'fen' | 'last_move' | 'result'>): { san: string; number: string | null; said: string; fen: string; from: string; to: string }[] | null {
   const pairs = page?.moves ?? []
   const added = page?.more ?? []
   const from = pairs.length ? gameMoves(pairs) : []
@@ -233,7 +236,8 @@ export function replayedMoves(page: Pick<ChessPage, 'moves' | 'more'> | undefine
     if (samePosition(fenAt(on), fen)) game = on
   }
   if (result && !samePosition(fenAt(game), fen)) return null
-  return numberedMoves(game.plies.map((m) => m.san), game.start)
+  const { plies } = game
+  return numberedMoves(plies.map((m) => m.san), game.start).map((m, i) => ({ ...m, fen: plies[i].fen, from: plies[i].from, to: plies[i].to }))
 }
 
 /** A line with moves in UCI (an engine's, or a live board's as its source gives them) played on from where the
