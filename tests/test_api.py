@@ -1813,6 +1813,29 @@ def test_a_fans_first_links_tags_are_kept_once_and_only_in_their_shape(api):
     assert len(kept()) == 1
 
 
+def test_league_invites_are_looked_up_so_many_times_an_address_and_opened_only_by_a_fan_with_their_cookie(api, monkeypatch):
+    """BUG-110: the invite page's limit was a fan's, and a request with no cookie is a new fan each time, so a script
+    could try code after code without end; and each of its requests counted as the invite opened. Now an address
+    looks up so many an hour, and a fan the request itself made up (no cookie) doesn't count as opening it."""
+    from sports_follow import predictions
+
+    opened: list[tuple[str, bool]] = []
+
+    def invite(db, code, fan, counted=True):
+        opened.append((code, counted))
+        if code != "38KWAS":
+            raise predictions.Refused(404, "No league has that invite: ask for a new link.")
+        return {"code": code, "name": "Derby", "members": 2, "by": "Asha", "member": False}
+
+    monkeypatch.setattr(predictions, "invite", invite)
+    monkeypatch.setattr(server, "INVITES_PER_ADDRESS", 5, raising=False)
+    tries = [api.call("GET", f"/api/leagues/ZZZZZ{i}/invite", address=PUBLIC).status_code for i in range(6)]
+    assert tries == [404] * 5 + [429]
+    assert api.call("GET", "/api/leagues/38KWAS/invite", address="81.2.69.143").status_code == 200  # another address isn't held up
+    assert api.call("GET", "/api/leagues/38KWAS/invite", fan="asha-phone", address="81.2.69.144").status_code == 200
+    assert opened[-2:] == [("38KWAS", False), ("38KWAS", True)]  # opened: by the fan who came with their cookie only
+
+
 def test_a_video_that_wont_play_inside_the_app_is_said_so_of_so_many_an_hour_and_odd_ones_are_refused_plainly(api, monkeypatch):
     """A fan's app says a Feed video's player refused it (BHA-380): it leaves their Feed (feed.said_unplayable), and
     it's their network's vote on whether it leaves everyone's (BHA-422): feed.UNPLAYABLE_VOTES networks saying so take

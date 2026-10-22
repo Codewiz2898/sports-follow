@@ -656,16 +656,17 @@ def leave(db: Session, fan: str, code: str) -> None:
         db.execute(delete(League).where(League.id == league.id))
 
 
-def invite(db: Session, code: str, fan: str | None) -> dict[str, Any]:
+def invite(db: Session, code: str, fan: str | None, counted: bool = True) -> dict[str, Any]:
     """What an invite link shows anyone (/j/<code>): the league's name, how many are in it, who made it (by their
-    name in it) and whether this fan's in it already; counted as opened for a fan who isn't. Raises Refused for no
-    such league. A fan's opening is counted once a day."""
+    name in it) and whether this fan's in it already; counted as opened for a fan who isn't, where `counted` (an
+    account, or a fan whose cookie came with the request: server.league_invite). Raises Refused for no such league.
+    A fan's opening is counted once a day."""
     league = find(db, code)
     if league is None:
         raise Refused(404, "No league has that invite: ask for a new link.")
     names: dict[str, str] = {f: n for f, n in db.execute(select(LeagueMember.fan_id, LeagueMember.name).where(LeagueMember.league_id == league.id))}
     member = fan is not None and fan in names
-    if not member and bus.sync_redis().set(f"league:opened:{league.id}:{fan}", "1", nx=True, ex=OPENED_ONCE):
+    if counted and not member and bus.sync_redis().set(f"league:opened:{league.id}:{fan}", "1", nx=True, ex=OPENED_ONCE):
         db.execute(update(League).where(League.id == league.id).values(opened=League.opened + 1))
     return {"code": league.code, "name": league.name, "members": len(names), "by": names.get(league.owner or ""), "member": member}
 

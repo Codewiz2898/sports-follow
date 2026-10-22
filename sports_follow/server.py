@@ -696,6 +696,8 @@ def set_match_alerts(event_id: RowId, body: dict = Body(...), fan: str = Depends
 LeagueCode = Annotated[str, InPath(min_length=4, max_length=16, pattern=r"^[A-Za-z0-9]+$")]
 LEAGUES_MADE_PER_HOUR = 5  # leagues one fan makes in an hour
 INVITES_PER_HOUR = 60  # invite pages one fan opens, and leagues they join, in an hour: a code can't be guessed by trying them all
+INVITES_PER_ADDRESS = 300  # invite pages opened from one client address in an hour: a request with no cookie is a new fan each time
+INVITES_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
 PICKS_PER_ADDRESS = 300  # picks from one client address in an hour: new fans from one place can't stuff a split
 PICKS_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
 # Fans without an account whose picks on one question count (Pick.counted), from one client address: any device gets
@@ -808,14 +810,20 @@ def league_page(code: LeagueCode, fan: str = Depends(fan_id), db: Session = Depe
 
 
 @app.get("/api/leagues/{code}/invite")
-async def league_invite(code: LeagueCode, fan: str = Depends(fan_id)) -> dict[str, Any]:
+async def league_invite(request: Request, code: LeagueCode, fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of)) -> dict[str, Any]:
     """What an invite link shows anyone: the league's name, how many are in it, who made it, and whether this fan's
-    in it already. INVITES_PER_HOUR a fan an hour."""
-    await _take(f"leagues:invites:{fan}:{int(time.time() // 3600)}", INVITES_PER_HOUR, 7200, "That's a lot of invites for one hour. Try again later.")
+    in it already. INVITES_PER_HOUR a fan an hour, and INVITES_PER_ADDRESS from one address (a request with no cookie
+    is a new fan each time). Counted as opened only for an account, or a fan whose cookie came with it."""
+    hour = int(time.time() // 3600)
+    address = client_address(request)
+    await _take(f"leagues:invites:{fan}:{hour}", INVITES_PER_HOUR, 7200, "That's a lot of invites for one hour. Try again later.")
+    await _take(f"leagues:invites-from:{address or 'unknown'}:{hour}", INVITES_PER_ADDRESS if address else INVITES_UNKNOWN_ADDRESS, 7200,
+                "That's a lot of invites from your network. Try again later.")
+    counted = signed is not None or _cookie_fan(request) == fan
 
     def look(db: Session) -> dict[str, Any]:
         try:
-            return predictions.invite(db, code, fan)
+            return predictions.invite(db, code, fan, counted)
         except predictions.Refused as refused:
             raise _refused(db, refused)
 

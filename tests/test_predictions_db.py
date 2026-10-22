@@ -820,7 +820,8 @@ def test_friends_play_in_a_league_by_its_invite_and_its_table_counts_from_its_ma
     made = asyncio.run(server.make_league({"name": " Chess  gang ", "member": "Arjun"}, "acct-arjun", signed))["league"]
     code = made["code"]
     assert made["name"] == "Chess gang" and re.fullmatch(f"[{predictions.CODE}]{{6}}", code) and made["members"] == 1
-    assert asyncio.run(server.league_invite(code.lower(), "acct-meera"))["invite"] == {"code": code, "name": "Chess gang", "members": 1, "by": "Arjun", "member": False}
+    meera = accounts.Signed(account_id=2, fan_id="acct-meera", session_id=2)
+    assert asyncio.run(server.league_invite(request(), code.lower(), "acct-meera", meera))["invite"] == {"code": code, "name": "Chess gang", "members": 1, "by": "Arjun", "member": False}
     with pytest.raises(server.HTTPException) as unsigned:
         asyncio.run(server.join_league(code, {"member": "Meera"}, "anon", None))
     assert unsigned.value.status_code == 401
