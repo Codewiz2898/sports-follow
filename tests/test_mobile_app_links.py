@@ -1,58 +1,64 @@
-"""Which of the site's addresses the Android app claims (mobile/app.config.ts, Android App Links): its pages, read
-from its routes, and the one-word addresses of campaigns ([slug].tsx), as typed, capitals and all. Not the admin
-panel's, which the app has no screen for: a fan who chose "always open with Slam" got the app's Not found page for
-stann.in/admin (BUG-157). Android's patterns can't say "but not", so the campaigns' one is spelled out around it;
-this checks the config Expo builds, matched as Android matches it. Skipped without Node and mobile/node_modules."""
+"""Which of the site's addresses the Android app claims (mobile/links.js, for app.config.ts: Android App Links): its
+pages, read from its routes, and the one-word addresses of campaigns ([slug].tsx), as typed, capitals and all. Not
+the admin panel's, which the app has no screen for: a fan who chose "always open with Slam" got the app's Not found
+page for stann.in/admin (BUG-157). Android's patterns can't say "but not", so the campaigns' are spelled out around
+it; they're matched here as Android matches them. Skipped without Node."""
 
 from __future__ import annotations
 
 import json
 import re
-import shutil
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
 
+from .test_web_refetch import NODE
+
 MOBILE = Path(__file__).resolve().parent.parent / "mobile"
-NPX = shutil.which("npx")
-pytestmark = pytest.mark.skipif(NPX is None or not (MOBILE / "node_modules" / "expo").exists(), reason="needs Node and mobile/node_modules")
+pytestmark = pytest.mark.skipif(NODE is None, reason="needs Node")
+
+
+@lru_cache(maxsize=1)
+def claimed() -> tuple[dict[str, str], ...]:
+    """What the app claims, as app.config.ts gives Android (its intent filter's data, but the scheme and host)."""
+    script = f"const {{ pages }} = require({json.dumps(str(MOBILE / 'links.js'))}); console.log(JSON.stringify(pages({json.dumps(str(MOBILE / 'src' / 'app'))})))"
+    done = subprocess.run([NODE or "node", "-e", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    return tuple(json.loads(done.stdout))
 
 
 def advanced(pattern: str) -> re.Pattern[str]:
-    """Android's PATTERN_ADVANCED_GLOB as a regular expression: sets with ranges, . for any one, * and + after one
-    character or set; anything else is itself."""
+    """Android's PATTERN_ADVANCED_GLOB as a regular expression: sets with ranges (a "-" before "]" is itself), "."
+    for any one, and * and + after one character or set; anything else is itself."""
     out, i = "", 0
     while i < len(pattern):
-        c = pattern[i]
-        if c == "[":
+        if pattern[i] == "[":
             end = pattern.index("]", i)
             body = pattern[i + 1:end]
-            out += "[" + ("^" + re.escape(body[1:]).replace("\\-", "-") if body.startswith("^") else re.escape(body).replace("\\-", "-")) + "]"
+            negated, body = body.startswith("^"), body.removeprefix("^")
+            out += "[" + ("^" if negated else "") + re.escape(body).replace("\\-", "-").removesuffix("-") + ("\\-" if body.endswith("-") else "") + "]"
             i = end + 1
             continue
-        out += c if c in ".*+" else re.escape(c)
+        out += pattern[i] if pattern[i] in ".*+" else re.escape(pattern[i])
         i += 1
     return re.compile(out)
 
 
-@pytest.fixture(scope="module")
-def claimed() -> list[dict[str, str]]:
-    done = subprocess.run([NPX or "npx", "expo", "config", "--type", "public", "--json"], cwd=MOBILE, capture_output=True, text=True, timeout=120)
-    assert done.returncode == 0, done.stderr
-    (links,) = [f for f in json.loads(done.stdout)["android"]["intentFilters"] if f.get("autoVerify")]
-    return [d for d in links["data"] if "host" not in d]
+def campaigns_take(path: str) -> bool:
+    """Whether the campaigns' patterns ([slug].tsx) take this path."""
+    return any(advanced(d["pathAdvancedPattern"]).fullmatch(path) for d in claimed() if "pathAdvancedPattern" in d)
 
 
-def opens(claimed: list[dict[str, str]], path: str) -> bool:
+def opens(path: str) -> bool:
     """Whether Android opens the app for https://stann.in<path>."""
-    return any(path == d.get("path") or ("pathPrefix" in d and path.startswith(d["pathPrefix"]))
-               or ("pathAdvancedPattern" in d and advanced(d["pathAdvancedPattern"]).fullmatch(path)) for d in claimed)
+    return campaigns_take(path) or any(path == d.get("path") or ("pathPrefix" in d and path.startswith(d["pathPrefix"])) for d in claimed())
 
 
-def test_the_app_opens_campaigns_and_its_pages_but_not_the_admin_panel(claimed):
+def test_the_app_opens_campaigns_and_its_pages_but_not_the_admin_panel():
     for path in ("/gukesh", "/Gukesh", "/wcc-2026", "/a", "/ad", "/adm", "/admi", "/admins", "/administer", "/adm1n", "/badmin", "/2026",
                  "/", "/search", "/player/7", "/match/espn_soccer/740912", "/team/3", "/feed"):
-        assert opens(claimed, path), path
+        assert opens(path), path
     for path in ("/admin", "/Admin", "/ADMIN", "/admin/", "/admin/feed", "/me/leagues", "/j/abcd", "/api/share.png", "/gukesh/more"):
-        assert not opens(claimed, path), path
+        assert not opens(path), path

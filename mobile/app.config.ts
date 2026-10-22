@@ -7,18 +7,19 @@
 // notifications.
 
 //
-// The site's links open in the app (Android App Links): its pages, read from its routes (src/app), so a new page
-// needs no second list. A folder is every address under it, and [slug].tsx is the one-word addresses
+// The site's links open in the app (Android App Links): its pages, read from its routes (src/app) by links.js, so a
+// new page needs no second list. A folder is every address under it, and [slug].tsx is the one-word addresses
 // (campaigns, campaigns.SLUG), from Android 12; older phones open those in the browser. Android matches a path as
 // it's typed, capitals and all, so that pattern takes them: the server finds a campaign whatever its case. Not the
-// site's own one-word pages the app has no screen for (WEB_ONLY: the admin panel), which stay the browser's. Android
-// trusts the claim once the site's /.well-known/assetlinks.json names this package and the certificate that signed
-// it (README.md, "Android app").
+// site's own one-word pages the app has no screen for (links.js WEB_ONLY: the admin panel), which stay the
+// browser's. Android trusts the claim once the site's /.well-known/assetlinks.json names this package and the
+// certificate that signed it (README.md, "Android app").
 
 /// <reference types="node" />
 import fs from 'node:fs'
 import path from 'node:path'
-import type { ExpoConfig, ExpoConfigAndroidIntentFiltersData } from 'expo/config'
+import type { ExpoConfig } from 'expo/config'
+import { pages } from './links'
 
 const { name } = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'sports_follow', 'app.json'), 'utf8')) as { name: string }
 if (!name) throw new Error('sports_follow/app.json has no name')
@@ -52,53 +53,6 @@ function firebase(): boolean {
 
 const FIREBASE = firebase()
 
-// The site's one-word pages that aren't the app's (web/src/main.tsx): its admin panel. The app showed its Not found
-// page for stann.in/admin (BUG-157).
-const WEB_ONLY = ['admin']
-const SLUG = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-' // what a campaign's address is made of
-
-/** An Android pattern's set of these characters ("[a-zA-Z0-9-]"), in ranges. */
-function charSet(chars: string[]): string {
-  const codes = SLUG.split('').filter((c) => chars.includes(c) && c !== '-').map((c) => c.charCodeAt(0))
-  let out = ''
-  for (let i = 0; i < codes.length; i++) {
-    let j = i
-    while (j + 1 < codes.length && codes[j + 1] === codes[j] + 1) j++
-    out += j > i ? `${String.fromCharCode(codes[i])}-${String.fromCharCode(codes[j])}` : String.fromCharCode(codes[i])
-    i = j
-  }
-  return `[${out}${chars.includes('-') ? '-' : ''}]`
-}
-
-/** Patterns for every one-word address but `words`, in any case: Android's patterns can't say "but not", so they
- * are spelled out letter by letter. For each start of a word ("", "a", "ad"…): the start itself where it isn't a
- * word, and the addresses that go on from it with a character no word does there ("adx…", or "adminx…"). */
-function slugsBut(words: string[]): ExpoConfigAndroidIntentFiltersData[] {
-  const all = SLUG.split('')
-  const cased = (start: string) => start.split('').map((c) => (/[a-z]/.test(c) ? `[${c}${c.toUpperCase()}]` : c)).join('')
-  const out: ExpoConfigAndroidIntentFiltersData[] = []
-  const walk = (start: string) => {
-    const next = [...new Set(words.filter((w) => w.length > start.length && w.startsWith(start)).map((w) => w[start.length]))]
-    if (start && !words.includes(start)) out.push({ pathAdvancedPattern: `/${cased(start)}` })
-    const rest = all.filter((c) => !next.includes(c.toLowerCase()))
-    out.push({ pathAdvancedPattern: `/${cased(start)}${charSet(rest)}${charSet(all)}*` })
-    for (const c of next) walk(start + c)
-  }
-  walk('')
-  return out
-}
-
-/** The addresses on the site the app has a page for: one per route file, every one under a route folder. */
-function pages(): ExpoConfigAndroidIntentFiltersData[] {
-  return fs.readdirSync(path.join(__dirname, 'src', 'app'), { withFileTypes: true }).flatMap((f): ExpoConfigAndroidIntentFiltersData[] => {
-    const route = f.name.replace(/\.tsx$/, '')
-    if (f.isDirectory()) return [{ pathPrefix: `/${route}/` }]
-    if (route === 'index') return [{ path: '/' }, { path: '' }] // "https://stann.in/", and without its slash
-    if (route === '[slug]') return slugsBut(WEB_ONLY) // as typed: /Gukesh is /gukesh to the server
-    return /^[a-z]+$/.test(route) ? [{ path: `/${route}` }] : [] // not _layout or +not-found
-  })
-}
-
 export default (): ExpoConfig => ({
   name,
   slug: 'slam',
@@ -122,7 +76,7 @@ export default (): ExpoConfig => ({
       action: 'VIEW',
       autoVerify: true,
       category: ['BROWSABLE', 'DEFAULT'],
-      data: [{ scheme: 'https', host: SITE }, ...pages()],
+      data: [{ scheme: 'https', host: SITE }, ...pages(path.join(__dirname, 'src', 'app'))],
     }],
     ...(FIREBASE ? { googleServicesFile: GOOGLE_SERVICES } : {}),
   },

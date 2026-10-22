@@ -26,6 +26,9 @@ from sports_follow.adapters.pandascore_esports import parse_team
 from sports_follow.config import APP_NAME
 from sports_follow.models import Athlete, Campaign, Follow, Player, PlayerCard, PlayerIdentity
 
+from .test_mobile_app_links import campaigns_take
+from .test_web_refetch import NODE
+
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 needs_db = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
 WEB = Path(__file__).resolve().parent.parent / "web" / "src"
@@ -56,14 +59,15 @@ def test_no_campaign_can_take_an_address_the_android_app_has():
     assert web - pages == {"admin"}, web - pages
 
 
+@pytest.mark.skipif(NODE is None, reason="needs Node")
 def test_a_campaign_link_typed_with_capitals_opens_the_android_app():
-    """BUG-191: Android matches a link's path as it's typed, so the campaign pages' pattern takes capitals too (the
-    server finds /Gukesh as /gukesh). It's still one word: /match/<source>/<game> isn't claimed by it."""
-    pattern = re.search(r"pathAdvancedPattern: '([^']+)'", (APP_ROUTES.parent.parent / "app.config.ts").read_text())[1]
+    """BUG-191: Android matches a link's path as it's typed, so the campaign pages' patterns take capitals too (the
+    server finds /Gukesh as /gukesh). It's still one word: /match/<source>/<game> isn't claimed by them. They're
+    spelled out around the admin panel's /admin (mobile/links.js, BUG-157)."""
     for path in ("/gukesh", "/Gukesh", "/IPL-2027"):
-        assert re.fullmatch(pattern, path), path
+        assert campaigns_take(path), path
     for path in ("/", "/match/x/1", "/sw.js", "/a b"):
-        assert not re.fullmatch(pattern, path), path
+        assert not campaigns_take(path), path
 
 
 def test_no_campaign_can_take_the_apis_own_docs_addresses():

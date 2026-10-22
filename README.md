@@ -1218,7 +1218,7 @@ shared on WhatsApp, a campaign's link in a launch post. The app claims the addre
 which `mobile/app.config.ts` reads from its routes (`mobile/src/app`): `/`, `/player/…`, `/match/…`,
 `/search` and the rest, and any one-word address for a campaign, capitals and all, since Android matches a
 path as it's typed (Android 12 and later; older phones open campaigns in the browser). Not the admin panel's
-`/admin`, which is one-word too but the app has no page for: `WEB_ONLY` in `mobile/app.config.ts` lists such
+`/admin`, which is one-word too but the app has no page for: `WEB_ONLY` in `mobile/links.js` lists such
 addresses, and the campaigns' patterns are spelled out around them (Android's can't say "but not"); a new one
 needs a new app build. Android trusts the claim only once
 `https://stann.in/.well-known/assetlinks.json` names the package and the SHA-256 fingerprint of the
