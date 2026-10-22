@@ -53,9 +53,10 @@ def email_key(email: str) -> str:
 
 
 def normal_email(raw: object) -> str | None:
-    """The address as accounts are kept by (trimmed, lower case), or None if it isn't one."""
+    """The address as accounts are kept by (trimmed, lower case), or None if it isn't one: one with a control or
+    an invisible character in it isn't (BUG-096)."""
     email = str(raw or "").strip().lower()
-    return email if len(email) <= 254 and EMAIL.fullmatch(email) else None
+    return email if len(email) <= 254 and email.isprintable() and EMAIL.fullmatch(email) else None
 
 
 def find_or_create(db: Session, email: str) -> int:

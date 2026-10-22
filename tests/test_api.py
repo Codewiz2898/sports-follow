@@ -1378,7 +1378,7 @@ def previews(api, monkeypatch):
 @pytest.mark.parametrize("path, status, asked", [
     ("/api/athletes/espn_soccer/231388", 200, ["231388"]),
     ("/api/athletes/espn_soccer/999999999", 404, ["999999999"]),  # a stale id: the source has none, it isn't down
-    ("/api/athletes/espn_soccer/%00", 404, []),
+    ("/api/athletes/espn_soccer/%00", 400, []),  # a NUL: refused before any route (BUG-096)
     ("/api/athletes/espn_soccer/231388%3Fx%3D1", 404, []),  # was read as 231388, with ?x=1 on the source's URL
     ("/api/athletes/espn_soccer/231388?league=nba%2Fathletes%2F1", 404, []),
 ])

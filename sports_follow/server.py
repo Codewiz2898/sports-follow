@@ -130,6 +130,64 @@ class SameOriginWrites:
         await self.app(scope, receive, send)
 
 
+NUL_REFUSED = "That has a character in it (NUL) that can't be kept."
+
+
+def _holds_nul(value: Any) -> bool:
+    """Is there a NUL in any string of a JSON value, a key or a value, however deep?"""
+    left = [value]
+    while left:
+        item = left.pop()
+        if isinstance(item, str):
+            if "\x00" in item:
+                return True
+        elif isinstance(item, dict):
+            left.extend(item.keys())
+            left.extend(item.values())
+        elif isinstance(item, list):
+            left.extend(item)
+    return False
+
+
+class NoNul:
+    """A NUL character in an API request's text (%00 in its path or query, \\u0000 in its JSON body) is refused with a
+    400 before any route sees it. Postgres can't keep one, so a sign-in address, a clip's address or a league member's
+    name with one in it failed in the query, a server error anyone could raise at will (BUG-096). A write's body is
+    read whole here (the API's are small JSON) and handed on as it came."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope["type"] != "http" or not scope["path"].startswith("/api/"):
+            return await self.app(scope, receive, send)
+        refused = JSONResponse({"detail": NUL_REFUSED}, status_code=400)
+        if "\x00" in scope["path"] or b"%00" in scope["query_string"]:
+            return await refused(scope, receive, send)
+        if scope["method"] not in UNSAFE:
+            return await self.app(scope, receive, send)
+        came: list[MutableMapping[str, Any]] = []
+        while True:
+            message = await receive()
+            came.append(message)
+            if message["type"] != "http.request" or not message.get("more_body"):
+                break
+        body = b"".join(m.get("body", b"") for m in came if m["type"] == "http.request")
+        if b"\\u0000" in body:  # the only way JSON carries a NUL; the body may still spell one out as text ("\\u0000")
+            try:
+                held = _holds_nul(json.loads(body))
+            except (ValueError, RecursionError):
+                held = False  # not JSON: the route says so
+            if held:
+                return await refused(scope, receive, send)
+
+        async def again() -> MutableMapping[str, Any]:
+            return came.pop(0) if came else await receive()
+
+        await self.app(scope, again, send)
+
+
+app.add_middleware(NoNul)
 app.add_middleware(SameOriginWrites)
 
 

@@ -155,7 +155,8 @@ def test_asking_for_a_code_says_the_same_whether_or_not_the_address_has_an_accou
     assert store.emails == {1: "known@example.com"}  # asking makes nothing
 
 
-@pytest.mark.parametrize("email", ["", "fan", "fan@", "@example.com", "fan@example", "a b@example.com", "x" * 250 + "@example.com"])
+@pytest.mark.parametrize("email", ["", "fan", "fan@", "@example.com", "fan@example", "a b@example.com", "x" * 250 + "@example.com",
+                                   "fan\x01x@example.com", "fan\u200bx@example.com"])  # a control or an invisible character (BUG-096)
 def test_an_address_that_isnt_one_is_refused(api, store, outbox, email):
     assert api.call("POST", "/api/auth/email/start", body={"email": email}).status_code == 400
     assert outbox == {}
