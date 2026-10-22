@@ -142,7 +142,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`server.PLAYERS_MAX`). Previews and follows that ask a source for an athlete not on the app yet (a whole
   team's follow on a campaign page asks once for each such player) are limited to 30 a minute a fan and 120 a
   client address (`SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_MINUTE`, `SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_ADDRESS`), past
-  which they're a 429; a player already here costs nothing.
+  which they're a 429; a player already here costs nothing. Follows of every kind (a player, a team, a game; a
+  campaign page's whole team is one for each player) are limited to 150 an hour a fan, and 300 an IPv6 /64 or
+  1,200 an IPv4 address (a phone network's may be shared by thousands of fans) (`server.FOLLOWS_PER_FAN`,
+  `FOLLOWS_PER_ADDRESS`, `FOLLOWS_PER_IPV4`), past which they're a 429; one refused isn't counted.
 - **AI research is capped** (only with `SPORTS_FOLLOW_RESEARCH=1`). A name no source knows goes to the research agent, 3 per fan per UTC day
   (`search.RESEARCH_PER_DAY`, counted in Redis), 10 per client address per day and 10 an hour across all
   fans (`SPORTS_FOLLOW_RESEARCH_PER_ADDRESS`, `SPORTS_FOLLOW_RESEARCH_PER_HOUR`). Following a player

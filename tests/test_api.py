@@ -523,6 +523,72 @@ def test_a_fan_follows_at_most_so_many_players(api, a_source, monkeypatch):
     assert not [s for s in api.statements if isinstance(s, Insert) and s.table.name == "follow" and _param(s, "fan_id") == "fan" and _param(s, "player_id") != 1]
 
 
+def test_follows_are_limited_per_fan_and_per_address_and_a_refused_one_isnt_counted(api, monkeypatch):
+    # BUG-325: following a player already here asks no source, so nothing but each fan's own caps limited it, and a
+    # follow without a cookie is a new fan's.
+    monkeypatch.setattr(server, "FOLLOWS_PER_FAN", 3, raising=False)
+    monkeypatch.setattr(server, "FOLLOWS_PER_ADDRESS", 4, raising=False)
+    monkeypatch.setattr(server, "FOLLOWS_PER_IPV4", 6, raising=False)
+
+    def follow(fan: str | None, address: str = PUBLIC, player_id: int = 1) -> httpx.Response:
+        return api.call("POST", "/api/follows", fan=fan, address=address, body={"player_id": player_id})
+
+    answers = [follow("fan") for _ in range(4)]
+    assert [a.status_code for a in answers] == [200, 200, 200, 429]
+    assert answers[-1].json()["detail"] == "You've followed a lot this hour. Try again later."
+    # No cookie: a new fan each time, from one IPv4 address, which may be a whole phone network's: six from it an hour.
+    answers = [follow(None) for _ in range(4)]
+    assert [a.status_code for a in answers] == [200, 200, 200, 429]
+    assert answers[-1].json()["detail"] == "A lot of follows have come from your network this hour. Try again later."
+    # An IPv6 /64 is one household: fewer, whichever of its addresses.
+    assert [follow(None, "2a00:1450:4009:81f::200e").status_code for _ in range(4)] + [follow(None, "2a00:1450:4009:81f::1").status_code] == [200] * 4 + [429]
+    # A follow refused, by a limit or for anything else (no such player), isn't counted: these leave all three.
+    for _ in range(5):
+        assert follow("someone", "81.2.69.143", player_id=999).status_code == 404
+    assert [follow("someone", "81.2.69.143").status_code for _ in range(4)] == [200, 200, 200, 429]
+    counted = {}
+    for key, n in api.redis.data.items():
+        kind, _, rest = key.removeprefix("follows:").partition(":")
+        counted[kind, rest.rsplit(":", 1)[0]] = n  # follows:<fan or address>:<who>:<hour>
+    assert {who: counted[who] for who in (("fan", "fan"), ("address", PUBLIC), ("fan", "someone"), ("address", "81.2.69.143"))} == {
+        ("fan", "fan"): 3, ("address", PUBLIC): 6, ("fan", "someone"): 3, ("address", "81.2.69.143"): 3}
+    # Another address, and another fan, aren't held up.
+    assert follow("another", "81.2.69.144").status_code == 200
+
+
+def test_following_a_team_a_game_or_a_campaigns_players_counts_in_the_same_hour(api, monkeypatch):
+    # BUG-325: a team's fans and a game's are planned with a player's, so their follows count in the same hour.
+    from sports_follow import campaigns, matches, teams
+
+    monkeypatch.setattr(server, "FOLLOWS_PER_FAN", 6, raising=False)
+    monkeypatch.setattr(teams, "follow", lambda db, fan, team_id: SimpleNamespace(system="pitch"))
+    monkeypatch.setattr(teams, "stale", lambda team: False)
+    monkeypatch.setattr(matches, "follow", lambda db, fan, system, game: 5)
+    monkeypatch.setattr(campaigns, "page", lambda db, slug, fan: WORLDS)
+
+    async def follow_athlete(body, fan, address):
+        if fan == "unlucky" and body["athlete_id"] in ("11", "12"):
+            raise server.HTTPException(404, "That athlete isn't in the source any more.")
+        return int(body["athlete_id"])
+
+    monkeypatch.setattr(server, "_follow_athlete", follow_athlete)
+
+    def follows(fan: str) -> list[int]:
+        return [api.call("PUT", "/api/teams/1/follow", fan=fan, address=PUBLIC).status_code, api.call("PUT", "/api/match/pitch/100/follow", fan=fan, address=PUBLIC).status_code]
+
+    assert follows("fan") == [200, 200]
+    # A whole team's roster: each player not followed yet is a follow (Zeus, Oner, Gone and Broken; Faker is followed).
+    got = api.call("POST", "/api/campaigns/worlds/follow", fan="fan", address=PUBLIC, body={"team": "126061"})
+    assert got.status_code == 200 and got.json() == {"player_ids": [3, 4, 10, 11, 12], "failed": 0}
+    refused = api.call("POST", "/api/campaigns/worlds/follow", fan="fan", address=PUBLIC, body={"team": "126061"})
+    assert (refused.status_code, refused.json()["detail"]) == (429, "You've followed a lot this hour. Try again later.")
+    assert follows("fan") == [429, 429]
+    # The players a roster's follow couldn't follow aren't counted.
+    assert api.call("POST", "/api/campaigns/worlds/follow", fan="unlucky", address=PUBLIC, body={"team": "126061"}).json()["failed"] == 2
+    assert follows("unlucky") + follows("unlucky") == [200, 200, 200, 200]
+    assert follows("unlucky") == [429, 429]
+
+
 def test_a_turned_off_games_pro_isnt_previewed_or_followed_by_their_source_id(api, monkeypatch):
     # BUG-097: a source of several games runs while any of them does, so a pro of a game turned off could still be
     # previewed and followed by their id there, and their page made and polled.
