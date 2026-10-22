@@ -63,6 +63,10 @@ NAME_LANGS = ("en", "mul")
 # A star has many (MS Dhoni 18, 14 that search tells apart): room for every name fans type ("MSD" is Wikidata's
 # tenth of his). search_text's only index is a trigram one (GIN), with no limit on a row's length.
 MAX_ALIASES = 16
+# Anyone can add an alias on Wikidata, and some write a sentence ("next virat kholi best Australian batter"): an
+# alias of more than two words is kept only written as a name, every word of four letters or more capitalised
+# ("Neymar da Silva Santos Júnior"), and of ALIAS_WORDS words at most (is_name).
+ALIAS_WORDS = 5
 
 # The sports this build runs that are imported from Wikidata (sports.Sport.wikidata: who counts as one of their athletes, and the
 # ids kept), smallest first, so a first import has most sports searchable long before football is done;
@@ -113,6 +117,12 @@ def search_text(name: str, aliases: Iterable[str]) -> str:
     so "% koh%" finds a word start and named("virat kohli") a whole name."""
     names = [" ".join(words(n)) for n in [name, *aliases]]
     return " " + " | ".join(dict.fromkeys(n for n in names if n)) + " |"
+
+
+def is_name(alias: str) -> bool:
+    """Whether an alias reads as a name fans would type, not a sentence (ALIAS_WORDS)."""
+    written = alias.split()
+    return len(written) <= 2 or (len(written) <= ALIAS_WORDS and not any(len(w) > 3 and w[:1].islower() for w in written))
 
 
 def named(key: str):
@@ -297,7 +307,8 @@ def build(sport: str, core: list[dict], names: list[dict], teams: list[dict], to
         # after "M.S. Dhoni") takes no place.
         spelled: dict[str, str] = {}
         for _, alias in sorted(aliases.get(qid, []), key=lambda la: NAME_LANGS.index(la[0]) if la[0] in NAME_LANGS else len(NAME_LANGS)):
-            spelled.setdefault(" ".join(words(alias)), alias)
+            if is_name(alias):
+                spelled.setdefault(" ".join(words(alias)), alias)
         extra = [a for f, a in spelled.items() if f not in ("", folded)][:MAX_ALIASES]
         stints = sorted(current_teams.get(qid, []), key=lambda t: t[0], reverse=True)
         birth: date | None = p.get("birth")
