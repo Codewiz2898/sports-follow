@@ -230,8 +230,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   the line from early in the map. That's one OpenDota request a minute for them all while any is on, and none while
   OpenDota's minute or day is down to the third kept for pages and polls. While nobody looks at Live now, the worker
   makes its PandaScore read itself every 5 minutes (`keep_up_read`), so a series that starts then is found early in
-  its first map: 12 PandaScore requests an hour (24 with over 100 series on at once), at most 288 to 576 a day, and
-  none while fans look or while Dota 2 is off. The page shows Live now's copy
+  its first map: about 12 PandaScore requests an hour (13 at most, twice that with over 100 series on at once),
+  about 290 a day if nobody looked all day, and none while fans look or while Dota 2 is off. The page shows Live now's copy
   until the first read comes, and looks again while it's in view. A sport turned off has no match pages.
 - **Watch live** (`sports_follow/watch.py`, the match page's Watch block). A source that lists a game's
   broadcasts puts them on its fixtures (`Fixture.streams`: each one's page, its language, whether the

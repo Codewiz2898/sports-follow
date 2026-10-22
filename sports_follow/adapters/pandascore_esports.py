@@ -76,8 +76,9 @@ DOTA_GONE = 30 * 60
 # limit for showing one): an older read may be a map behind.
 DOTA_TRUST = 3 * 60
 # Live now's read older than this, the worker makes it anew for keep_up (keep_up_read), so a Dota 2 series that starts
-# while nobody looks is found: at the worker's next minute, so every 5 minutes, one request (two with over a page of
-# series on) while nobody looks and none while fans do. Bharath's call (BHA-676): 12 to 24 an hour of PandaScore's 1,000.
+# while nobody looks is found: at the worker's next minute, so about every 5 minutes (4½ at the least, a run late in its
+# minute), one request (two with over a page of series on) while nobody looks and none while fans do. Bharath's call
+# (BHA-676): about 12 an hour of PandaScore's 1,000, 13 at most, or twice that on a day of over a page.
 DOTA_READ = 4 * 60 + 30
 SCHEDULE_PAGES = 3  # pages of 100 series: three weeks of S and A tier events is about two
 # The tournaments whose teams the team registry lists (teams): those the app rates (LIVE_TIERS). A team only in

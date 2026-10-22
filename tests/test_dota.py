@@ -917,13 +917,22 @@ def test_no_read_for_keeping_up_with_dota_off_or_no_room_for_it(nobody_looks, mo
     assert on.adapter.keep_up_read() == ps.DOTA_READ and on.minute() == 0 and len(on.asked) == 1
 
 
-def test_a_failed_read_is_asked_again_5_minutes_on_and_a_series_kept_up_goes_on(nobody_looks):
+@pytest.mark.parametrize("down", ["pandascore", "database"])
+def test_a_failed_read_is_asked_again_5_minutes_on_and_a_series_kept_up_goes_on(nobody_looks, monkeypatch, caplog, down):
     on = nobody_looks
     on.series = [_rated(_series("running", [("running", None)]))]
     on.clock[0] += 240  # the horn a minute ago
     assert on.minute() == 1 and len(on.asked) == 1
     on.clock[0] += ps.DOTA_READ  # nobody since
-    on.down = True
-    assert on.minute() == 1 and len(on.asked) == 2  # PandaScore down: the series it found still read
+    if down == "pandascore":
+        on.down = True
+    else:  # PandaScore answers, but the read can't be ranked and kept
+
+        def session():
+            raise RuntimeError("the database is down")
+
+        monkeypatch.setattr(live, "session", session)
+    assert on.minute() == 1 and len(on.asked) == 2  # the series it found before still read
     assert [on.minute() for _ in range(4)] == [1, 1, 1, 1] and len(on.asked) == 2  # not asked each minute
     assert on.minute() == 1 and len(on.asked) == 3
+    assert "pandascore_esports couldn't keep up its games" not in caplog.text
