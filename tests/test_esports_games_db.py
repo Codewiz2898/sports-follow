@@ -1,6 +1,7 @@
 """Each esports game a sport of its own (BHA-266), against a throwaway database at alembic head: the migration
-that moves the registry's esports pros, and what hangs off them, to their games, and back; and an operator's
-decision kept under "esports" (from before) standing for every game. Skipped without one:
+that moves the registry's esports pros, and what hangs off them, to their games, and back; an operator's
+decision kept under "esports" (from before) standing for every game; and a followed pro who changes teams
+(BUG-200). Skipped without one:
 
     docker compose exec postgres createdb -U sports sports_follow_test
     DATABASE_URL=postgresql+psycopg://sports:sports@127.0.0.1:5433/sports_follow_test .venv/bin/alembic upgrade head
@@ -15,6 +16,8 @@ import importlib.util
 import json
 import os
 from contextlib import contextmanager
+from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -23,9 +26,11 @@ from alembic.runtime.migration import MigrationContext
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import players, registry
-from sports_follow.adapters import KNOWN, PlayerRef, Roster, Rostered
-from sports_follow.models import Athlete
+from sports_follow import bus, pipeline, players, registry, structured
+from sports_follow.adapters import KNOWN, PlayerRef, Roster, Rostered, budget, pandascore
+from sports_follow.models import Athlete, Event, EventPlayer, Player, PlayerCard, PlayerIdentity, SourceBinding
+
+from .test_pipeline import FakeRedis
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -209,3 +214,148 @@ def test_a_game_turned_off_isnt_polled_while_its_source_runs_for_another(engine,
     monkeypatch.setattr(sports, "ENABLED", tuple(s for s in sports.ALL if s.key != "valorant"))
     assert pipeline.due_work(now).polls == [1]
     assert structured._watching(2) is None and structured._watching(1) == ({"adapter": "arena", "locator": {"match": "1"}}, structured.ADAPTERS["arena"], [(1, "11")])
+
+
+# ---------------------------------------------------------------- a followed pro who changes teams (BUG-200)
+
+OLD, NEW, RIVAL = "4001", "4002", "4999"
+
+
+def _series(match_id: int, team: str, name: str) -> dict:
+    """A best of three of a team's against Rival in two days, as PandaScore lists it."""
+    soon = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat().replace("+00:00", "Z")
+    sides = [{"type": "Team", "opponent": {"id": int(t), "name": n, "acronym": n[:3].upper()}} for t, n in ((team, name), (RIVAL, "Rival"))]
+    return {"id": match_id, "name": f"{name} vs Rival", "status": "not_started", "scheduled_at": soon, "number_of_games": 3, "match_type": "best_of",
+            "opponents": sides, "results": [], "games": [], "videogame": {"slug": "valorant"}, "league": {"name": "VCT"}, "tournament": {"tier": "a"}}
+
+
+class Moving:
+    """PandaScore for a pro, ProX (31001), on OldTeam until `team` says otherwise, each team with its next series:
+    what it was asked, and in which lane."""
+
+    def __init__(self, monkeypatch):
+        self.team = (OLD, "OldTeam")
+        self.asked: list[tuple[str, str | None, str]] = []
+        monkeypatch.setattr(pandascore, "get_json", self.get_json)
+        monkeypatch.setattr(pandascore, "get_all", self.get_all)
+        monkeypatch.setattr(pandascore, "spare", lambda: True)
+
+    def get_json(self, path, ttl, **params):
+        self.asked.append((path, None, budget.lane()))
+        if path == "/players/31001":
+            return {"id": 31001, "name": "ProX", "current_team": {"id": int(self.team[0]), "name": self.team[1]}, "current_videogame": {"slug": "valorant"}}
+        return []
+
+    def get_all(self, path, ttl, pages=2, **params):
+        team = params.get("filter[opponent_id]")
+        self.asked.append((path, team, budget.lane()))
+        return {OLD: [_series(91, OLD, "OldTeam")], NEW: [_series(92, NEW, "NewTeam")]}.get(team, [])
+
+    def read(self) -> list[tuple[str, str | None, str]]:
+        """What it was asked since the last look, each request once (a refresh reads a team's list twice, from the cache)."""
+        out = list(dict.fromkeys(self.asked))
+        self.asked.clear()
+        return out
+
+
+@pytest.fixture
+def prox(engine, monkeypatch):
+    """ProX followed on OldTeam: bound to PandaScore there, their card ready. Returns their player id, PandaScore
+    (Moving) and the Redis their marks are kept in."""
+    made = sessionmaker(bind=engine, expire_on_commit=False)
+
+    @contextmanager
+    def unit():
+        s = made()
+        try:
+            yield s
+            s.commit()
+        except Exception:
+            s.rollback()
+            raise
+        finally:
+            s.close()
+
+    monkeypatch.setattr(structured, "session", unit)
+    monkeypatch.setattr(pipeline, "session", unit)
+    redis = FakeRedis()
+    monkeypatch.setattr(bus, "_sync", redis)
+    monkeypatch.setitem(structured.ADAPTERS, "pandascore_esports", KNOWN["pandascore_esports"])
+    ref = PlayerRef("pandascore_esports", "31001", "ProX", [OLD], ["OldTeam"], league="valorant", game="Valorant")
+    with unit() as db:
+        player = Player(slug="prox", name="ProX", sport="Valorant", status="active", teams=["OldTeam"])
+        db.add(player)
+        db.flush()
+        db.add(PlayerIdentity(player_id=player.id, system="pandascore_esports", external_id="31001", confidence=1.0))
+        db.add_all([SourceBinding(player_id=player.id, purpose=purpose, adapter="pandascore_esports", locator=asdict(ref), confidence=1.0, priority=10, health={})
+                    for purpose in ("fixtures", "stats")])
+        card = {"player": {"name": "ProX"}, "live": {"is_live": False, "player_stats": []}, "upcoming": [], "recent_results": [], "freshness": {}}
+        db.add(PlayerCard(player_id=player.id, status="ready", card=card, version=1, freshness={}))
+    return player.id, Moving(monkeypatch), redis
+
+
+def bound_to(player_id: int) -> dict[str, list[str]]:
+    """The teams each of the player's bindings reads, by purpose."""
+    with structured.session() as db:
+        return {row.purpose: row.locator["team_ids"] for row in db.scalars(select(SourceBinding).where(SourceBinding.player_id == player_id))}
+
+
+def games_of(player_id: int) -> list[str]:
+    """The games the player is in here: those their fans are told of."""
+    with structured.session() as db:
+        return sorted(db.scalars(select(Event.title).join(EventPlayer, EventPlayer.event_id == Event.id).where(EventPlayer.player_id == player_id)))
+
+
+def test_a_pro_who_changes_teams_gets_the_new_teams_series_once_their_source_is_read_again(prox):
+    # BUG-200: a pro followed on OldTeam who moved to NewTeam kept OldTeam's series and pushes for good, and never got
+    # NewTeam's: every refresh read the binding as first written. Now a refresh reads the pro again every few hours.
+    player_id, source, redis = prox
+    structured.refresh(player_id)
+    assert source.read() == [("/players/31001", None, "refresh"), ("/matches", OLD, "refresh")]  # one request, in the refresh's lane
+    assert games_of(player_id) == ["OldTeam vs Rival"]
+
+    source.team = (NEW, "NewTeam")  # the transfer
+    structured.refresh(player_id)
+    assert source.read() == [("/matches", OLD, "refresh")]  # not read again at every refresh
+    assert redis.ttl[f"lock:reread:{player_id}"] == structured.REREAD
+
+    redis.delete(f"lock:reread:{player_id}")  # those hours pass
+    structured.refresh(player_id)
+    assert source.read() == [("/players/31001", None, "refresh"), ("/matches", NEW, "refresh")]
+    assert bound_to(player_id) == {"fixtures": [NEW], "stats": [NEW]}
+    # NewTeam's series is theirs now; OldTeam's, still to come, no longer is: no start or result push for it.
+    assert games_of(player_id) == ["NewTeam vs Rival"]
+    with structured.session() as db:
+        card = db.get(PlayerCard, player_id).card
+    assert [(u["title"], u["team"]) for u in card["upcoming"]] == [("NewTeam vs Rival", "NewTeam")]
+
+    structured.refresh(player_id)
+    assert source.read() == [("/matches", NEW, "refresh")]  # and no OldTeam series is linked again
+    assert games_of(player_id) == ["NewTeam vs Rival"]
+
+
+def test_following_a_pro_again_from_search_moves_them_to_the_team_their_source_has_now(prox):
+    # BUG-200: unfollowing and following again from a fresh search result didn't repair it: the pick found the
+    # player already here and went no further. Now a pick naming other teams than the binding moves it.
+    player_id, source, redis = prox
+    structured.refresh(player_id)
+    assert games_of(player_id) == ["OldTeam vs Rival"]
+    source.team = (NEW, "NewTeam")
+    source.read()
+
+    adapter = KNOWN["pandascore_esports"]
+    picked = adapter.player("31001")  # the search result the fan picked, as the follow reads it
+    assert picked is not None and picked.team_ids == [NEW]
+    assert pipeline.start_from_pick(adapter, picked) == (player_id, False)
+    assert bound_to(player_id) == {"fixtures": [NEW], "stats": [NEW]}
+    assert games_of(player_id) == []  # OldTeam's series no longer theirs; NewTeam's come with the next refresh,
+    with structured.session() as db:
+        assert "fixtures" not in db.get(PlayerCard, player_id).freshness  # which is due at once
+    source.read()
+    structured.refresh(player_id)  # within the hours a refresh doesn't read the pro again
+    assert source.read() == [("/matches", NEW, "refresh")]
+    assert games_of(player_id) == ["NewTeam vs Rival"]
+
+    # A pick of the teams already bound changes nothing.
+    assert pipeline.start_from_pick(adapter, picked) == (player_id, False)
+    assert games_of(player_id) == ["NewTeam vs Rival"]

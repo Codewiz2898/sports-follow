@@ -153,7 +153,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   records the identity and bindings. From then on the source owns the fixtures, results, stats and live
   score, the publishers their news (`news.py`), and the agent only writes a background Wikipedia has no
   article for. A player followed before their sport had an adapter is
-  bound by the next scheduled refresh.
+  bound by the next scheduled refresh. A bound player is read again from their source every six hours in a
+  refresh (`structured.reread`), so one who changes teams moves to the new team's games, and their old team's
+  still to come are no longer theirs; a fan picking them again in search moves them at once.
 
   | Sport | Source | Fixtures | Live | Stats |
   |---|---|---|---|---|

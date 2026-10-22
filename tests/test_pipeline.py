@@ -404,6 +404,9 @@ class RefusingSource:
     def sport_of(self, ref):
         return self.sports[0]
 
+    def player(self, athlete_id, league=None):
+        return None  # asked again who they are (structured.reread): nothing new
+
     def fixtures(self, ref):
         self.requests.append(ref.athlete_id)
         if self.failing:
