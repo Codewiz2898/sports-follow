@@ -455,8 +455,10 @@ def pick(db: Session, fan: str, question_id: int, option: str, now: datetime | N
         raise Refused(409, STALE_BOARD)  # a later map of a game under way: only a fresh board says it hasn't begun
     if q.starts_at is None and not (_fresh(db, q, now) and _to_come(db, q)):
         raise Refused(409, NO_START)  # asked before a start was needed: nothing closes it, so only a fresh board can
+    # Made while it's open: it counts in leagues, whatever was moved in before it (merge's moved_late).
     made = insert(Pick).values(question_id=q.id, fan_id=fan, option=option, counted=counted)
-    db.execute(made.on_conflict_do_update(index_elements=["question_id", "fan_id"], set_={"option": option, "counted": Pick.counted | made.excluded.counted, "updated_at": func.now()}))
+    db.execute(made.on_conflict_do_update(index_elements=["question_id", "fan_id"], set_={"option": option, "counted": Pick.counted | made.excluded.counted,
+                                                                                           "moved_late": False, "updated_at": func.now()}))
     _refresh(db, q)
     return q
 
@@ -839,8 +841,10 @@ def merge(db: Session, anon: str, fan: str) -> None:
     points and how they went), marked moved_late: the fan sees them, but no league's table counts them, else a fan
     could call a game three ways on three browsers and sign in on the one that was right. Where the account picked
     one of those too, the device's stays where it was, in the split only. An anonymous fan is in no league: leagues
-    need an account."""
-    still = select(Question.id).where(Question.status == OPEN, or_(Question.locks_at.is_(None), Question.locks_at > func.now()))
+    need an account. A postponed game's (held), past its old start, is still to come: its picks come over as an open
+    one's do (BUG-312)."""
+    postponed = Question.event_id.in_(select(Event.id).where(Event.status == "postponed"))
+    still = select(Question.id).where(Question.status == OPEN, or_(Question.locks_at.is_(None), Question.locks_at > func.now(), postponed))
     late = ~Pick.question_id.in_(still)
     # An account's pick counts (Pick.counted): one still open does from now; one closed as it did, its split shown.
     moved = insert(Pick).from_select(["question_id", "fan_id", "option", "points", "counted", "moved_late", "created_at", "updated_at"],

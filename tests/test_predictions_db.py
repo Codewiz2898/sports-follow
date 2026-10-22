@@ -1220,6 +1220,46 @@ def test_signing_in_brings_every_pick_and_those_on_games_under_way_count_in_no_l
     assert (kept.name, kept.owner) == ("Sana's lot", None) and db.scalars(select(LeagueMember.fan_id)).all() == ["acct-kiran"]
 
 
+def test_a_call_brought_in_while_its_match_is_postponed_counts_in_the_league(db, redis):
+    """BUG-312: a call made on the device before its match was postponed, brought into the account at sign-in once the
+    old kick-off had gone by, was marked as one moved after its game began (moved_late), as its question was still open
+    past that time, held for the new date; so it counted in no league, nor did a pick made again once the new date
+    opened it. A held question's picks come over as an open one's now, and a pick made while a question's open counts,
+    whatever was moved before it."""
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    old = now - timedelta(hours=1)
+    options = [{"key": str(HOME), "label": "Trabzonspor"}, {"key": str(AWAY), "label": "Galatasaray"}]
+    for event_id, status in ((1, "postponed"), (2, "scheduled")):  # the first put back before its kick-off; the other's poll is late
+        db.add(Event(id=event_id, key=f"sportmonks_football:56{event_id}", sport="Football", title="Trabzonspor vs Galatasaray", start_utc=old, status=status,
+                     live_binding={"adapter": "sportmonks_football", "locator": {"fixture": f"56{event_id}"}, "cadence": 10}))
+    db.flush()
+    held, late = (Question(game=f"sportmonks_football:56{i}", ask="result", keys=[f"sportmonks_football:56{i}"], event_id=i, sport="football",
+                           match=f"sportmonks_football/56{i}", title="Who wins?", game_title="Trabzonspor vs Galatasaray", options=options, status="open",
+                           starts_at=old, locks_at=old) for i in (1, 2))
+    db.add_all([held, late, Account(id=1, email="asha@example.com", fan_id="acct-asha")])
+    db.flush()
+    db.add_all([Pick(question_id=q.id, fan_id=fan, option=option) for q in (held, late) for fan, option in (("device", str(HOME)), ("acct-ravi", str(AWAY)))])
+    gang = predictions.create(db, "acct-asha", "Derby", "Asha")
+    predictions.join(db, "acct-ravi", gang.code, "Ravi")
+    db.commit()
+    accounts.sign_in(db, 1, "device")
+    db.commit()
+    assert set(db.scalars(select(Pick.question_id).where(Pick.fan_id == "acct-asha", Pick.moved_late))) == {late.id}
+    # Both get a new date; Asha calls the second again while it's open.
+    later = now + timedelta(days=3)
+    for event_id in (1, 2):
+        structured.reschedule(db, db.get_one(Event, event_id), later, "scheduled")
+    predictions.pick(db, "acct-asha", late.id, str(HOME))
+    db.commit()
+    # Both played, and won at home: each right call of hers counts, 50 points (one of the two picks that count).
+    final = sm.parse_match(football_match("FT", 1, 0))
+    for q in (held, late):
+        predictions.settle(db, [db.get_one(Question, q.id)], sports.of("Football"), "final", final.state, later + timedelta(hours=2))
+    db.commit()
+    table = predictions.table(db, db.get_one(League, gang.id))
+    assert [(r["name"], r["points"], r["played"]) for r in table] == [("Asha", 100, 2), ("Ravi", 0, 2)]
+
+
 def test_the_admin_panel_counts_leagues_invites_and_fans_who_came_back(db, redis):
     now = datetime.now(timezone.utc)
     first = settled_question(db, "g:1", now - timedelta(days=2), {"a": "w", "b": "w"}, "w")
