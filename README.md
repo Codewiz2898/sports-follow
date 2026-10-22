@@ -224,7 +224,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   start has passed (a chess round's boards aren't on its broadcast till its games begin: the game is then
   read as any is), or, while the game is on, for half an hour, as a source can list a game late. A read can say more than a poll: a Dota 2 map's gold by minute, moments, players
   and draft, and the live map's gold line, buildings and heroes, come only with the page's own read (each poll's state is stored and sent to every card, so it
-  stays small), as the state's `page_detail`, and show under whichever board is newest. The page shows Live now's copy
+  stays small), as the state's `page_detail`, and show under whichever board is newest. The live map's gold line is
+  drawn from readings of OpenDota's live list: every poll and read takes one, and the worker one a minute for each
+  Dota 2 series Live now has listed (`keep_up_live`), whether or not anyone has it open, so a page opened mid-map has
+  the line from early in the map. That's one OpenDota request a minute for them all while any is on, and none while
+  OpenDota's minute or day is down to the third kept for pages and polls. The page shows Live now's copy
   until the first read comes, and looks again while it's in view. A sport turned off has no match pages.
 - **Watch live** (`sports_follow/watch.py`, the match page's Watch block). A source that lists a game's
   broadcasts puts them on its fixtures (`Fixture.streams`: each one's page, its language, whether the

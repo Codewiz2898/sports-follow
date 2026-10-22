@@ -434,6 +434,15 @@ class Adapter:
     # out the small ones and set each game's tier, so the biggest come first. A source may let the next ones
     # down stand in, at tier 0, while nothing bigger is on (esports does, a game at a time).
     #
+    # Optional, beside live_now, for a source that keeps something of its games on between reads, whoever is
+    # looking (a map's line drawn from readings of another source's live list, so its page opened mid-map has it
+    # from early on):
+    #   def keep_up(self, games: list[dict[str, Any]], age: float) -> int
+    # handed Live now's last read of it (its games as live.read keeps them, and that read's age in seconds; [] and
+    # infinity when there's none) about once a minute by the worker (live.keep_up); it keeps up those, and any
+    # it kept up before, as it sees fit, and returns how many it did. Keep within the source's allowance and put
+    # pages and polls first: nobody waits on it.
+    #
     # Optional, for a source that can read one game by its id in a request or two:
     #   def match(self, source_id: str) -> LiveGame | None
     # the game a fixture of it names (Fixture.source_id, of the shape fixture_pattern says), whoever follows
