@@ -646,7 +646,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`Provider.budgets`), so the usage report finds it through `adapters.KNOWN`. Before each request it
   sends it takes one; it reports what the source says is left and its 429s, which pause every process.
   The research agent's `fetch_url` spends the same budget when it reads a source's API (`Budget.urls`).
-  Counts are kept in Redis, so the API and the worker spend from one allowance. Every request is in a
+  Counts are kept in Redis, so the API and the worker spend from one allowance. A minute's allowance (a
+  rate limit) is counted over the last minute, whenever it began, so a burst across a minute's edge can't
+  send twice it; an hour's or a day's from its start, as the source resets it. Every request is in a
   lane, set once where the work starts: `live` (polls), `fan` (every API request: search, previews,
   following), `refresh`, `history`, `import` and `feed` (the curator's). The background lanes stop at the reserve; a fan loop
   stops at its share and is logged, so live games keep the rest of the reserve. `python -m sports_follow.usage` shows each

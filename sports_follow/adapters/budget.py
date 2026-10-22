@@ -4,7 +4,9 @@ A source's client declares its allowance (a Budget: requests a window, a margin 
 kept for live games, whether a fan's request may reach it) and, before each request it sends, takes one
 (take). It tells what the source said back: the allowance left where the source reports it (observe),
 and "slow down" (pause). Counts are kept in Redis, so the API and the worker spend from one allowance;
-if Redis can't be reached, each process counts its own until it can.
+if Redis can't be reached, each process counts its own until it can. A window under an hour (a rate limit, PUBG's
+10 a minute) is counted over the last minute, whenever it began; an hour or a day from its start, as the source
+resets it.
 
 Every request is made for something, its lane, set once where the work starts (a worker job, an API
 request) and carried into the threads it uses (carry):
@@ -60,7 +62,7 @@ class RateLimited(AdapterError):
 
 @dataclass(frozen=True)
 class Window:
-    seconds: int  # 60, 3600, 86400: counted in windows of this many seconds, from the epoch
+    seconds: int  # 60, 3600, 86400: counted in windows of this many seconds, from the epoch; under an hour, rolling (_keys)
     requests: int  # the plan's allowance a window
     margin: int = 0  # never spent: another process may count a moment late
     zone: str | None = None  # the time zone its windows start in, where the source's day isn't UTC's: "America/Los_Angeles"
@@ -88,6 +90,16 @@ def _start(w: Window, now: float) -> int:
 def _ttl(w: Window) -> int:
     """How long a window's count is kept: past its end, and a zoned day may run 25 hours (the clocks go back)."""
     return w.seconds + (3660 if w.zone else 60)
+
+
+SLOTS = 12  # a rolling window is counted in this many slots (five seconds of a minute)
+
+
+def _rolling(w: Window) -> bool:
+    """A window under an hour is a source's rate limit (PUBG's 10 a minute), which it holds over any span that long,
+    wherever it starts: counted from the epoch, a minute's allowance spent just before a minute began would be there
+    again just after. An hour or a day is a plan's allowance, which the source resets on the hour or at its midnight."""
+    return w.seconds < 3600
 
 
 @dataclass(frozen=True)
@@ -175,6 +187,9 @@ class MemoryStore:
         value, until = self.data.get(key, (0, 0.0))
         return value if key in self.data and until >= time.time() else None
 
+    def get_many(self, keys: list[str]) -> list[int | None]:
+        return [self.get(k) for k in keys]
+
     def put(self, key: str, value: int, ttl: int) -> None:
         with self.lock:
             self.data[key] = (value, time.time() + ttl)
@@ -197,6 +212,9 @@ class RedisStore:
     def get(self, key: str) -> int | None:
         raw = _redis().get(key)
         return int(raw) if raw is not None else None
+
+    def get_many(self, keys: list[str]) -> list[int | None]:
+        return [int(raw) if raw is not None else None for raw in _redis().mget(keys)]
 
     def put(self, key: str, value: int, ttl: int) -> None:
         _redis().set(key, value, ex=ttl)
@@ -233,8 +251,24 @@ def _store_call(method: str, *args: Any) -> Any:
 FAN = ":fan"
 
 
+def _keys(budget: Budget, bucket: str, w: Window, now: float) -> list[str]:
+    """The keys whose counts are what a window has spent now, the one a request now is counted under first: its
+    window's; for a rolling one, the slot now and the SLOTS before it, so no span of w.seconds holds more than its
+    allowance (one counted a slot longer, which takes no more than a slot's worth of room)."""
+    if not _rolling(w):
+        return [f"budget:{budget.name}:{bucket}:{w.seconds}:{_start(w, now)}"]
+    slot = int(now // max(1, w.seconds // SLOTS))
+    return [f"budget:{budget.name}:{bucket}:{w.seconds}:s{n}" for n in range(slot, slot - SLOTS - 1, -1)]
+
+
 def _window_key(budget: Budget, bucket: str, w: Window, now: float) -> str:
-    return f"budget:{budget.name}:{bucket}:{w.seconds}:{_start(w, now)}"
+    """The key a request now is counted under."""
+    return _keys(budget, bucket, w, now)[0]
+
+
+def _used(budget: Budget, bucket: str, w: Window, now: float) -> int:
+    """What a window has spent now."""
+    return sum(n or 0 for n in _store_call("get_many", _keys(budget, bucket, w, now)))
 
 
 def _left_key(budget: Budget, bucket: str) -> str:
@@ -281,20 +315,22 @@ def take(budget: Budget, bucket: str = "", lane_name: str | None = None, cost: i
     if budget.windows and left is not None and left - cost < min(w.margin for w in budget.windows) + keep:
         _note(budget, lane_name, "refused", now)
         raise RateLimited(f"{budget.name} says {left} requests are left{f' ({bucket})' if bucket else ''}: kept for {'live games' if keep else 'the margin'}")
-    # (key, ttl, limit, why): the fans' share of a scarce source first, then each window less what this lane leaves.
-    counts = []
+    # (key, ttl, limit, why, the keys of a rolling window's slots before): the fans' share of a scarce source first,
+    # then each window less what this lane leaves.
+    counts: list[tuple[str, int, int, str, list[str]]] = []
     if lane_name == "fan" and budget.fan is not None and budget.windows:
         w = budget.windows[0]
         why = f"{budget.name}: fans' share ({budget.fan} {per(w.seconds)}) is spent"
-        counts.append((f"budget:{budget.name}:{bucket}{FAN}:{w.seconds}:{_start(w, now)}", _ttl(w), budget.fan, why))
+        counts.append((f"budget:{budget.name}:{bucket}{FAN}:{w.seconds}:{_start(w, now)}", _ttl(w), budget.fan, why, []))
     for w in budget.windows:
         where = f"{budget.name}{f' ({bucket})' if bucket else ''}"
         why = f"{where}: the {lane_name} share of its {w.requests} requests {per(w.seconds)} is spent" if keep else f"{where}: its {w.requests} requests {per(w.seconds)} are spent"
-        counts.append((_window_key(budget, bucket, w, now), _ttl(w), w.requests - w.margin - keep, why))
+        key, *before = _keys(budget, bucket, w, now)
+        counts.append((key, _ttl(w), w.requests - w.margin - keep, why, before))
     taken: list[tuple[str, int]] = []
-    for key, ttl, limit, why in counts:
+    for key, ttl, limit, why, before in counts:
         taken.append((key, ttl))
-        if _store_call("incr", key, ttl, cost) > limit:
+        if _store_call("incr", key, ttl, cost) + (sum(n or 0 for n in _store_call("get_many", before)) if before else 0) > limit:
             for k, t in taken:
                 _store_call("incr", k, t, -cost)
             _note(budget, lane_name, "refused", now)
@@ -316,7 +352,7 @@ def spare(budget: Budget, bucket: str = "", lane_name: str = "history") -> bool:
     left = _store_call("get", _left_key(budget, bucket))
     if budget.windows and left is not None and left <= min(w.margin for w in budget.windows) + keep:
         return False
-    return all((_store_call("get", _window_key(budget, bucket, w, now)) or 0) < w.requests - w.margin - keep for w in budget.windows)
+    return all(_used(budget, bucket, w, now) < w.requests - w.margin - keep for w in budget.windows)
 
 
 def room(budget: Budget, bucket: str = "", lane_name: str = "feed") -> tuple[int, int] | None:
@@ -327,7 +363,7 @@ def room(budget: Budget, bucket: str = "", lane_name: str = "feed") -> tuple[int
         return None
     now = time.time()
     keep = _headroom(budget, lane_name)
-    rooms = [(w.requests - w.margin - keep - (_store_call("get", _window_key(budget, bucket, w, now)) or 0), w.requests) for w in budget.windows]
+    rooms = [(w.requests - w.margin - keep - _used(budget, bucket, w, now), w.requests) for w in budget.windows]
     said = _store_call("get", _left_key(budget, bucket))
     if said is not None:
         rooms.append((said - min(w.margin for w in budget.windows) - keep, budget.windows[0].requests))
@@ -391,9 +427,12 @@ def standing(budget: Budget, now: float | None = None) -> dict[str, Any]:
     prefix = f"budget:{budget.name}:"
     buckets = {""}
     for w in budget.windows:
-        found = {key[len(prefix):].rsplit(":", 2)[0] for key in _store_call("keys", f"{prefix}*:{w.seconds}:{_start(w, now)}")}
-        buckets |= {b for b in found if not b.endswith(FAN)}  # the fans' share is counted in the window too
-    windows = [{"bucket": b, "window": WINDOW_NAMES.get(w.seconds, f"{w.seconds}s"), "used": _store_call("get", _window_key(budget, b, w, now)) or 0, "allowance": w.requests}
+        counted = {key.rsplit(":", 1)[1] for key in _keys(budget, "", w, now)}
+        for key in _store_call("keys", f"{prefix}*:{w.seconds}:*"):
+            parts = key[len(prefix):].rsplit(":", 2)  # its bucket, the window's seconds, and which window or slot
+            if len(parts) == 3 and parts[2] in counted and not parts[0].endswith(FAN):  # the fans' share is counted in the window too
+                buckets.add(parts[0])
+    windows = [{"bucket": b, "window": WINDOW_NAMES.get(w.seconds, f"{w.seconds}s"), "used": _used(budget, b, w, now), "allowance": w.requests}
                for b in sorted(buckets) for w in budget.windows]
     left_now = {b: v for b in sorted(buckets) if (v := left(budget, b)) is not None}
     paused = _store_call("get", _paused_key(budget))
