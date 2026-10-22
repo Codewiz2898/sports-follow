@@ -90,6 +90,9 @@ class Redis:
     async def get(self, key):
         return self.data.get(key)
 
+    async def mget(self, keys):
+        return [self.data.get(k) for k in keys]
+
     async def set(self, key, value, nx=False, ex=None):
         if nx and key in self.data:
             return None
@@ -575,6 +578,36 @@ def test_only_a_follower_can_refresh_and_only_once_a_minute_per_player(api, monk
     del api.redis.data["refresh:1"]  # a minute later
     assert refresh("fan-b").json() == {"queued": True}
     assert len(api.queue.jobs) == 2
+
+
+def test_a_fans_players_are_read_in_one_go_on_every_stream_they_open(api, monkeypatch):
+    # BUG-269: a fan's list (the opening of each stream they open, every reconnect, and /api/me/following) read each
+    # followed player's card from Redis one request at a time: 18 players, 18 round trips.
+    follows = [(i, {"level": "key"}) for i in range(1, 19)]
+    for player_id, _ in follows[1:]:
+        api.redis.data[bus.card_key(player_id)] = json.dumps({"player_id": player_id, "status": "ready", "version": 1})
+    asked: list[str] = []
+
+    def counted(name: str):
+        call = getattr(api.redis, name)
+        return lambda *a, **k: asked.append(name) or call(*a, **k)
+
+    for name in ("get", "mget"):
+        monkeypatch.setattr(api.redis, name, counted(name))
+    rebuilt: list[int] = []
+
+    async def from_postgres(player_id):  # its hot copy gone (Redis flushed): read_card makes it again
+        rebuilt.append(player_id)
+        return {"player_id": player_id, "status": "ready", "version": 1}
+
+    async def rows(fn, *args):
+        return follows
+
+    monkeypatch.setattr(server, "in_db", rows)
+    monkeypatch.setattr(server, "read_card", from_postgres)
+    listed = asyncio.run(server._following("fan"))
+    assert [p["player_id"] for p in listed] == list(range(1, 19)) and {p["alerts"] for p in listed} == {"key"}
+    assert asked == ["mget"] and rebuilt == [1]
 
 
 def test_a_player_of_a_sport_turned_off_isnt_refreshed(api, monkeypatch, admin_controls):

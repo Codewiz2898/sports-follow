@@ -557,11 +557,13 @@ async def app_picture() -> Response:
 
 
 async def _following(fan: str) -> list[dict[str, Any]]:
-    """The fan's players as the app lists them: each card's summary and the fan's alert level."""
+    """The fan's players as the app lists them: each card's summary and the fan's alert level. Their hot copies are
+    read in one request (each stream's opening, and its every reconnect, reads them all: BUG-269)."""
     rows = await in_db(lambda db: db.execute(select(Follow.player_id, Follow.alert_rules).where(Follow.fan_id == fan).order_by(Follow.created_at)).all())
+    raws = await state["redis"].mget([bus.card_key(player_id) for player_id, _ in rows]) if rows else []
     out = []
-    for player_id, rules in rows:
-        card = await read_card(player_id)
+    for (player_id, rules), raw in zip(rows, raws):
+        card = json.loads(raw) if raw else await read_card(player_id)  # one Redis lost: from Postgres
         if card:
             out.append({**_summary(card), "alerts": (rules or {}).get("level", moments.DEFAULT_LEVEL)})
     return out
