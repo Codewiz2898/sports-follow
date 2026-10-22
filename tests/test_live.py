@@ -248,3 +248,20 @@ def test_fans_looking_within_a_few_seconds_share_one_ranking_and_only_their_foll
     db.add(Follow(fan_id="third", player_id=5, alert_rules={}))
     db.commit()
     assert kane("third", NOW + timedelta(seconds=live.SHARED + 5)) == (True, 3)
+
+
+def test_a_read_its_sources_share_for_the_minute_refuses_keeps_the_last_and_is_no_failure(db, redis, sources, monkeypatch):
+    """A source's share of its minute for this lane spent (budget.RateLimited: our own limit, not the source failing)
+    leaves the last read served and is no failed job: the next look asks again, as a player's refresh does."""
+    from sports_follow.adapters import budget
+
+    sources.pitch = [LiveGame(source_id="100", title="A vs B", competition="Cup", start_utc=None, snapshot=snapshot("1 – 0"))]
+    live.read("pitch", NOW)
+    before = live.last_read("pitch")
+
+    def spent():
+        raise budget.RateLimited("pitch: the refresh share of its 10 requests a minute is spent")
+
+    monkeypatch.setitem(ADAPTERS, "pitch", SimpleNamespace(system="pitch", sports=("football",), live_now=spent))
+    assert live.read("pitch", NOW + timedelta(seconds=30)) == 0
+    assert live.last_read("pitch") == before

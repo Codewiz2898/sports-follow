@@ -32,7 +32,7 @@ from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.orm import Session
 
 from . import bus, matches, registry, search, sports
-from .adapters import ADAPTERS, Adapter, LiveGame, PlayerRef
+from .adapters import ADAPTERS, Adapter, LiveGame, PlayerRef, budget
 from .db import session
 from .models import Athlete, Event, Follow
 
@@ -110,11 +110,17 @@ def _dump(game: LiveGame, sport: str, players: list[dict[str, Any]], fame: int) 
 
 def read(system: str, now: datetime | None = None) -> int:
     """Ask a source what it has on now, rank each game's players, and keep it for the API
-    (worker.read_live). Returns how many games: none from a source turned off since the read was asked for."""
+    (worker.read_live). Returns how many games: none from a source turned off since the read was asked for, nor
+    from one whose share for the lane is spent for now (budget.RateLimited, our own limit: the last read stays
+    served and the next look asks again, as a player's refresh does; no failure)."""
     adapter = ADAPTERS.get(system)
     if adapter is None:
         return 0
-    games = cast(Any, adapter).live_now()
+    try:
+        games = cast(Any, adapter).live_now()
+    except budget.RateLimited as exc:
+        log.info("live: %s: %s; the last read stays", system, exc)
+        return 0
     one = adapter.sports[0] if len(adapter.sports) == 1 else ""  # a source of several names each game's sport
     with session() as db:
         blocked = registry.blocked(db)
