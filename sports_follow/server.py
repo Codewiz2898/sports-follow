@@ -1677,13 +1677,24 @@ RESEND_AFTER = 60  # seconds before another code to the same address
 CODES_PER_EMAIL = 5  # an hour, to one inbox (accounts.inbox): its plus-addresses don't each get five (BUG-296)
 CODES_PER_ADDRESS = 20  # an hour, from one client address (an IPv4 address, or an IPv6 /64)
 CODES_UNKNOWN_ADDRESS = 100  # an hour, from every client without a public address together
-CODES_PER_ADDRESS_DAY = 20  # a UTC day, from one client address: one network can't spend the day's mail
-CODES_PER_NETWORK_DAY = 200  # a UTC day, from one IPv6 /48's /64s together (_address_limits): a phone network's subscribers, not 65,536 /64s' worth
+CODES_PER_ADDRESS_DAY = 20  # a UTC day, from one client address (an IPv4 address, or an IPv6 /64)
+CODES_PER_NETWORK_DAY = 200  # at most, a UTC day, to new addresses from one IPv6 /48's /64s together (_new_codes_from_a_48)
 CODES_PER_HOUR = 200  # an hour, to everyone: the mail provider's bill
 KEPT_FOR_ACCOUNTS = 0.3  # of the day's codes (MAIL_CODES_PER_DAY), kept for accounts that have stood a day (accounts.standing)
 FAILS_PER_DAY = 20  # wrong codes for one address from one network in a UTC day, across new codes
 BLOCKED = "This account has been blocked."  # by an admin (admin.py)
 TOO_MANY_WRONG = "Too many wrong codes. Ask for a new one."
+
+
+def _new_codes_a_day() -> int:
+    """The day's codes for addresses without an account that has stood a day: the mail plan's, less those kept."""
+    return MAIL_CODES_PER_DAY - round(MAIL_CODES_PER_DAY * KEPT_FOR_ACCOUNTS)
+
+
+def _new_codes_from_a_48() -> int:
+    """The day's codes to new addresses from one IPv6 /48's /64s together: half of all new addresses' (and at most
+    CODES_PER_NETWORK_DAY), so one /48, a free tunnel's, can't leave nobody else able to sign up that day (BUG-093)."""
+    return min(CODES_PER_NETWORK_DAY, _new_codes_a_day() // 2)
 
 
 async def _take(key: str, limit: int, ttl: int, refusal: str) -> None:
@@ -1808,13 +1819,17 @@ async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any
     try:
         await _take(f"auth-email:{accounts.email_key(accounts.inbox(email))}:{hour}", CODES_PER_EMAIL, 2 * 3600, "That's a lot of codes for one address. Try again in an hour.")
         await _take(f"auth-address:{network}:{hour}", CODES_PER_ADDRESS if address else CODES_UNKNOWN_ADDRESS, 2 * 3600, "Your network has asked for a lot of codes. Try again in an hour.")
-        await _take_address("auth-address-day", _address_limits(address, CODES_PER_ADDRESS_DAY, CODES_PER_NETWORK_DAY), day, 2 * DAY,
-                            "Your network has asked for a lot of codes today. Try again tomorrow.")
+        standing = await in_db(accounts.standing, email)
+        # A client address's day; and, for an address without an account that has stood a day, its IPv6 /48's /64s
+        # together a ceiling (_new_codes_from_a_48). Fans with accounts on a phone network's /48 aren't held back by
+        # its other subscribers' sign-ups (BUG-326).
+        days = _address_limits(address, CODES_PER_ADDRESS_DAY, _new_codes_from_a_48())
+        await _take_address("auth-address-day", days[:1] if standing else days, day, 2 * DAY, "Your network has asked for a lot of codes today. Try again tomorrow.")
         used_up = f"{APP_NAME} has sent all the sign-in codes it can today. Try again tomorrow."
         # Part of the day's codes is kept for fans whose account has stood a day: made-up addresses, and accounts made
         # for it minutes before, can't leave none (BUG-093).
-        if not await in_db(accounts.standing, email):
-            await _take(f"auth-day-new:{day}", MAIL_CODES_PER_DAY - round(MAIL_CODES_PER_DAY * KEPT_FOR_ACCOUNTS), 2 * DAY, used_up)
+        if not standing:
+            await _take(f"auth-day-new:{day}", _new_codes_a_day(), 2 * DAY, used_up)
         await _take(f"auth-hour:{hour}", CODES_PER_HOUR, 2 * 3600, f"{APP_NAME} is sending a lot of codes right now. Try again in a few minutes.")
         await _take(f"auth-day:{day}", MAIL_CODES_PER_DAY, 2 * DAY, used_up)
     except HTTPException:
