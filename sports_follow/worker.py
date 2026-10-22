@@ -221,8 +221,9 @@ async def poll_lane(ctx, system: str) -> None:
 
 
 async def send_moments(ctx, moment_ids: list[int]) -> None:
-    """Moments a poll or a rebuild found but no sender claimed: the worker restarted in between."""
-    await on_thread(notify.send, moment_ids)
+    """Moments a poll or a rebuild found but no sender claimed: the worker restarted in between. One that can't be
+    planned holds back no other game's (notify.sweep)."""
+    await on_thread(notify.sweep, moment_ids)
 
 
 async def send_held(ctx, moment_ids: list[int]) -> None:

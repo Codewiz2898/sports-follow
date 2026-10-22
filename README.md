@@ -518,7 +518,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   Sound is rationed (once every 3 minutes a game, 6 times an hour a phone) except for the biggest
   moments. `sports_follow/notify.py` claims each batch once, logs every
   push (`notification`), sends it to each device at once (by Web Push with VAPID to browsers, by FCM to
-  the Android app, `fcm.py`), and the tick sweeps up any batch a restart dropped. Devices that took their last
+  the Android app, `fcm.py`), and the tick sweeps up any batch a restart dropped (a game's at a time, should the
+  batch fail, so a moment that can't be planned holds back no other). A player or a team with more fans than one
+  query can name (Postgres takes 65,535 values) is planned a part of them at a time (`notify.chunks`). Devices that took their last
   push go by threads of their own, apart from new and failing ones, and each push service gets 2 s to connect, so
   a device that never answers holds up no other fan's alerts; push addresses must be a known service's own, and
   one network turns notifications on for only so many new devices a day. Quiet hours are per device and make notifications arrive without a sound or vibration (on Android still on the lock screen, so a phone set to wake its screen for notifications may light it); one that arrived silent on every device doesn't count toward the hour's sound.
