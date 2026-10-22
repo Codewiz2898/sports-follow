@@ -869,8 +869,8 @@ def merge(db: Session, anon: str, fan: str) -> None:
                        .returning(Pick.question_id, Pick.option, Pick.points, Pick.counted, Pick.moved_late, Pick.created_at, Pick.updated_at, late)).all()
     if taken:
         # An account's pick counts (Pick.counted): one still open does from now; one closed as it did, its split shown.
-        db.execute(insert(Pick).values([{"question_id": qid, "fan_id": fan, "option": option, "points": points, "counted": counted or not after, "moved_late": moved_late or after,
-                                         "created_at": created_at, "updated_at": updated_at} for qid, option, points, counted, moved_late, created_at, updated_at, after in taken])
+        db.execute(insert(Pick).values([{"question_id": qid, "fan_id": fan, "option": option, "points": scored, "counted": counted or not after, "moved_late": moved_late or after,
+                                         "created_at": created_at, "updated_at": updated_at} for qid, option, scored, counted, moved_late, created_at, updated_at, after in taken])
                    .on_conflict_do_nothing())
 
 
