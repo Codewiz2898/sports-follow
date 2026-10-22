@@ -4,6 +4,7 @@ the tests against the database are skipped without one (tests/test_feed.py has t
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -308,3 +309,31 @@ def test_a_sport_turned_off_has_its_players_videos_served_nowhere(db):  # noqa: 
     assert page is not None and page.count == 0
     controls.turn_sport("chess", True)  # back on: served again, nothing lost
     assert set(feed.judged(db, [gukesh, kohli], NOW)) == {gukesh, kohli}
+
+
+@needs_db
+def test_a_sport_turned_off_has_none_of_its_players_news_in_the_feed_either(db):  # noqa: F811
+    # BUG-125, reopened: with nothing judged served for a turned-off sport's player, the Feed fell back to their card's
+    # news as for a player nothing was judged for yet: the Following tab, its circles and their page's Feed tab kept it.
+    from sqlalchemy import text
+
+    from .test_feed import CARD
+
+    db.execute(text("TRUNCATE feed_candidates RESTART IDENTITY CASCADE"))
+    gukesh = made_player(db, "Gukesh D", sport="chess", served=False)
+    db.execute(text("UPDATE player_card SET card = CAST(:card AS jsonb) WHERE player_id = :id"), {"card": json.dumps({**CARD, "player": {"name": "Gukesh D", "sport": "chess"}}), "id": gukesh})
+    db.commit()
+    kohli = made_player(db, "Virat Kohli")
+    follow(db, "fan", gukesh, kohli)
+    assert {e.player.id for e in feed.page(db, "fan", now=NOW, limit=50).items} == {gukesh, kohli}  # Gukesh's news while chess runs
+    controls.turn_sport("chess", False)
+    try:
+        page = feed.page(db, "fan", now=NOW, limit=50)
+        assert {e.player.id for e in page.items} == {kohli} and [c.id for c in page.players] == [kohli]
+        theirs = feed.feed_for(db, gukesh, "fan", NOW)
+        assert theirs is not None and theirs.count == 0
+        with pytest.raises(LookupError):  # nothing of theirs to say anything about
+            feed.feedback(db, "fan", gukesh, feed.item_id("https://example.com/g4"), "not_interested")
+    finally:
+        controls.turn_sport("chess", True)
+    assert {e.player.id for e in feed.page(db, "fan", now=NOW, limit=50).items} == {gukesh, kohli}  # back on: back

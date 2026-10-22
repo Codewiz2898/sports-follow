@@ -554,6 +554,7 @@ def _everyone(db: Session, fan: str, now: datetime, tz: int, player: int | None 
     if not ids and not strangers:
         return [], []
     everyone = [*ids, *strangers]
+    off = _off(db, ids)  # a turned-off sport's: not even their card's news (others() takes none of theirs)
     cards = {pid: card for pid, card in db.execute(select(PlayerCard.player_id, PlayerCard.card).where(PlayerCard.player_id.in_(everyone))).all()}
     kept = judged(db, everyone, now)
     # By item, whichever player it was hidden from: a story two players hold is one card.
@@ -570,7 +571,7 @@ def _everyone(db: Session, fan: str, now: datetime, tz: int, player: int | None 
     followed = set(ids)
     for pid in everyone:
         card = cards.get(pid)
-        if card is None or pid in whose:
+        if card is None or pid in whose or pid in off:
             continue
         held = kept.get(pid, [])
         if pid in followed:
@@ -825,9 +826,20 @@ def _vouched(db: Session, found: tuple[str, str]) -> bool:
 
 def _candidates(db: Session, player_id: int, card: dict[str, Any], now: datetime | None = None) -> list[Candidate]:
     """Everything the player's feed could show anyone: the judge's kept items, then the card's news, unless the
-    judge kept stories of theirs (news.py), which are the news then."""
+    judge kept stories of theirs (news.py), which are the news then. Nothing while their sport is turned off."""
+    if _off(db, [player_id]):
+        return []
     kept = judged(db, [player_id], now).get(player_id, [])
     return [*kept, *([] if any(c.item.kind == "news" for c in kept) else _news(card))]
+
+
+def _off(db: Session, player_ids: Iterable[int]) -> set[int]:
+    """The players among these whose sport is turned off (sports.on): their feed is empty, the card's news too, until
+    it's back on. judged() has nothing of theirs, which mustn't be read as nothing judged yet."""
+    ids = sorted(set(player_ids))
+    if not ids:
+        return set()
+    return {pid for pid, sport in db.execute(select(Player.id, Player.sport).where(Player.id.in_(ids))).all() if not sports.on(sport)}
 
 
 def _unhidden(db: Session, fan: str, player_id: int, candidates: list[Candidate]) -> list[Candidate]:
