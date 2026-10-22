@@ -14,7 +14,7 @@ import { useFollowing } from '../following'
 import { YourSportsSheet } from '../yourSports'
 import { SearchIcon } from '../icons'
 import { colour, font, GUTTER } from '../theme'
-import { alpha, Btn, Eyebrow, Notice } from '../ui'
+import { alpha, Btn, Eyebrow, LiveDot, Notice } from '../ui'
 
 const FADE = 20 // with the search, the chips fade out under it, and the last one scrolls clear of the fade
 
@@ -42,9 +42,9 @@ export function useGame(row: GameRow): [SportInfo | null, (key: string | null) =
   return [game, pick]
 }
 
-/** One game's chip (.game-chip): outlined in ink with a dot of its colour; picked, a block of its colour. No game
- * is All, ink when picked. */
-function GameChip({ game, picked, onPress, onLayout }: { game: SportInfo | null; picked: boolean; onPress: () => void; onLayout?: (x: number, width: number) => void }) {
+/** One game's chip (.game-chip): outlined in ink with a dot of its colour; picked, a block of its colour. While one
+ * of it is on now (`live`), the pulsing red dot of a live player's pill instead. No game is All, ink when picked. */
+function GameChip({ game, live = false, picked, onPress, onLayout }: { game: SportInfo | null; live?: boolean; picked: boolean; onPress: () => void; onLayout?: (x: number, width: number) => void }) {
   const tone = useTone(game?.key)
   const ground = !picked ? 'transparent' : game ? tone.sport : colour.text
   const ink = !picked ? colour.text : game ? tone.on : colour.bg
@@ -53,10 +53,12 @@ function GameChip({ game, picked, onPress, onLayout }: { game: SportInfo | null;
       onPress={onPress}
       onLayout={onLayout && ((e) => onLayout(e.nativeEvent.layout.x, e.nativeEvent.layout.width))}
       accessibilityRole="button"
+      accessibilityLabel={game ? `${game.label}${live ? ', live' : ''}` : 'All'}
       accessibilityState={{ selected: picked }}
       style={({ pressed }) => [s.chip, { backgroundColor: ground, borderColor: picked ? ground : colour.text }, pressed && !picked && { backgroundColor: alpha(colour.text, 0.06) }]}
     >
-      {game ? <View style={[s.dot, { backgroundColor: picked ? ink : tone.sport }]} /> : null}
+      {/* Ringed on a picked chip, so the red reads on any sport's colour. */}
+      {game ? (live ? <LiveDot ring={picked ? ink : undefined} /> : <View style={[s.dot, { backgroundColor: picked ? ink : tone.sport }]} />) : null}
       <Text style={[s.chipText, { color: ink }]} numberOfLines={1}>{game ? game.label : 'All'}</Text>
     </Pressable>
   )
@@ -65,11 +67,12 @@ function GameChip({ game, picked, onPress, onLayout }: { game: SportInfo | null;
 /**
  * Today's game filter, under its head: All, a chip of each of the fan's own games on the page (their sports' among
  * them), and a search for the others (filter.ts gameRow), which leads to their sports too, so a game found can keep
- * its chip; one of those picked has its chip after the fan's own while it's picked. Not there while the page holds
- * one game or none. The chips scroll sideways out to the page's edge; the search stays at the row's end, in sight
+ * its chip; one of those picked has its chip after the fan's own while it's picked. A game with one on now (`live`,
+ * filter.ts gamesOnNow) says so, picked or not, in the row and in its search. Not there while the page holds one
+ * game or none. The chips scroll sideways out to the page's edge; the search stays at the row's end, in sight
  * however many games the fan has. A game picked off the row's edge (from the search, or a link) is brought into it.
  */
-export function GameChips({ row, game, onPick }: { row: GameRow; game: SportInfo | null; onPick: (key: string | null) => void }) {
+export function GameChips({ row, game, live, onPick }: { row: GameRow; game: SportInfo | null; live: Set<string>; onPick: (key: string | null) => void }) {
   const [finding, setFinding] = useState(false)
   const [editing, setEditing] = useState(false)
   const { sportsLoaded } = useFollowing() // the fan's sports as the server has them, before the sheet can save over them
@@ -112,7 +115,7 @@ export function GameChips({ row, game, onPick }: { row: GameRow; game: SportInfo
           scrollEventThrottle={32}
         >
           <GameChip game={null} picked={!game} onPress={() => onPick(null)} />
-          {chips.map((x) => <GameChip key={x.key} game={x} picked={picked === x.key} onPress={() => onPick(x.key)} onLayout={placed(x.key)} />)}
+          {chips.map((x) => <GameChip key={x.key} game={x} live={live.has(x.key)} picked={picked === x.key} onPress={() => onPick(x.key)} onLayout={placed(x.key)} />)}
         </ScrollView>
         {find ? <LinearGradient pointerEvents="none" colors={[alpha(colour.bg, 0), colour.bg]} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={s.fade} /> : null}
       </View>
@@ -121,7 +124,7 @@ export function GameChips({ row, game, onPick }: { row: GameRow; game: SportInfo
           <SearchIcon size={18} />
         </Pressable>
       ) : null}
-      <FindGame open={finding} games={row.more} onPick={onPick} onClose={() => setFinding(false)}
+      <FindGame open={finding} games={row.more} live={live} onPick={onPick} onClose={() => setFinding(false)}
         onYourSports={sportsLoaded ? () => { setFinding(false); setEditing(true) } : undefined} />
       {sheet}
     </View>
@@ -142,15 +145,15 @@ function useKeyboard(): number {
 }
 
 /** The row's search (the web's FindGame, a .feed-sheet as the Feed's "…" sheet, post.tsx's ItemSheet): the other games
- * with something on Today, narrowed as the fan types; a tap shows that one. At its foot, the way to the fan's sports
- * (`onYourSports`: the Edit sheet, once their sports have come), so a game they came looking for gets a chip every
- * day. Back, or a tap above it, closes it. */
-function FindGame({ open, games, onPick, onClose, onYourSports }: { open: boolean; games: SportInfo[]; onPick: (key: string) => void; onClose: () => void; onYourSports?: () => void }) {
+ * with something on Today, those on now first, narrowed as the fan types; a tap shows that one. At its foot, the way
+ * to the fan's sports (`onYourSports`: the Edit sheet, once their sports have come), so a game they came looking for
+ * gets a chip every day. Back, or a tap above it, closes it. */
+function FindGame({ open, games, live, onPick, onClose, onYourSports }: { open: boolean; games: SportInfo[]; live: Set<string>; onPick: (key: string) => void; onClose: () => void; onYourSports?: () => void }) {
   const insets = useSafeAreaInsets()
   const keyboard = useKeyboard()
   const [words, setWords] = useState('')
   useEffect(() => { if (open) setWords('') }, [open]) // each time it opens, every game again
-  const found = findGames(games, words)
+  const found = findGames(games, words, live)
   const choose = (key: string) => {
     onPick(key)
     onClose()
@@ -171,7 +174,7 @@ function FindGame({ open, games, onPick, onClose, onYourSports }: { open: boolea
           style={s.field}
         />
         <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={s.list} keyboardShouldPersistTaps="handled">
-          {found.map((x) => <GameChip key={x.key} game={x} picked={false} onPress={() => choose(x.key)} />)}
+          {found.map((x) => <GameChip key={x.key} game={x} live={live.has(x.key)} picked={false} onPress={() => choose(x.key)} />)}
           {!found.length ? <Text style={s.none}>No game by that name on today</Text> : null}
         </ScrollView>
         {onYourSports ? (

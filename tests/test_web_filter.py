@@ -20,7 +20,7 @@ import { register } from 'node:module'
 register(%(hook)s)
 const f = await import(%(module)s)
 // A sport's key from the name an item says, as sportKey does: any spelling of a sport's name; else "other".
-const keyOf = (name) => ({ cricket: 'cricket', football: 'football', chess: 'chess', tennis: 'tennis', cs2: 'cs2' })[(name ?? '').toLowerCase()] ?? 'other'
+const keyOf = (name) => ({ cricket: 'cricket', football: 'football', chess: 'chess', tennis: 'tennis', cs2: 'cs2', basketball: 'basketball' })[(name ?? '').toLowerCase()] ?? 'other'
 const sport = (key, on = true) => ({ key, label: key, on })
 const catalog = [sport('football'), sport('cricket'), sport('tennis'), sport('chess'), sport('cs2'), sport('basketball', false)]
 const card = (id, sport) => ({ player_id: id, player: { name: `p${id}`, sport } })
@@ -52,6 +52,11 @@ console.log(JSON.stringify({
   nobodys: f.gameRow(catalog, here, new Set()).chips.length,
   picked: [f.pickedGame('chess', row)?.key ?? null, f.pickedGame('cs2', row)?.key ?? null, f.pickedGame('basketball', row), f.pickedGame('golf', row), f.pickedGame(null, row)],
   nothing: [f.nothingOn({ ...f.NO_BLOCKS, cards: blocks.cards }), f.nothingOn({ ...f.NO_BLOCKS, cards: blocks.cards, wire: blocks.wire })],
+  // A game followed by itself and a team's game, on now, as followedLive and teamsLive give them.
+  on: [...f.gamesOnNow({ ...blocks, followed: [{ event_id: 7, sport: 'Chess' }], teamGames: [{ key: 'event:8', sport: 'CS2' }] }, keyOf)].sort(),
+  onNone: [...f.gamesOnNow({ ...blocks, live: [], moreLive: [] }, keyOf)],
+  onNobodys: [...f.gamesOnNow({ ...f.NO_BLOCKS, alsoLive: [{ game: { key: 'a1', sport: 'tennis' } }], bigResults: blocks.bigResults }, keyOf)],
+  foundOn: [f.findGames(row.more, '', new Set(['cs2'])).map((s) => s.key), f.findGames(row.more, 'TEN', new Set(['cs2'])).map((s) => s.key)],
 }))
 """
 
@@ -100,3 +105,17 @@ def test_a_game_picked_is_one_of_the_rows_else_all(found):
 
 def test_the_strip_alone_is_nothing_on(found):
     assert found["nothing"] == [True, False]
+
+
+def test_a_game_on_now_is_any_live_blocks_and_no_other(found):
+    # The fan's players' game (football), a game followed by itself (chess), a team's (cs2) and the other games on
+    # now, a link naming none on Today (basketball): each one's chip says it's live, though basketball gets none.
+    assert found["on"] == ["basketball", "chess", "cs2", "football"]
+    # A result, a game to come, the Wire or the strip is something on Today, not a game on now.
+    assert found["onNone"] == []
+    # A fan who follows nobody: Live now's games.
+    assert found["onNobodys"] == ["tennis"]
+
+
+def test_the_search_has_the_games_on_now_first(found):
+    assert found["foundOn"] == [["cs2", "tennis"], ["tennis"]]
