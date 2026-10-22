@@ -22,7 +22,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypeVar, cast
 
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -1091,9 +1091,12 @@ def due_work(now: datetime | None = None) -> Due:
             .where(Event.status.in_(("armed", "live")), Event.live_binding.is_(None), Event.start_utc.is_not(None), Event.start_utc < now - timedelta(hours=12))
             .values(status="final")
         )
+        # A source's games six days after their start; one with no start time of its own (armed as next:
+        # structured.reschedule), six days after it was made.
         closed = db.scalars(
             update(Event)
-            .where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None), Event.start_utc.is_not(None), Event.start_utc < now - timedelta(days=6))
+            .where(Event.status.in_(("armed", "live")), Event.live_binding.is_not(None),
+                   or_(Event.start_utc < now - timedelta(days=6), and_(Event.start_utc.is_(None), Event.created_at < now - timedelta(days=6))))
             .values(status="final")
             .returning(Event.id)
         ).all()

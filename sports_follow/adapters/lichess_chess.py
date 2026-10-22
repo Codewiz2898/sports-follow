@@ -48,6 +48,9 @@ LIVE_MOVES_KEEP = 6 * 3600  # a live board's moves so far, kept in Redis this lo
 # board waits this long for it before it's over, where Lichess doesn't say the round is first.
 GRACE = 30 * 60
 OVER_KEEP = 24 * 3600  # when such a game was first seen over, kept in Redis this long
+# A round set to start after the one before it (no start time of its own: a blitz day's rounds) is next while that one
+# is on, and this long after it ended: its fixture says so (Fixture.next_up), and it's armed and polled till it starts.
+AFTER_PREVIOUS = timedelta(hours=3)
 # Words a knockout's event or round goes by ("8-player Knockout", "Tiebreaks", "Armageddon", "Playoffs").
 KNOCKOUT = re.compile(r"\b(?:knock-?outs?|ko|tie-?breaks?|tie breaks?|armageddon|play-?offs?)\b", re.I)
 
@@ -422,9 +425,21 @@ def round_status(round_info: dict[str, Any], games: list[dict[str, Any]], now: d
     if round_info.get("finished"):
         return "final" if games else "postponed"
     starts = _dt(round_info.get("startsAt"))
-    if round_info.get("ongoing") or (games and starts and starts <= now):
+    if games and (round_info.get("ongoing") or (starts and starts <= now)):
         return "live"
-    return "scheduled"
+    return "scheduled"  # a round on without a board of theirs (yet): their game hasn't started
+
+
+def next_up(rounds: list[dict[str, Any]], rnd: dict[str, Any], now: datetime) -> bool:
+    """Whether a round with no start time of its own, set to start once the one before it is over (Lichess's
+    startsAfterPrevious: a blitz day's rounds, a tiebreak), is next: the one before it is on, or ended within
+    AFTER_PREVIOUS."""
+    if rnd.get("startsAt") or not rnd.get("startsAfterPrevious") or rnd.get("finished") or rnd.get("ongoing"):
+        return False
+    at = next((i for i, r in enumerate(rounds) if r.get("id") == rnd.get("id")), 0)
+    before = rounds[at - 1] if at else {}
+    ended = _dt(before.get("finishedAt"))
+    return bool(before.get("ongoing") or (before.get("finished") and (ended is None or now - ended < AFTER_PREVIOUS)))
 
 
 LIVE_TOURS = 3  # the broadcasts on now whose round is read for live_now(), highest tier first: a request each, on the one-at-a-time line
@@ -495,7 +510,7 @@ def parse_board(round_data: dict[str, Any], fide_id: str, now: datetime | None =
         return Snapshot(
             status=status,
             score_label=f"{tour.get('name', '')} · {rnd.get('name', '')}",
-            clock_label="Pairings not published yet" if status == "scheduled" else "Not paired this round",
+            clock_label="Pairings not published yet" if status == "scheduled" and not round_data.get("games") else "Not paired this round",
             state={"kind": "chess", "round": rnd.get("name"), "tournament": tour.get("name")},
             source_url=rnd.get("url"),
         )
@@ -568,9 +583,10 @@ def parse_board(round_data: dict[str, Any], fide_id: str, now: datetime | None =
 
 
 def fixture_for(tour: dict[str, Any], rnd: dict[str, Any], games: list[dict[str, Any]], fide_id: str, now: datetime,
-                follows: bool = False, waited: float | None = None) -> Fixture:
+                follows: bool = False, waited: float | None = None, upnext: bool = False) -> Fixture:
     """A player's fixture in one round: their game (or match) once paired, the round itself before that.
-    `follows` and `waited` as round_status's: a refresh calls a game over no sooner than its polls do."""
+    `follows` and `waited` as round_status's: a refresh calls a game over no sooner than its polls do; `upnext`, a
+    round with no start time of its own that's next (next_up)."""
     status = round_status(rnd, games, now, follows, waited)
     title = f"{tour.get('name', '')} · {rnd.get('name', '')}"
     result = None
@@ -594,6 +610,7 @@ def fixture_for(tour: dict[str, Any], rnd: dict[str, Any], games: list[dict[str,
         detail=rnd.get("name") if games else "Pairings not published yet",
         result=result,
         board=str((current_game(games) or {}).get("id") or ""),  # the game parse_board will show, under each player's fixture
+        next_up=upnext,
     )
 
 
@@ -841,7 +858,8 @@ class LichessChess(Adapter):
                     continue
             for rnd in rounds:
                 starts = _dt(rnd.get("startsAt"))
-                if not (rnd.get("finished") or rnd.get("ongoing") or (starts and starts <= now + timedelta(hours=12))):
+                # A round to start after the one before, which is on or just over, is read as one starting soon is.
+                if not (rnd.get("finished") or rnd.get("ongoing") or (starts and starts <= now + timedelta(hours=12)) or next_up(rounds, rnd, now)):
                     unpaired.append(rnd)
                     continue
                 if rnd.get("finished"):
@@ -856,13 +874,13 @@ class LichessChess(Adapter):
                 mine = games_of(data, ref.athlete_id)
                 if mine:
                     read = {**data, "round": rnd, "tour": tour}
-                    games.append(fixture_for(tour, rnd, mine, ref.athlete_id, now, may_follow(read, mine), self._waited(read, ref.athlete_id)))
+                    games.append(fixture_for(tour, rnd, mine, ref.athlete_id, now, may_follow(read, mine), self._waited(read, ref.athlete_id), next_up(rounds, rnd, now)))
                 elif not data.get("games") and not rnd.get("finished"):
                     unpaired.append(rnd)  # starting soon, pairings not out
                 # else: paired without them (a bye, or not in this section)
             # Rounds not yet paired count as the player's only if they've played in this event or it names them.
             if games or names_them(tour, names):
-                out += games + [fixture_for(tour, rnd, [], ref.athlete_id, now) for rnd in unpaired[:3]]
+                out += games + [fixture_for(tour, rnd, [], ref.athlete_id, now, upnext=next_up(rounds, rnd, now)) for rnd in unpaired[:3]]
         return sorted(out, key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
 
     def history_pages(self, ref: PlayerRef, anchor: date) -> list[dict[str, Any]]:

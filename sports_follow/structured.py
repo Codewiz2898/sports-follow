@@ -740,19 +740,23 @@ def upsert_game(db: Session, adapter: Adapter, sport: str, f: Fixture) -> Event:
     event.notes = f.detail
     event.participants = f.team_ids
     event.live_binding = {"adapter": adapter.system, "locator": f.locator, "cadence": adapter.live_cadence}
-    reschedule(db, event, f.start_utc, f.status, sport)
+    reschedule(db, event, f.start_utc, f.status, sport, f.next_up)
     db.flush()
     return event
 
 
-def reschedule(db: Session, event: Event, start: datetime | None, status: str, sport: str | None = None) -> None:
+def reschedule(db: Session, event: Event, start: datetime | None, status: str, sport: str | None = None, next_up: bool = False) -> None:
     """An event's start and status as its source last said: a schedule read (upsert_game), or a read of the game
     itself for one no followed player's or team's refresh brings up to date (predictions.made). Put back (or brought
-    forward), its questions start then (predictions.moved); an armed one put back hours is disarmed (next_status)."""
+    forward), its questions start then (predictions.moved); an armed one put back hours is disarmed (next_status).
+    One with no start time of its own is armed while its source says it's next (Fixture.next_up: a chess round set
+    to start once the one before is over), so its start is seen when it comes, and disarmed once it doesn't."""
     if event.start_utc is not None and start is not None and start != event.start_utc:
         predictions.moved(db, event, start)
     event.start_utc = start
     later = start is not None and start > _now() + arm_before(event.sport or sport) + timedelta(hours=1)
+    if start is None and status == "scheduled":
+        status, later = ("armed", False) if next_up else (status, True)
     event.status = next_status(event.status, status, moved_later=later)
 
 

@@ -607,6 +607,46 @@ def test_a_game_whose_sport_is_turned_off_mid_game_stops_saying_live_and_comes_b
 
 
 @needs_db
+def test_a_game_with_no_start_time_its_source_says_is_next_is_armed_and_its_start_told(db, redis, source, monkeypatch):
+    # BUG-211 (H17): a chess round set to start after the previous one has no start time: it was never armed or polled,
+    # so a game played between two refreshes never told its start, its swings or its result.
+    listen(monkeypatch)
+    db.add_all([Player(id=5, slug="saka", name="Bukayo Saka", sport="Football"), PlayerIdentity(player_id=5, system="pitch", external_id="7", confidence=1.0)])
+    db.flush()
+    db.add(Follow(fan_id="saka", player_id=5, alert_rules={}))
+    db.commit()
+    saka = db.get(Player, 5)
+    assert saka is not None
+
+    def read(source_id: str, next_up: bool) -> Event:
+        fixture = Fixture(source_id, "Arsenal vs Chelsea", "Premier League", None, None, "scheduled", [HOME, AWAY], {"fixture": source_id}, ["Arsenal", "Chelsea"])
+        fixture.next_up = next_up  # what the source says of it: the game before it has started
+        event = structured.upsert_event(db, source.fake, saka, fixture)
+        db.commit()
+        return event
+
+    event = read("100", False)
+    assert event.status == "scheduled" and pipeline.due_work(NOW).polls == []  # no start, and not next: nothing arms it
+    event = read("100", True)
+    assert event.status == "armed" and pipeline.due_work(NOW).polls == [event.id]
+    binding = {"adapter": "pitch", "locator": {"fixture": "100"}, "cadence": 15}
+    structured.apply_poll(event.id, binding, source.fake, [(5, "7")], snap(0, 0, "", [], None, status="scheduled"))
+    structured.apply_poll(event.id, binding, source.fake, [(5, "7")], snap(0, 0, "1'", [], 0))
+    assert db.scalars(select(Moment.kind).where(Moment.event_id == event.id)).all() == ["start"]
+    # One the source no longer says is next (the game before it ended hours ago) is disarmed; one armed as next that's
+    # never brought to an end is closed six days after it was made, as a game with a start is six days after it.
+    other = read("101", True)
+    assert other.status == "armed"
+    assert read("101", False).status == "scheduled" and pipeline.due_work(NOW).polls == [event.id]
+    read("101", True)
+    db.execute(text("UPDATE event SET created_at = :at WHERE id = :id"), {"at": NOW - timedelta(days=7), "id": other.id})
+    db.commit()
+    pipeline.due_work(NOW)
+    db.expire_all()
+    assert (db.get(Event, other.id).status, db.get(Event, event.id).status) == ("final", "live")  # type: ignore[union-attr]
+
+
+@needs_db
 def test_the_alerts_list_pages_through_players_and_games_moments_alike(db, redis, source):
     named(source)
     event_id = matches.follow(db, "fan", "pitch", "100")

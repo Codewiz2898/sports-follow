@@ -704,6 +704,63 @@ def test_a_player_fide_names_without_a_comma_is_found_by_their_name_not_its_init
     assert len(tours) == lichess_chess.MAX_TOURS and tours[0]["id"] == "OwnEvent"
 
 
+def test_a_round_set_to_start_after_the_previous_one_is_read_and_said_to_be_next_once_that_one_is_on(monkeypatch):
+    # BUG-211 (H17): a blitz day's round 7 has no start time ("startsAfterPrevious"): it was taken as unpaired, its
+    # pairings never read, and its fixture no more than "scheduled" with no start, which nothing ever armed or polled.
+    now = datetime.now(timezone.utc)
+    ms = lambda d: int(d.timestamp() * 1000)  # noqa: E731
+    gukesh = {"name": "Gukesh D", "fideId": 46616543, "rating": 2767, "title": "GM"}
+    sindarov = {"name": "Sindarov, Javokhir", "fideId": 14205483, "rating": 2726, "title": "GM"}
+    tour = {"id": "BlitzDay", "name": "Grand Chess Tour Blitz 2027", "info": {"players": "Gukesh, Sindarov"}, "dates": [ms(now - timedelta(hours=3)), ms(now + timedelta(hours=5))]}
+    r6 = {"id": "Round006", "name": "Round 6", "ongoing": True, "startsAt": ms(now - timedelta(minutes=10))}
+    r7 = {"id": "Round007", "name": "Round 7", "startsAfterPrevious": True}
+    r8 = {"id": "Round008", "name": "Round 8", "startsAfterPrevious": True}
+    start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    boards = {"Round006": [{"id": "game6aaa", "players": [sindarov, gukesh], "fen": start, "status": "*"}], "Round007": []}
+    asked: list[str] = []
+
+    def get_json(url, ttl, text=False):
+        asked.append(url.removeprefix("https://lichess.org/api/"))
+        if "/broadcast/search?q=" in url:
+            return {"currentPageResults": [{"tour": tour}]}
+        if url.endswith("/broadcast/top"):
+            return {"active": [], "upcoming": []}
+        if url.endswith(f"/broadcast/{tour['id']}"):
+            return {"tour": tour, "rounds": [r6, r7, r8]}
+        if url.endswith(f"/broadcast/{tour['id']}.pgn"):  # the finished rounds' games
+            return ('[White "Sindarov, Javokhir"]\n[Black "Gukesh D"]\n[Result "0-1"]\n[WhiteFideId "14205483"]\n[BlackFideId "46616543"]\n'
+                    '[GameURL "https://lichess.org/broadcast/t/r/Round006/game6aaa"]\n\n1. e4 0-1\n')
+        for rnd in (r6, r7, r8):
+            if url.endswith(f"/broadcast/-/-/{rnd['id']}"):
+                return {"round": rnd, "tour": tour, "games": boards[rnd["id"]]}
+        raise AdapterError(f"not faked: {url}")
+
+    monkeypatch.setattr(lichess_chess, "get_json", get_json)
+    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: Kept())
+    chess = lichess_chess.LichessChess()
+    ref = lichess_chess.ref_for({"id": gukesh["fideId"], "name": gukesh["name"]})
+    # Round 6 on: round 7 is next, its pairings asked for (none yet); round 8 isn't, nor read.
+    fixtures = {f.source_id.split("-")[0]: f for f in chess.fixtures(ref)}
+    assert "broadcast/-/-/Round007" in asked and "broadcast/-/-/Round008" not in asked
+    assert [(r, f.status, f.start_utc, getattr(f, "next_up", None)) for r, f in fixtures.items()] == [
+        ("Round006", "live", datetime.fromtimestamp(r6["startsAt"] / 1000, timezone.utc), False), ("Round007", "scheduled", None, True), ("Round008", "scheduled", None, False)]
+    # Paired once round 6 is over; round 7 under way with no board of Gukesh's is no game of his (not live, no start
+    # told): his board may not be up yet, or he isn't paired; with it, it's his game, live.
+    r6.update(ongoing=False, finished=True, finishedAt=ms(now - timedelta(minutes=2)))
+    boards["Round006"][0]["status"] = "0-1"
+    boards["Round007"] = [{"id": "game7aaa", "players": [gukesh, sindarov], "fen": start, "status": "*"}]
+    assert {f.source_id.split("-")[0]: f.next_up for f in chess.fixtures(ref)}["Round007"] is True
+    r7["ongoing"] = True
+    others = {"round": r7, "tour": tour, "games": [{"id": "game7bbb", "players": [{"name": "A", "fideId": 1}, {"name": "B", "fideId": 2}], "fen": start, "status": "*"}]}
+    unpaired = lichess_chess.parse_board(others, str(gukesh["fideId"]), now)
+    assert (unpaired.status, unpaired.clock_label) == ("scheduled", "Not paired this round")
+    assert lichess_chess.parse_board({"round": r7, "tour": tour, "games": boards["Round007"]}, str(gukesh["fideId"]), now).status == "live"
+    # Round 6 long over (a day's last round, the next on another day): round 7 isn't next.
+    r7["ongoing"] = False
+    r6["finishedAt"] = ms(now - lichess_chess.AFTER_PREVIOUS - timedelta(minutes=1))
+    assert lichess_chess.next_up([r6, r7, r8], r7, now) is False
+
+
 def test_tournament_pgn_gives_every_round_in_one_read():
     with gzip.open(FIXTURES / "lichess/tour-ewc-playoffs.pgn.gz", "rt") as f:
         rounds = lichess_chess.parse_pgn_rounds(f.read())
