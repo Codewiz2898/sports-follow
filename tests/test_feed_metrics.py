@@ -47,6 +47,7 @@ def test_a_step_is_counted_by_sport_and_stream_and_a_sport_nobody_knows_is_other
 @pytest.mark.parametrize(("why", "seconds", "label"), [
     ("not embeddable", 300, "not_embeddable"), ("blocked in IN", 300, "blocked"), ("length", 40, "too_short"), ("length", 3600, "too_long"),
     ("length", None, "too_short"), ("live", None, "live"), ("private", 300, "private"), ("gone", None, "gone"),
+    ("age restricted", 300, "age_restricted"),
 ])  # fmt: skip
 def test_a_hard_filters_refusal_is_labelled_by_its_reason(why, seconds, label):
     facts = VideoFacts(video_id="x", seconds=seconds)

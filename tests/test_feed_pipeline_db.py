@@ -311,6 +311,73 @@ def test_an_admins_word_stands_over_the_judges_and_a_channels_trust_scales_or_hi
     assert "Every boundary" in served()
 
 
+def test_an_admins_hide_takes_the_video_off_every_players_feed_and_taking_it_back_brings_every_one_back(made):
+    """BHA-438: an admin hides a video (it's abusive, or fake), not one player's row of it: a video kept for a whole
+    team is hidden under every player it was kept for, so For you, which mixes in players the fan doesn't follow,
+    doesn't serve it either. Taking the hide back (or approving the video) brings every row of it back at once."""
+    pid = asha()
+    with db_module.session() as s:
+        p = Player(slug="ravi-rao", name="Ravi Rao", sport="cricket", teams=["Riverside XI"])
+        s.add(p)
+        s.flush()
+        s.add(PlayerCard(player_id=p.id, status="ready", card={"player": {"name": "Ravi Rao"}, "news": []}))
+        other = p.id
+    mine = stored(pid, "shared00001", "Verma and Rao's stand", EDITS, 5, verdict=said())
+    stored(other, "shared00001", "Verma and Rao's stand", EDITS, 5, verdict=said())
+    stored(other, "raoonly0001", "Rao in the nets", TALKS, 4, verdict=said())
+    rank.rescore()
+
+    def served(player_id: int) -> set[str]:
+        s = made()
+        try:
+            return {c.item.title for c in feed.judged(s, [player_id]).get(player_id, [])}
+        finally:
+            s.close()
+
+    assert served(pid) == {"Verma and Rao's stand"} and served(other) == {"Verma and Rao's stand", "Rao in the nets"}
+    assert admin.review_candidate(mine, "hidden")
+    assert served(pid) == set() and served(other) == {"Rao in the nets"}
+    assert {r.player_id: r.review for r in rows_of("shared00001")} == {pid: "hidden", other: "hidden"}
+    rank.rescore()  # the curator's next run leaves it hidden
+    assert served(other) == {"Rao in the nets"}
+    assert admin.review_candidate(mine, None)
+    assert served(pid) == {"Verma and Rao's stand"} and served(other) == {"Verma and Rao's stand", "Rao in the nets"}
+    assert {r.player_id: r.review for r in rows_of("shared00001")} == {pid: None, other: None}
+    assert admin.review_candidate(mine, "hidden") and admin.review_candidate(mine, "approved")
+    assert served(other) == {"Verma and Rao's stand", "Rao in the nets"}
+
+
+def test_an_admins_approval_or_pin_serves_a_video_the_judge_hasnt_read_or_held_back(made):
+    """BHA-439: with the judge down or out of credit, an admin can still put a video in front of fans: approving or
+    pinning one the judge has no verdict on scores it as one about the player (rank.UNREAD), and so does one the judge
+    held back (its "held" verdict is no word on the video). Taking the word back takes it out again until the judge
+    has read it, and the curator's next run keeps what the admin said."""
+    pid = asha()
+    unread = stored(pid, "unread00001", "Verma in the nets", EDITS, 5)
+    held = stored(pid, "heldback001", "Verma on the hundred", TALKS, 6, verdict=rank.held("declined", 3))
+    rank.rescore()
+    served = lambda: [i.title for g in page(made, player_id=pid).groups for i in g.items if i.kind == "video"]  # noqa: E731
+    assert served() == []
+
+    approved = admin.review_candidate(unread, "approved")
+    assert approved is not None and approved["served"] and approved["score"] is not None
+    assert served() == ["Verma in the nets"]
+    rank.rescore()  # the curator's next run
+    assert served() == ["Verma in the nets"]
+    pinned = admin.review_candidate(unread, "pinned")
+    assert pinned is not None and pinned["score"] >= rank.PIN
+
+    was_held = admin.review_candidate(held, "approved")
+    assert was_held is not None and was_held["served"]
+    row = rows()["heldback001"]
+    assert row.score == rank.score(rank.UNREAD, row.features, rank.LISTED, rank.when(row.candidate["published"]))  # not the held verdict's nothing
+    assert served() == ["Verma in the nets", "Verma on the hundred"]
+
+    taken_back = admin.review_candidate(unread, None)
+    assert taken_back is not None and not taken_back["served"] and taken_back["score"] is None
+    assert served() == ["Verma on the hundred"]
+
+
 def test_signed_in_fans_reports_lower_their_channels_trust_to_half_at_most_and_anonymous_ones_dont(made):
     pid = asha()
     stored(pid, "edit0000001", "Every boundary", EDITS, 8, verdict=said())
@@ -456,14 +523,7 @@ def test_one_fans_app_saying_a_video_wont_play_takes_it_from_their_feed_alone_un
     item = feed.item_id("https://www.youtube.com/watch?v=blocked0001")
 
     def say(fan: str, address: str) -> dict:
-        async def go() -> httpx.Response:
-            transport = httpx.ASGITransport(app=server.app, client=(address, 50000))
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                return await client.post(f"/api/players/{pid}/feed/{item}/unplayable", headers={"Cookie": f"{config.FAN_COOKIE}={server.sign_fan(fan)}"})
-
-        answer = asyncio.run(go())
-        assert answer.status_code == 200, answer.text
-        return answer.json()
+        return said_unplayable(pid, item, fan, address, "Asia/Kolkata")
 
     videos = lambda fan: {i.title for g in page(made, fan, pid).groups for i in g.items if i.kind == "video"}  # noqa: E731
     both = {"Verma's hundred, every boundary", "Verma talks through the hundred"}
@@ -476,6 +536,52 @@ def test_one_fans_app_saying_a_video_wont_play_takes_it_from_their_feed_alone_un
     assert videos("fan") == both and all(r.unplayable_at is None for r in rows_of("blocked0001"))
     assert say("anon-3", "81.2.69.200")["marked"] is True  # a third network
     assert videos("fan") == {"Verma talks through the hundred"} and all(r.unplayable_at for r in rows_of("blocked0001"))
+
+
+def said_unplayable(pid: int, item: str, fan: str, address: str, zone: str | None) -> dict:
+    """POST .../unplayable as a fan's app sends it, from this address, with the device's time zone (none: an app from
+    before it said)."""
+
+    async def go() -> httpx.Response:
+        transport = httpx.ASGITransport(app=server.app, client=(address, 50000))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(f"/api/players/{pid}/feed/{item}/unplayable", headers={"Cookie": f"{config.FAN_COOKIE}={server.sign_fan(fan)}"},
+                                     **({"json": {"timezone": zone}} if zone is not None else {}))  # fmt: skip
+
+    answer = asyncio.run(go())
+    assert answer.status_code == 200, answer.text
+    return answer.json()
+
+
+def test_a_fan_abroad_saying_a_video_wont_play_hides_it_from_them_and_takes_it_from_nobody_else(made, monkeypatch):
+    """BHA-436: a video is kept because it plays in FEED_COUNTRY, and may play there alone (a broadcaster's rights
+    there): an app abroad is refused it and says so. It leaves that fan's Feed, but their word isn't a vote on
+    everyone's: only an app in FEED_COUNTRY's time zone casts one (Chrome names India's the old way, Asia/Calcutta),
+    and an app that names none (from before it said) doesn't."""
+    from tests.test_api import KEY, Redis
+
+    monkeypatch.setattr(feed, "UNPLAYABLE_VOTES", 3, raising=False)
+    pid = asha()
+    stored(pid, "indiaonly01", "Verma's hundred, every boundary", EDITS, 5, verdict=said())
+    stored(pid, "plays000001", "Verma talks through the hundred", TALKS, 4, verdict=said())
+    rank.rescore()
+    monkeypatch.setitem(server.state, "redis", Redis())
+    monkeypatch.setattr(server, "cookie_key", lambda: KEY)
+    item = feed.item_id("https://www.youtube.com/watch?v=indiaonly01")
+    videos = lambda fan: {i.title for g in page(made, fan, pid).groups for i in g.items if i.kind == "video"}  # noqa: E731
+    both = {"Verma's hundred, every boundary", "Verma talks through the hundred"}
+    abroad = [("dubai", "81.2.69.1", "Asia/Dubai"), ("london", "81.2.69.2", "Europe/London"), ("newyork", "81.2.69.3", "America/New_York"),
+              ("colombo", "81.2.69.4", "Asia/Colombo"), ("oldapp", "81.2.69.5", None), ("nozone", "81.2.69.6", "")]  # fmt: skip
+    for fan, address, zone in abroad:
+        assert said_unplayable(pid, item, fan, address, zone) == {"item_id": item, "unplayable": True, "marked": False}
+        assert videos(fan) == {"Verma talks through the hundred"}  # gone from their own Feed all the same
+    assert videos("fan") == both and all(r.unplayable_at is None for r in rows_of("indiaonly01"))
+    # Three networks in India saying so is another matter: it won't play inside the app there either.
+    said_unplayable(pid, item, "pune", "81.2.70.1", "Asia/Kolkata")
+    said_unplayable(pid, item, "delhi", "81.2.70.2", "Asia/Calcutta")
+    assert videos("fan") == both
+    assert said_unplayable(pid, item, "chennai", "81.2.70.3", "Asia/Kolkata")["marked"] is True
+    assert videos("fan") == {"Verma talks through the hundred"} and all(r.unplayable_at for r in rows_of("indiaonly01"))
 
 
 def all_rows() -> list[FeedCandidate]:

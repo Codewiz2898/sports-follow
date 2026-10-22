@@ -522,14 +522,16 @@ def channels_view(db: Session) -> list[dict[str, Any]]:
 
 
 def review_candidate(row_id: int, said: str | None) -> dict[str, Any] | None:
-    """Approve, hide or pin a candidate (rank.REVIEWS), or take that back (None), and rank it again at once:
-    the candidate as the Feed tab lists it, or None for no such candidate. ValueError for a word that isn't one."""
+    """Approve, hide or pin a candidate (rank.REVIEWS; a hide is the video's, every player's row of it), or take that
+    back (None), and rank the video's rows again at once: the candidate as the Feed tab lists it, or None for no such
+    candidate. ValueError for a word that isn't one."""
     from . import db
 
     with db.session() as session:
-        if not rank.review(session, row_id, said):
+        video = rank.review(session, row_id, said)
+        if video is None:
             return None
-    rank.rescore(row=row_id)
+    rank.rescore(video=video)
     with db.session() as session:
         found = session.execute(select(FeedCandidate, Player.name, Player.sport).join(Player, Player.id == FeedCandidate.player_id).where(FeedCandidate.id == row_id)).first()
         return _candidate_row(*found) if found else None

@@ -11,14 +11,14 @@ them but names a team they play for (sides: "Falcons vs Vitality", "Liverpool v 
 a team) is a candidate for that team's followed players and up to TEAM_POOL of its pool players, marked as their
 team's (candidate "about": "team"), which the judge reads as a share about the team (curate.py, BHA-382). What the source says of the new ones (one request
 for every 50) then decides, with the hard filters alone, which are kept (refused): a video that may be embedded,
-is public, plays in FEED_COUNTRY, isn't a live stream and runs 1 to 20 minutes. Whether it's any good is the
+is public, isn't age-restricted, plays in FEED_COUNTRY, isn't a live stream and runs 1 to 20 minutes. Whether it's any good is the
 judge's to say, later. A video refused is remembered for a week, so it isn't asked about again while it's still
 among its channel's latest.
 
 A day after a video is kept, its views and likes are read again (second_reads), so its pace can be told from the
 two reads; the curator reads them again every few hours while it's under two days old (fresh_reads), for the
 ranking (rank.py). Every stored video is read again once a week (check), and dropped once it's gone: removed, made
-private, no longer embeddable, or no longer playing in FEED_COUNTRY.
+private, no longer embeddable, age-restricted, or no longer playing in FEED_COUNTRY.
 
 A candidate is one row per player and video, so it goes with the player (ON DELETE CASCADE).
 """
@@ -52,7 +52,7 @@ FRESH_FOR, FRESH_EVERY = timedelta(hours=48), timedelta(hours=6)
 RECHECK_AFTER = timedelta(days=7)  # every stored video is read again this often, and dropped once gone
 # Seconds a refused video isn't asked about again: a week for what doesn't change, an hour for what does (a Premiere
 # not aired yet is "live", an upload still processing "private", one not yet visible "gone").
-REFUSED_FOR = {"length": 7 * 86400, "not embeddable": 7 * 86400, "blocked": 7 * 86400}
+REFUSED_FOR = {"length": 7 * 86400, "not embeddable": 7 * 86400, "age restricted": 7 * 86400, "blocked": 7 * 86400}
 REFUSED_AWHILE = 3600
 STALE_AFTER = timedelta(days=30)  # a row no check has read for this long goes, whatever its source's state
 READS_PER_RUN = 2000  # the most stored videos one run reads again: 40 requests
@@ -371,6 +371,8 @@ def gone(facts: VideoFacts | None, country: str = FEED_COUNTRY) -> str | None:
         return "private"
     if not facts.embeddable:
         return "not embeddable"
+    if facts.age_restricted:  # its own site plays it to signed-in adults alone, never the app's player
+        return "age restricted"
     if not facts.plays_in(country):
         return f"blocked in {country}"
     return None
@@ -484,7 +486,8 @@ def match(uploads: list[Upload], players: list[Followed], names: dict[int, set[t
 
 def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "channels") -> dict[str, int]:
     """Store what's new of what was found from a channel the player's sport lists (on_list; the rest are counted
-    off_list and dropped): a video already kept for someone else is kept for this player too, as it is; the rest
+    off_list and dropped): a video already kept for someone else is kept for this player too, as it is (hidden,
+    if an admin hid it, and unplayable, if fans' apps said so); the rest
     are asked about (a request per 50, with no transaction open meanwhile) and kept if no hard filter refuses them.
     stream: where it was found, for the funnel's counts (feedstats.keep_counted)."""
     counts = {"kept": 0, "refused": 0, "off_list": 0}
@@ -502,12 +505,14 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
     have: set[tuple[int, str]] = set()
     with db.session() as session:
         rows = session.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features,
-                                      FeedCandidate.unplayable_at)
+                                      FeedCandidate.unplayable_at, FeedCandidate.review)
                                .where(FeedCandidate.source == source.system, FeedCandidate.external_id.in_(ids)))  # fmt: skip
-        for pid, vid, url, kept, numbers, unplayable in rows:
-            stored.setdefault(vid, {"url": url, "candidate": kept or {}, "features": numbers or {}, "unplayable_at": unplayable})
+        for pid, vid, url, kept, numbers, unplayable, said in rows:
+            stored.setdefault(vid, {"url": url, "candidate": kept or {}, "features": numbers or {}, "unplayable_at": unplayable, "review": None})
             if unplayable is not None:  # a fan's app said it won't play inside it (feed.unplayable): every row of it keeps that
                 stored[vid]["unplayable_at"] = unplayable
+            if said == "hidden":  # an admin hid the video (rank.review): so is every row of it
+                stored[vid]["review"] = said
             have.add((pid, vid))
     new = [f for f in found if (f.player_id, f.upload.video_id) not in have]
     if not new:
@@ -527,7 +532,7 @@ def keep(source: VideoSource, found: list[Found], now: datetime, stream: str = "
                 continue
             if vid in stored:
                 same = stored[vid]
-                values = {"url": same["url"], "features": same["features"], "unplayable_at": same["unplayable_at"],
+                values = {"url": same["url"], "features": same["features"], "unplayable_at": same["unplayable_at"], "review": same["review"],
                           "candidate": {**candidate(f.upload, f.name, f.where, f.sport, None, f.team), "details": same["candidate"].get("details") or {},
                                         "paid": same["candidate"].get("paid") is True}}
             else:
@@ -676,7 +681,7 @@ def fresh_reads(now: datetime | None = None) -> dict[str, int]:
 
 def check(now: datetime | None = None) -> dict[str, int]:
     """Read again every stored video not read for RECHECK_AFTER, for each running video source, and drop those
-    gone (removed, private, no longer embeddable, or blocked in FEED_COUNTRY). Run daily, so each video is read
+    gone (removed, private, no longer embeddable, age-restricted, or blocked in FEED_COUNTRY). Run daily, so each video is read
     once a week, and a run cut short is taken up the next day. A row no check has read for STALE_AFTER goes
     too, whatever its source's state."""
     now = now or datetime.now(timezone.utc)

@@ -56,7 +56,7 @@ from sqlalchemy.orm import Session
 
 from . import controls, feedpool, rank, sports, titles
 from .adapters import VIDEOS, feed_source
-from .config import FEED_LAYOUT
+from .config import FEED_LAYOUT, FEED_ZONES
 from .models import FeedCandidate, FeedFeedback, Follow, Moment, Player, PlayerCard
 
 log = logging.getLogger("sports_follow.feed")
@@ -73,7 +73,8 @@ UNPLAYABLE_PER_FAN, UNPLAYABLE_PER_ADDRESS, UNPLAYABLE_PER_HOUR = 10, 30, 200
 # then it leaves only the Feeds of the fans who said so. One fan, or one network with any number of new cookies,
 # can't take a video from anyone else, while one that really won't play does so for every fan who tries it, so it's
 # soon gone for all. Three: a fan has a home and a phone network at most, and with the few fans there are now, a video
-# that won't play isn't shown for long. A network's word is kept for UNPLAYABLE_VOTES_FOR seconds (a month).
+# that won't play isn't shown for long. A network's word is kept for UNPLAYABLE_VOTES_FOR seconds (a month). Only an
+# app in FEED_COUNTRY votes (counts_everywhere): fans abroad would soon be three networks too.
 UNPLAYABLE_VOTES, UNPLAYABLE_VOTES_FOR = 3, 30 * 24 * 3600
 ITEM_ID = re.compile(r"[0-9a-f]{16}")
 YOUTUBE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
@@ -699,6 +700,16 @@ def said_unplayable(db: Session, fan: str, player_id: int, item: str) -> str | N
     said = insert(FeedFeedback).values(fan_id=fan, player_id=player_id, item_id=item, verdict=UNPLAYABLE)
     db.execute(said.on_conflict_do_nothing(index_elements=["fan_id", "player_id", "item_id"]))  # their words from the sheet stand
     return f"{found[0]}:{found[1]}"
+
+
+def counts_everywhere(zone: Any) -> bool:
+    """Whether a fan's app saying a video won't play is a vote on whether it leaves every fan's Feed (UNPLAYABLE_VOTES):
+    only from a device in FEED_COUNTRY, by the time zone it says it's in (FEED_ZONES). A video is kept because it plays
+    there (candidates.refused), and may play there alone (a broadcaster's rights there), so an app abroad that's refused
+    it says nothing of how it plays for the fans the Feed is for; it leaves that fan's Feed all the same. An app that
+    names no zone (one from before it said) doesn't vote. A device can name any zone, but one network's vote is all it
+    gets, as before. With FEED_ZONES empty, every app votes."""
+    return not FEED_ZONES or (isinstance(zone, str) and zone in FEED_ZONES)
 
 
 def unplayable(db: Session, player_id: int, item: str, now: datetime | None = None) -> bool:

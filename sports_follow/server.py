@@ -2319,11 +2319,12 @@ def _voter(address: str | None, fan: str) -> str:
 
 
 @app.post("/api/players/{player_id}/feed/{item_id}/unplayable")
-async def feed_unplayable(player_id: RowId, item_id: str, request: Request, fan: str = Depends(fan_id)) -> dict[str, Any]:
+async def feed_unplayable(player_id: RowId, item_id: str, request: Request, body: dict | None = Body(None), fan: str = Depends(fan_id)) -> dict[str, Any]:
     """The fan's app says this video of the player's feed won't play inside it: the video's own player refused it.
-    It leaves their Feed at once (feed.said_unplayable), and it's their network's vote on whether it leaves every
-    fan's: once feed.UNPLAYABLE_VOTES networks have said so, it does (feed.unplayable; "marked"), and an admin
-    approving or pinning it brings it back. The app opens it on its site instead. Saying it again changes nothing.
+    It leaves their Feed at once (feed.said_unplayable), and when the app is in the feed's country ({"timezone": the
+    device's}, feed.counts_everywhere) it's their network's vote on whether it leaves every fan's: once
+    feed.UNPLAYABLE_VOTES networks have said so, it does (feed.unplayable; "marked"), and an admin approving or
+    pinning it brings it back. The app opens it on its site instead. Saying it again changes nothing.
     A fan says so only so many times an hour, and an address and everyone together vote only so many times: past
     any, a 429. Each count is taken before the report is acted on, so reports arriving together can't all pass, and
     given back when it's refused; the address's and everyone's too when it isn't a new vote, so junk ids and a video
@@ -2357,7 +2358,8 @@ async def feed_unplayable(player_id: RowId, item_id: str, request: Request, fan:
         await give_back(shared)
         raise HTTPException(404, str(exc)) from exc
     votes = f"feed:unplayable:votes:{video}"
-    if video is None or not await redis.sadd(votes, _voter(address, fan)):  # an admin vouched for it, or this network said so before
+    # An admin vouched for it, the app is abroad (where it may not play when it does here), or this network said so before.
+    if video is None or not feed.counts_everywhere((body or {}).get("timezone")) or not await redis.sadd(votes, _voter(address, fan)):
         await give_back(shared)
         return {"item_id": item_id, "unplayable": True, "marked": False}
     await redis.expire(votes, feed.UNPLAYABLE_VOTES_FOR)
