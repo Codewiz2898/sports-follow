@@ -149,3 +149,20 @@ def test_the_daily_sweep_runs_in_the_feed_lane_then_ranks_what_it_kept(monkeypat
     asyncio.run(curator.sweep({}))
     assert did == [("sweep", "feed"), ("rank", "feed")]
     assert next(j for j in curator.CuratorSettings.cron_jobs if j.name == "cron:sweep").hour == {8, 20}
+
+
+def test_the_readme_says_the_sweeps_caps_count_over_the_windows_the_sweeps_do():
+    """BUG-127: each sweep's cap counts over the last 23 hours (sweeps.DAY), the famous sweep's over a week less an
+    hour (sweeps.WEEK), so a daily run a little earlier than the day before's still has its own. The settings' notes
+    said so (config.py), while the README's settings and its notes on the sweeps said "in any 24 hours" and "in any
+    7 days". (The moment searches' cap is a full 24 hours: searches.DAY.)"""
+    from datetime import timedelta
+    from pathlib import Path
+
+    assert (sweeps.DAY, sweeps.WEEK, searches.DAY) == (timedelta(hours=23), timedelta(days=7) - timedelta(hours=1), timedelta(hours=24))
+    readme = (Path(__file__).parent.parent / "README.md").read_text()
+    for cap, window in (("GAP", "23 hours"), ("WIDE", "23 hours"), ("POOL", "23 hours"), ("FAMOUS", "7 days less an hour")):
+        setting = f"`SPORTS_FOLLOW_FEED_{cap}_SEARCHES`"
+        row = next(line for line in readme.splitlines() if line.startswith(f"| {setting}"))
+        assert window in row, cap
+        assert f"{setting} in any 24 hours" not in readme and f"{setting} in any 7 days" not in readme, cap
