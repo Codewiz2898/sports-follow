@@ -7,7 +7,7 @@ Transfermarkt (and sometimes ESPN) for footballers. The importer copies every on
 
 An athlete whose live-source id Wikidata lacks (most footballers have only a Transfermarkt id) is
 looked up in the live source by name when someone follows or previews them, and accepted only if the
-birth date agrees (resolve); the id found is kept, so it's a lookup by id from then on.
+names and the birth date agree (resolve); the id found is kept, so it's a lookup by id from then on.
 
     .venv/bin/python -m sports_follow.registry            # import every sport, smallest first
     .venv/bin/python -m sports_follow.registry chess      # one sport
@@ -649,8 +649,8 @@ def date_precision(born: date | None, stored: int | None) -> int:
 
 def same_day(born: date | None, source: str | None, stored: int | None = None) -> bool | None:
     """Whether a Wikidata birth date and a source's agree, as far as Wikidata knows it (stored: its
-    precision); None if either is missing. ESPN writes day/month/year, but a day of 12 or less could be
-    either way round, so both readings count."""
+    precision); None if either is missing. A source's date is ISO, its own order read by its adapter
+    (ESPN's day/month/year: espn.birth_date), so a day and month the other way round is another day."""
     if born is None or not source:
         return None
     try:
@@ -661,17 +661,15 @@ def same_day(born: date | None, source: str | None, stored: int | None = None) -
     if known <= YEAR:
         return y == born.year
     if known == MONTH:
-        return y == born.year and born.month in (m, d)
-    return (y, m, d) == (born.year, born.month, born.day) or (y, d, m) == (born.year, born.month, born.day)
+        return (y, m) == (born.year, born.month)
+    return (y, m, d) == (born.year, born.month, born.day)
 
 
 def same_person(person: Person, ref: PlayerRef) -> bool:
-    """Is this source athlete the registry's person? The birth date decides when both know it to the
-    day; a date Wikidata knows only to the year (or month) must agree and the names match too.
-    Otherwise the whole name must match and, in team sports, a team too."""
+    """Is this source athlete the registry's person? When both know the birth date, it must agree as far as
+    Wikidata knows it, and the names match too: someone else born the same day isn't them. Otherwise the
+    whole name must match and, in team sports, a team too."""
     agree = same_day(person.birth_date, ref.born, person.birth_precision)
-    if agree is not None and date_precision(person.birth_date, person.birth_precision) == DAY:
-        return agree
     names = [person.name, *person.aliases]
     if agree is not None:
         return agree and any(naming.names_match(n, ref.name) for n in names)

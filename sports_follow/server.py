@@ -1112,8 +1112,10 @@ def _holder(db: Session, system: str, external_id: str) -> int | None:
 
 def _same_athlete(person: registry.Person, ref: Any) -> bool:
     """Is the registry athlete sent with a pick the picked source athlete? The registry has this id for
-    them, or has none in this source and they match by birth date (or name and team). The client sends
-    both, so a crafted pair mustn't point the registry athlete at someone else for every fan after."""
+    them, or has none in this source and the source's own record of the athlete (read by id here) matches
+    them by name and birth date, or name and team (registry.same_person). The client sends both, so a
+    crafted pair mustn't point the registry athlete at someone else, a namesake or a stranger born the same
+    day, for every fan after."""
     adapter = ADAPTERS.get(ref.system)
     if adapter is None or person.sport not in adapter.sports:
         return False

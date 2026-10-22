@@ -789,6 +789,11 @@ SALAH = registry.Person("Q1354960", "football", "Mohamed Salah", [], date(1992, 
     # No id in this source: the birth date decides.
     (registry.Person(**{**SALAH.__dict__, "ids": {}}), PlayerRef("espn_soccer", "173896", "Mohamed Salah", ["364"], ["Liverpool"], born="1992-06-15"), True),
     (registry.Person(**{**SALAH.__dict__, "ids": {}}), PlayerRef("espn_soccer", "555", "Mohamed Salah", ["1"], ["Al Ahly"], born="1995-03-02"), False),
+    # A stranger born the same day: Giacomo De Pieri's profile went to ESPN's Ethan Mbappé (BUG-146).
+    (registry.Person("Q118643915", "football", "Giacomo De Pieri", [], date(2006, 12, 29), [], None, {}, registry.DAY),
+     PlayerRef("espn_soccer", "355971", "Ethan Mbappé", ["1"], ["Lille"], born="2006-12-29"), False),
+    # The name, with the day and month the other way round: someone else.
+    (registry.Person("Q2", "football", "Asha Rao", [], date(2001, 3, 4), [], None, {}, registry.DAY), PlayerRef("espn_soccer", "556", "Asha Rao", ["1"], [], born="2001-04-03"), False),
 ])
 def test_a_pick_links_the_registry_athlete_only_when_the_registry_agrees(api, monkeypatch, person, pick, linked):
     links = []

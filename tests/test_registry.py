@@ -145,10 +145,12 @@ def test_words_and_search_text_fold_names():
     assert registry.team_name("India national cricket team") == "India"
 
 
-def test_birth_dates_agree_either_way_round():
+def test_birth_dates_agree_only_as_the_source_gives_them():
+    # Every source's date is ISO, its own order read by its adapter (espn.birth_date), so a day and month the
+    # other way round is another day: 11 May isn't 5 November (BUG-146).
     born = date(1988, 11, 5)
     assert registry.same_day(born, "1988-11-05") is True
-    assert registry.same_day(born, "1988-05-11") is True  # day and month read the other way
+    assert registry.same_day(born, "1988-05-11") is False
     assert registry.same_day(born, "1988-11-06") is False
     assert registry.same_day(None, "1988-11-05") is None
 
@@ -161,6 +163,17 @@ def test_same_person_trusts_the_birth_date_over_the_name():
     # No birth date in the source: the whole name and a team must match.
     assert registry.same_person(foord, PlayerRef("espn_soccer", "158678", "Caitlin Foord", ["359"], ["Arsenal Women"]))
     assert not registry.same_person(foord, PlayerRef("espn_soccer", "158678", "Caitlin Foord", ["2"], ["Chelsea"]))
+
+
+def test_a_stranger_born_the_same_day_isnt_the_person():
+    # Giacomo De Pieri and ESPN's Ethan Mbappé were both born on 29 December 2006: the date alone made them one
+    # person, and De Pieri's Wikidata profile Ethan's page (BUG-146). The names must match too.
+    de_pieri = registry.Person("Q118643915", "football", "Giacomo De Pieri", [], date(2006, 12, 29), [], None, {}, registry.DAY)
+    assert not registry.same_person(de_pieri, PlayerRef("espn_soccer", "355971", "Ethan Mbappé", ["1"], ["Lille"], born="2006-12-29"))
+    assert registry.same_person(de_pieri, PlayerRef("espn_soccer", "1", "Giacomo De Pieri", ["2"], ["Inter"], born="2006-12-29"))
+    # Their name, but with the day and month the other way round: someone else.
+    rao = registry.Person("Q2", "football", "Asha Rao", [], date(2001, 3, 4), [], None, {}, registry.DAY)
+    assert not registry.same_person(rao, PlayerRef("espn_soccer", "2", "Asha Rao", ["1"], [], born="2001-04-03"))
 
 
 def test_registry_rows_as_search_results():
