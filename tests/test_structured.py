@@ -606,6 +606,48 @@ def test_recent_results_keep_their_order_and_a_failed_read_only_its_scorecard(mo
     assert polls == [(15, "final", "A 5 – 0 B")]  # game 5, which the poller didn't see finish, gets its final poll
 
 
+class SpentSource:
+    """A source whose share for the refresh lane is spent (budget.RateLimited, raised before any request), or that
+    fails (`fails`)."""
+
+    system = "fake_source"
+    sport = "hurling"
+    live_cadence = 15
+
+    def __init__(self):
+        self.fails: Exception = budget.RateLimited("fake_source: the refresh share of its 10 requests a minute is spent")
+
+    def sport_of(self, ref):
+        return self.sport
+
+    def player(self, athlete_id, league=None):
+        return None
+
+    def fixtures(self, ref):
+        raise self.fails
+
+
+def test_a_spent_lane_share_is_no_failure_and_leaves_the_player_due_at_the_next_tick(monkeypatch, redis):
+    # BUG-174 (H6 exp8): our own per-lane limit counted as the source failing, so the player's refreshes backed off
+    # 2, 4, 8 … 120 minutes (a new game not armed meanwhile) and each counted as a failed refresh.
+    source = SpentSource()
+    row = SourceBinding(id=1, player_id=1, purpose="fixtures", adapter=source.system, priority=10, health={},
+                        locator={"system": source.system, "athlete_id": "A1", "name": "P1", "team_ids": ["T1"], "team_names": ["A"]})
+    db = FakeDb(row, answers={"SourceBinding": row, "Player.sport": "Hurling"})
+    counted: list[str] = []
+    monkeypatch.setitem(structured.ADAPTERS, source.system, source)
+    monkeypatch.setattr(structured, "session", lambda: nullcontext(db))
+    monkeypatch.setattr(structured.metrics, "card", lambda step, result, by=1: counted.append(result))
+    for _ in range(3):
+        structured.refresh(1)
+    assert row.health == {} and structured.retry_at(row.health) is None and counted == []
+    assert not bus.is_locked("structured:1")  # nothing holds it back: the next tick refreshes them
+    # A source that fails still counts, and is waited on.
+    source.fails = AdapterError("Fake returned HTTP 502 for /players/A1")
+    structured.refresh(1)
+    assert row.health["failures"] == 1 and structured.retry_at(row.health) is not None and counted == ["failed"]
+
+
 class RenamingSource:
     """A source that now names A1 and B1 (its old ids) A2 and B2."""
 

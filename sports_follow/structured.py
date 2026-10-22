@@ -453,8 +453,9 @@ def refresh(player_id: int) -> None:
     A player followed before their sport had an adapter is bound here first, and one bound to a source
     their sport has since moved off (ESPN football once Sportmonks runs) is bound again; a lookup that
     finds nobody isn't retried for BIND_RETRY seconds, and a moving player keeps the old source till then.
-    A source down to what its live games need isn't read (spare); a failure is noted in the binding's
-    health, which the scheduler waits on before the next try (retry_at).
+    A source down to what its live games need isn't read (spare), nor one whose share for this lane is spent
+    for now (budget.RateLimited): both are tried at the next tick, and neither is a failure. A failure is noted
+    in the binding's health, which the scheduler waits on before the next try (retry_at).
     """
     lock = f"structured:{player_id}"
     token = bus.try_lock(lock, REFRESH_LOCK)
@@ -474,6 +475,8 @@ def refresh(player_id: int) -> None:
             if not rebound and current is None:
                 return
         _refresh(player_id)
+    except budget.RateLimited as exc:
+        log.info("refresh %s: %s; next tick", player_id, exc)
     except AdapterError as exc:
         log.warning("refresh %s failed: %s", player_id, exc)
         _record_health(player_id, ok=False, error=str(exc))
