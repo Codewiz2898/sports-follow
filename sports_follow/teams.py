@@ -490,14 +490,16 @@ def _versus(f: Fixture, external: str) -> str:
 
 def _upcoming(f: Fixture, event: Event, external: str) -> dict[str, Any]:
     return {"title": f.title, "competition": f.competition, "start_utc": f.start_utc.isoformat() if f.start_utc else None, "venue": f.venue, "notes": f.detail,
-            "status": event.status, "event_id": event.id, "match": structured.match_path(event.key), "versus": _versus(f, external), "sides": list(f.team_ids)}
+            "status": event.status, "event_id": event.id, "match": structured.match_path(event.key), "versus": _versus(f, external),
+            "team_keys": [f"{event.key.split(':', 1)[0]}:{t}" for t in f.team_ids]}
 
 
 def result(adapter: Adapter, f: Fixture, event: Event, external: str) -> dict[str, Any]:
     """A finished game from the team's side, as its page lists it ("Won 2–1")."""
     return {"title": f"{f.title} · {f.detail}" if f.detail else f.title, "result": adapter.result_label(f, [external]) or "",
             "date": f.start_utc.date().isoformat() if f.start_utc else None, "start_utc": f.start_utc.isoformat() if f.start_utc else None,
-            "competition": f.competition, "event_id": event.id, "match": structured.match_path(event.key), "versus": _versus(f, external), "sides": list(f.team_ids)}
+            "competition": f.competition, "event_id": event.id, "match": structured.match_path(event.key), "versus": _versus(f, external),
+            "team_keys": [f"{event.key.split(':', 1)[0]}:{t}" for t in f.team_ids]}
 
 
 def on_board(adapter: Any, external: str) -> str:

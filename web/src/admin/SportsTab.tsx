@@ -37,8 +37,9 @@ export function SportsTab() {
     <section className="section" aria-label="Sports">
       <Note>
         A sport turned off isn't searched, imported or polled, its sources stop, and the app stops offering it. The pages of players
-        fans already follow stay as they are. With a sport's logos off, its teams show our badge (their short code) in place of their
-        logos, wherever they are. Every server process picks a change up within 10 seconds; fans' apps within a few minutes.
+        fans already follow stay as they are. With a sport's logos off, they stop being served at once, and fans' apps show our badge
+        (each team's short code) in their place within a minute. Every server process picks a change up within 10 seconds; fans' apps
+        the rest within a few minutes.
       </Note>
       {error && <div className="error-box" role="alert">{error}</div>}
       {!sports ? <div className="card empty"><span className="spinner" /></div> : groups(sports).map(([group, theirs]) => (

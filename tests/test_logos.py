@@ -56,11 +56,24 @@ def test_a_logo_comes_from_its_own_sources_hosts_over_https_only():
     assert not logos.allowed("sportmonks_football", "https://cdn.sportmonks.com.evil.example/x.png")
     assert not logos.allowed("sportmonks_football", "https://169.254.169.254/latest/meta-data")
     assert not logos.allowed("no_such_source", "https://cdn.sportmonks.com/x.png")
+    assert not logos.allowed("sportmonks_football", "https://cdn.sportmonks.com:8443/x.png")  # another port
+    assert logos.allowed("sportmonks_football", "https://cdn.sportmonks.com:443/x.png")
+    assert not logos.allowed("sportmonks_football", "https://user:pw@cdn.sportmonks.com/x.png")
+    assert not logos.allowed("sportmonks_football", "https://cdn.sportmonks.com:port/x.png")
     assert Adapter.logo_hosts == ()  # a source says its own; none by default
 
 
-def network(monkeypatch, handler) -> None:
-    monkeypatch.setattr(logos, "_client", httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True))
+def network(monkeypatch, handler) -> list[str]:
+    """The sources' hosts, as the client reaches them (its own settings: redirects aren't followed for it); every
+    address asked, in order."""
+    asked: list[str] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        return handler(request)
+
+    monkeypatch.setattr(logos, "_client", httpx.Client(transport=httpx.MockTransport(answer), follow_redirects=logos._client.follow_redirects))
+    return asked
 
 
 def test_a_download_is_refused_when_it_strays_is_missing_or_too_big(monkeypatch):
@@ -70,20 +83,29 @@ def test_a_download_is_refused_when_it_strays_is_missing_or_too_big(monkeypatch)
         path = request.url.path
         if path == "/ok.png":
             return httpx.Response(200, content=png)
+        if path == "/moved.png":
+            return httpx.Response(301, headers={"location": "/ok.png"})  # on its own host: followed
         if path == "/away.png":
             return httpx.Response(302, headers={"location": "https://elsewhere.example/x.png"})
+        if path == "/metadata.png":
+            return httpx.Response(302, headers={"location": "http://169.254.169.254/latest/meta-data/"})
+        if path == "/loop.png":
+            return httpx.Response(302, headers={"location": "/loop.png"})
         if path == "/big.png":
             return httpx.Response(200, content=b"x" * (logos.MAX_BYTES + 1))
         return httpx.Response(404)
 
-    network(monkeypatch, handler)
+    asked = network(monkeypatch, handler)
     base = "https://cdn.sportmonks.com"
     assert logos.download("sportmonks_football", f"{base}/ok.png") == png
-    for path, why in (("/away.png", "redirected away"), ("/big.png", "over"), ("/gone.png", "HTTP 404")):
+    assert logos.download("sportmonks_football", f"{base}/moved.png") == png
+    for path, why in (("/away.png", "not one of"), ("/metadata.png", "not one of"), ("/loop.png", "redirects"), ("/big.png", "over"), ("/gone.png", "HTTP 404")):
         with pytest.raises(logos.Refused, match=why):
             logos.download("sportmonks_football", f"{base}{path}")
     with pytest.raises(logos.Refused, match="not one of"):
         logos.download("sportmonks_football", "https://elsewhere.example/x.png")
+    # Nothing was ever asked of any host but the source's own: a redirect elsewhere is refused before it's followed.
+    assert asked and all(a.startswith(f"{base}/") for a in asked), asked
 
 
 # ---------------------------------------------------------------- what's kept
@@ -105,6 +127,12 @@ def test_what_isnt_a_picture_or_is_too_big_a_one_isnt_kept():
     Image.new("1", (5000, 4000)).save(huge, format="PNG")  # a small file of many pixels
     with pytest.raises(logos.Refused, match="pixels"):
         logos.redraw(huge.getvalue())
+    # A picture in a format we don't keep isn't parsed by its reader at all.
+    for kind in ("BMP", "TIFF", "ICO"):
+        other = io.BytesIO()
+        Image.new("RGB", (32, 32), BLUE).save(other, format=kind)
+        with pytest.raises(logos.Refused, match="not an image"):
+            logos.redraw(other.getvalue())
 
 
 # ---------------------------------------------------------------- its colours
@@ -142,9 +170,11 @@ def test_an_operators_colours_are_checked():
     assert logos.colours_of("#ffffff") == {"fill": "#ffffff", "accent": "#0d0d0d"}  # an accent that shows on it
     assert logos.colours_of("#004d98") == {"fill": "#004d98", "accent": "#ffffff"}
     assert logos.colours_of("auto") is None and logos.colours_of(None) is None
-    for wrong in ("blue", "#00f", "#00zz00", "url(x)"):
+    for wrong in ("blue", "#00f", "#00zz00", "url(x)", 123, ["#ffffff"]):
         with pytest.raises(ValueError):
             logos.colours_of(wrong)
+    with pytest.raises(ValueError):
+        logos.colours_of("#ffffff", 7)
 
 
 # ---------------------------------------------------------------- taking them down

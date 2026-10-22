@@ -21,7 +21,7 @@ export interface AdminTeam {
   look: TeamLook
   read: TeamColours | null
   hidden: boolean
-  logo_status: 'ok' | 'failed' | 'refused' | 'waiting' | 'none'
+  logo_status: 'ok' | 'failed' | 'waiting' | 'none'
 }
 
 /** A source this app knows, and why it does or doesn't run. */

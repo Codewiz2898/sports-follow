@@ -17,7 +17,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import admin, controls, logos, server, teams
-from sports_follow.adapters import SourceTeam
+from sports_follow.adapters import KNOWN, SourceTeam
 from sports_follow.models import Team, TeamLogo
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
@@ -64,6 +64,25 @@ def db(monkeypatch):
     yield s
     s.close()
     engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def running(monkeypatch):
+    """The sources with logos run here, less any the admin panel turns off: tests have no tokens for them."""
+
+    class Running:
+        def _now(self) -> list[str]:
+            return [s for s in ("sportmonks_football", "sportmonks_cricket", "pandascore_esports") if s not in controls.current().sources_off]
+
+        def __iter__(self):
+            return iter(self._now())
+
+        def __getitem__(self, system: str):
+            if system not in self._now():
+                raise KeyError(system)
+            return KNOWN[system]
+
+    monkeypatch.setattr(logos, "ADAPTERS", Running())
 
 
 @pytest.fixture
@@ -188,10 +207,50 @@ def test_the_api_serves_logos_and_looks_from_our_own_origin(db, files):
     got = client.get(f"/api/logos/{digest}.png")
     assert got.status_code == 200 and got.headers["content-type"] == "image/png" and "immutable" in got.headers["cache-control"]
     assert got.headers["x-content-type-options"] == "nosniff"
-    assert client.get("/api/logos/../../etc/passwd").status_code == 404
+    assert client.get("/api/logos/..%2F..%2Fetc%2Fpasswd").status_code == 404
     assert client.get(f"/api/logos/{'0' * 32}.png").status_code == 404
     looks = client.get("/api/looks", params={"teams": "sportmonks_football:83,sportmonks_football:1"}).json()["looks"]
     assert looks["sportmonks_football:83"]["logo"] == f"/api/logos/{digest}.png" and "sportmonks_football:1" not in looks
     controls.turn_logos("football", False)
     assert client.get(f"/api/logos/{digest}.png").status_code == 404
     assert db.scalar(select(Team.logo_url).where(Team.id == barca.id)) == BARCA
+
+
+def test_a_picture_teams_share_stops_being_served_when_any_of_them_is_taken_down(db, files):
+    """One flag for a country's sides (men's, women's): taking one down takes the picture down."""
+    men = team(db, "10", "India", BARCA, sport="football")
+    team(db, "11", "India Women", BARCA, sport="football")
+    logos.refresh(NOW, pause=0)
+    digest = db.get(TeamLogo, men.id).digest  # pyright: ignore[reportOptionalMemberAccess]
+    assert logos.serve(db, f"{digest}.png") is not None
+    controls.hide_logo("sportmonks_football:11", True)
+    assert logos.serve(db, f"{digest}.png") is None
+    assert logos.looks(db, ["sportmonks_football:11"])["sportmonks_football:11"]["logo"] is None
+
+
+def test_no_logo_is_fetched_for_a_source_or_a_sport_turned_off(db, files):
+    team(db, "83", "FC Barcelona", BARCA)
+    controls.turn_sport("football", False)
+    assert logos.wanted(db, NOW) == []
+    controls.turn_sport("football", True)
+    controls.turn_source("sportmonks_football", False)
+    assert logos.wanted(db, NOW) == []
+    controls.turn_source("sportmonks_football", True)
+    assert [t[2] for t in logos.wanted(db, NOW)] == [BARCA]
+
+
+def test_a_download_that_goes_wrong_any_way_is_that_teams_and_the_run_goes_on(db, files, monkeypatch):
+    team(db, "83", "FC Barcelona", BARCA)
+    team(db, "3468", "Real Madrid", MADRID)
+
+    def download(system: str, url: str) -> bytes:
+        if url == BARCA:
+            raise RuntimeError("a stream that broke off")  # not a Refused, not an httpx.HTTPError
+        return files.served[url]
+
+    monkeypatch.setattr(logos, "download", download)
+    assert logos.refresh(NOW, pause=0) == {"asked": 2, "kept": 1, "failed": 1}
+    failed = db.scalar(select(TeamLogo).join(Team, Team.id == TeamLogo.team_id).where(Team.external_id == "83"))
+    assert failed is not None and failed.status == "failed" and "broke off" in (failed.reason or "")
+    monkeypatch.setattr(logos, "RUN_MOST", -1)  # past its time: the rest wait for the next run
+    assert logos.refresh(NOW + timedelta(days=2), pause=0)["asked"] == 0

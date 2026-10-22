@@ -47,8 +47,8 @@ from PIL import Image
 from sqlalchemy import and_, or_, select, tuple_
 from sqlalchemy.orm import Session
 
-from . import bus, controls, logs
-from .adapters import KNOWN
+from . import bus, controls, logs, sports
+from .adapters import ADAPTERS, KNOWN
 from .config import USER_AGENT
 from .db import session
 from .models import Team, TeamLogo
@@ -60,6 +60,8 @@ MAX_BYTES = 1_000_000  # a source's file at most
 MAX_PIXELS = 4096 * 4096  # and its picture: a bigger one isn't decoded (a decompression bomb)
 PER_RUN = 150
 PAUSE = 0.3  # seconds between downloads
+RUN_MOST = 800  # seconds a run goes on for: within its lock's 900, so two runs never fetch the same logos
+HOPS = 3  # redirects a download follows, each to one of its source's logo hosts
 REFETCH_DAYS = 30
 RETRY = timedelta(days=1)
 LOOKS_MOST = 80  # teams one looks() call answers for
@@ -72,7 +74,8 @@ OPAQUE = 200  # alpha from which a pixel is part of the logo
 MIN_SHARE = 0.08  # of a logo, the least a colour covers to be its team's
 SAME = 90  # colours closer than this (the sum of the channels' differences) are one
 
-_client = httpx.Client(headers={"user-agent": USER_AGENT}, timeout=20, follow_redirects=True)
+# Redirects are followed by hand (download), each checked before it's asked: never anywhere but a source's logo hosts.
+_client = httpx.Client(headers={"user-agent": USER_AGENT}, timeout=20, follow_redirects=False)
 
 
 class Refused(ValueError):
@@ -87,36 +90,46 @@ def _now() -> datetime:
 
 
 def allowed(system: str, url: str) -> bool:
-    """Whether this address is one of its source's logo hosts, over HTTPS (Adapter.logo_hosts)."""
+    """Whether this address is one of its source's logo hosts (Adapter.logo_hosts), over HTTPS on its own port."""
     adapter = KNOWN.get(system)
-    parsed = urlparse(url or "")
-    return bool(adapter and parsed.scheme == "https" and (parsed.hostname or "") in getattr(adapter, "logo_hosts", ()))
+    try:
+        parsed = urlparse(url or "")
+        port = parsed.port
+    except ValueError:  # a port that isn't a number
+        return False
+    return bool(adapter and parsed.scheme == "https" and port in (None, 443) and not parsed.username and not parsed.password
+                and (parsed.hostname or "") in getattr(adapter, "logo_hosts", ()))
 
 
 def download(system: str, url: str) -> bytes:
-    """A logo's file, from its source's logo hosts only (a redirect elsewhere is refused), MAX_BYTES at most."""
-    if not allowed(system, url):
-        raise Refused(f"not one of {system}'s logo hosts: {url}")
-    with _client.stream("GET", url) as res:
-        if not allowed(system, str(res.url)):
-            raise Refused(f"redirected away from {system}'s logo hosts: {res.url.host}")
-        if res.status_code != 200:
-            raise Refused(f"HTTP {res.status_code}")
-        body = bytearray()
-        for chunk in res.iter_bytes():
-            body += chunk
-            if len(body) > MAX_BYTES:
-                raise Refused(f"over {MAX_BYTES} bytes")
-    if not body:
-        raise Refused("0 bytes")
-    return bytes(body)
+    """A logo's file, from its source's logo hosts only, MAX_BYTES at most. A redirect is followed (HOPS at most) only
+    to another address on them, checked before it's asked: nothing is ever asked of any other host."""
+    for _ in range(HOPS + 1):
+        if not allowed(system, url):
+            raise Refused(f"not one of {system}'s logo hosts: {url}")
+        with _client.stream("GET", url) as res:
+            if res.is_redirect:
+                url = str(res.url.join(res.headers.get("location", "")))
+                continue
+            if res.status_code != 200:
+                raise Refused(f"HTTP {res.status_code}")
+            body = bytearray()
+            for chunk in res.iter_bytes():
+                body += chunk
+                if len(body) > MAX_BYTES:
+                    raise Refused(f"over {MAX_BYTES} bytes")
+        if not body:
+            raise Refused("0 bytes")
+        return bytes(body)
+    raise Refused(f"over {HOPS} redirects")
 
 
 def redraw(data: bytes) -> tuple[bytes, list[dict[str, Any]]]:
     """A logo's file drawn again as a PNG at most SIZE pixels each way, with its colours (palette). Refused if it
     isn't a PNG, JPEG, WebP or GIF, or is bigger than MAX_PIXELS."""
     try:
-        with Image.open(io.BytesIO(data)) as img:
+        # Only these formats' readers ever see a source's file: the rest of Pillow's never parse it.
+        with Image.open(io.BytesIO(data), formats=sorted(FORMATS)) as img:
             if img.format not in FORMATS:
                 raise Refused(f"not an image we keep: {img.format}")
             if img.width * img.height > MAX_PIXELS:
@@ -248,15 +261,17 @@ def looks(db: Session, keys: Iterable[str]) -> dict[str, dict[str, Any]]:
 
 
 def serve(db: Session, name: str) -> bytes | None:
-    """A logo's PNG by its address ("<digest>.png"), if its team's may show now."""
+    """A logo's PNG by its address ("<digest>.png"), while it may show: a picture several teams share (one flag for a
+    country's sides) stops being served when any of them is taken down."""
     m = NAME.fullmatch(name)
     if not m:
         return None
     now = controls.current()
-    for team, data in db.execute(select(Team, TeamLogo.data).join(TeamLogo, TeamLogo.team_id == Team.id).where(TeamLogo.digest == m.group(1), TeamLogo.status == "ok")):
-        if data is not None and shown(team, now):
-            return bytes(data)
-    return None
+    rows = db.execute(select(Team, TeamLogo.data).join(TeamLogo, TeamLogo.team_id == Team.id).where(TeamLogo.digest == m.group(1), TeamLogo.status == "ok")).all()
+    if not rows or not all(shown(team, now) for team, _ in rows):
+        return None
+    data = next((d for _, d in rows if d is not None), None)
+    return bytes(data) if data is not None else None
 
 
 # ---------------------------------------------------------------- the job
@@ -264,17 +279,21 @@ def serve(db: Session, name: str) -> bytes | None:
 
 def wanted(db: Session, now: datetime, limit: int = PER_RUN) -> list[tuple[int, str, str]]:
     """The teams whose logo to fetch now, biggest first (team id, its source, the address): those with an address
-    and no copy, one of another address, one kept REFETCH_DAYS, or one that failed RETRY ago."""
+    and no copy, one of another address, one kept REFETCH_DAYS, or one that failed RETRY ago; of a source and a sport
+    running now (not turned off in the admin panel), and not taken down."""
     hidden = controls.current().logos_hidden
+    systems = [s for s in ADAPTERS if getattr(ADAPTERS[s], "logo_hosts", ())]
+    if not systems:
+        return []
     due = or_(
         TeamLogo.team_id.is_(None),
         TeamLogo.url != Team.logo_url,
         and_(TeamLogo.status == "ok", TeamLogo.fetched_at < now - timedelta(days=REFETCH_DAYS)),
         and_(TeamLogo.status != "ok", TeamLogo.fetched_at < now - RETRY),
     )
-    rows = db.execute(select(Team.id, Team.system, Team.external_id, Team.logo_url).outerjoin(TeamLogo, TeamLogo.team_id == Team.id)
-                      .where(Team.logo_url.is_not(None), due).order_by(Team.tier.desc(), Team.id).limit(limit * 2)).all()
-    return [(r.id, r.system, r.logo_url) for r in rows if f"{r.system}:{r.external_id}" not in hidden and r.logo_url][:limit]
+    rows = db.execute(select(Team.id, Team.system, Team.external_id, Team.sport, Team.logo_url).outerjoin(TeamLogo, TeamLogo.team_id == Team.id)
+                      .where(Team.logo_url.is_not(None), Team.system.in_(systems), due).order_by(Team.tier.desc(), Team.id).limit(limit * 2)).all()
+    return [(r.id, r.system, r.logo_url) for r in rows if f"{r.system}:{r.external_id}" not in hidden and r.logo_url and sports.on(r.sport)][:limit]
 
 
 def keep(db: Session, team_id: int, address: str, data: bytes | None, error: str | None, now: datetime) -> TeamLogo:
@@ -299,19 +318,23 @@ def keep(db: Session, team_id: int, address: str, data: bytes | None, error: str
 
 
 def refresh(now: datetime | None = None, pause: float = PAUSE) -> dict[str, int]:
-    """Fetch the logos wanted now, one at a time, each written as it comes."""
+    """Fetch the logos wanted now, one at a time, each written as it comes, for RUN_MOST seconds at most: the rest wait
+    for the next run. One that can't be fetched, whatever went wrong, is written as failed, and the run goes on."""
     now = now or _now()
+    started = time.monotonic()
     with session() as db:
         todo = wanted(db, now)
     done = {"asked": 0, "kept": 0, "failed": 0}
     for n, (team_id, system, address) in enumerate(todo):
+        if time.monotonic() - started > RUN_MOST:
+            break
         if n and pause:
             time.sleep(pause)
         data, error = None, None
         try:
             data = download(system, address)
-        except (Refused, httpx.HTTPError) as exc:
-            error = str(exc)
+        except Exception as exc:  # a host, an address or an answer gone wrong: this team's, not the run's
+            error = str(exc) or type(exc).__name__
         with session() as db:
             if db.get(Team, team_id) is None:
                 continue  # removed meanwhile
@@ -338,11 +361,13 @@ def run() -> dict[str, int] | None:
 # ---------------------------------------------------------------- an operator's word
 
 
-def colours_of(fill: str | None, accent: str | None = None) -> dict[str, str] | None:
+def colours_of(fill: Any, accent: Any = None) -> dict[str, str] | None:
     """An operator's colours, checked ("#004d98"; an accent's left out for black or white, whichever shows on the
     fill); None for "auto": the logo's. ValueError for one that isn't a colour."""
     if fill in (None, "", "auto"):
         return None
+    if not isinstance(fill, str) or not isinstance(accent, (str, type(None))):
+        raise ValueError("A colour is written #rrggbb.")
     fill = fill.strip().lower()
     accent = (accent or "").strip().lower() or ("#0d0d0d" if HEX.fullmatch(fill) and _light(fill) else "#ffffff")
     for c in (fill, accent):
@@ -355,19 +380,11 @@ def set_colours(db: Session, team: Team, colours: dict[str, str] | None) -> None
     team.colours = colours
 
 
-def for_admin(db: Session, query: str, limit: int = 30) -> list[dict[str, Any]]:
-    """The registry's teams named like this, for the admin panel's Teams tab: each with its look, its colours read
-    from its logo, and whether its logo is taken down."""
-    from . import naming
-
-    words = naming.fold(query).split()
-    if not words:
-        return []
-    found = select(Team, TeamLogo).outerjoin(TeamLogo, TeamLogo.team_id == Team.id)
-    for w in words:
-        found = found.where(Team.search_text.contains(w))
-    now = controls.current()
-    return [{
+def row(team: Team, logo: TeamLogo | None, now: controls.Controls | None = None) -> dict[str, Any]:
+    """A team as the admin panel's Teams tab shows it: its look, the colours read from its logo, and whether its logo
+    is taken down."""
+    now = now or controls.current()
+    return {
         "id": team.id,
         "key": key(team),
         "name": team.name,
@@ -377,7 +394,21 @@ def for_admin(db: Session, query: str, limit: int = 30) -> list[dict[str, Any]]:
         "read": auto(logo.palette) if logo is not None and logo.status == "ok" else None,
         "hidden": key(team) in now.logos_hidden,
         "logo_status": logo.status if logo is not None else ("waiting" if team.logo_url else "none"),
-    } for team, logo in db.execute(found.order_by(Team.tier.desc(), Team.name).limit(limit))]
+    }
+
+
+def for_admin(db: Session, query: str, limit: int = 30) -> list[dict[str, Any]]:
+    """The registry's teams named like this, for the admin panel's Teams tab, biggest first."""
+    from . import naming
+
+    words = naming.fold(query).split()
+    if not words:
+        return []
+    found = select(Team, TeamLogo).outerjoin(TeamLogo, TeamLogo.team_id == Team.id)
+    for w in words:
+        found = found.where(Team.search_text.contains(w))
+    now = controls.current()
+    return [row(team, logo, now) for team, logo in db.execute(found.order_by(Team.tier.desc(), Team.name).limit(limit))]
 
 
 def main(argv: list[str]) -> int:

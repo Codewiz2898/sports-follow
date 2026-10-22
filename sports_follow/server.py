@@ -653,9 +653,10 @@ async def team_logo(name: str) -> Response:
 async def team_looks(teams_: str = Query("", alias="teams", max_length=4000)) -> JSONResponse:
     """How the app draws these teams ("system:team id", comma-separated, logos.LOOKS_MOST at most), by the ids a game's
     board, its fixtures and Call it carry: each one's logo address (null: our badge, its short code), its two colours
-    (null: its sport's) and its logo's own. Teams the registry hasn't are left out. The same for every fan."""
+    (null: its sport's) and its logo's own. Teams the registry hasn't are left out. The same for every fan, and kept
+    half a minute at most: a logo taken down leaves fans' apps within that."""
     found = await in_db(logos.looks, [k for k in teams_.split(",") if k][: logos.LOOKS_MOST])
-    return JSONResponse({"looks": found}, headers={"Cache-Control": "public, max-age=300"})
+    return JSONResponse({"looks": found}, headers={"Cache-Control": "public, max-age=30"})
 
 
 # ---------------------------------------------------------------- link previews (share.py)

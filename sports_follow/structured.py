@@ -867,7 +867,7 @@ def _upcoming_item(f: Fixture, event: Event, ref: PlayerRef) -> dict[str, Any]:
         "event_id": event.id,
         "match": match_path(event.key),  # its match page's address
         "game_key": board_key(event.key, f.board),  # the game it's one fixture of, as its live block and result say it
-        "sides": list(f.team_ids),  # its teams by the source's ids, for their looks (logos.looks)
+        "team_keys": [f"{event.key.split(':', 1)[0]}:{t}" for t in f.team_ids],  # its teams' keys, for their looks (logos.looks)
     }
 
 
@@ -901,7 +901,7 @@ def result_item(adapter: Adapter, f: Fixture, snap: Snapshot | None, event: Even
         "match": match_path(event.key) if event else None,  # its match page's address
         "game_key": game_key(f"{adapter.system}:{f.source_id}", snap.state) if snap else None,  # its board says it
         "source_url": snap.source_url if snap else None,
-        "sides": list(f.team_ids),  # its teams by the source's ids, for their looks (logos.looks)
+        "team_keys": [f"{adapter.system}:{t}" for t in f.team_ids],  # its teams' keys, for their looks (logos.looks)
     }
 
 

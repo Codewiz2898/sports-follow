@@ -88,7 +88,7 @@ def test_results_carry_their_start():
     # BUG-028: Bulls at Nuggets started 01:00 UTC on 12 Oct, 7 PM on 11 Oct in Denver; "date" alone said 12 Oct.
     start = datetime(2026, 10, 12, 1, 0, tzinfo=timezone.utc)
     f = Fixture(source_id="401", title="Chicago Bulls at Denver Nuggets", competition="NBA", start_utc=start, venue=None, status="final", team_ids=["7"], locator={})
-    adapter = SimpleNamespace(result_label=lambda fixture, team_ids: "Won 118-110", sport_of=lambda ref: "basketball")
+    adapter = SimpleNamespace(system="espn_basketball", result_label=lambda fixture, team_ids: "Won 118-110", sport_of=lambda ref: "basketball")
     ref = SimpleNamespace(athlete_id="3112335", team_ids=["7"], team_names=["Denver Nuggets"], other_teams=[])
     item = structured.result_item(adapter, f, None, None, ref)
     assert (item["date"], item["start_utc"]) == ("2026-10-12", "2026-10-12T01:00:00+00:00")

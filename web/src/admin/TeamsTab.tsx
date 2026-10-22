@@ -36,8 +36,8 @@ export function TeamsTab() {
     <section className="section" aria-label="Teams">
       <Note>
         Each team's logo comes from its source and its two colours are read from the logo; the match page draws each side in them.
-        Where they're wrong (a crest's gold trim read as the team's colour), set them here. Taking a logo down shows our badge (the
-        team's short code) in its place everywhere, at once; turn a whole sport's logos off in Sports.
+        Where they're wrong (a crest's gold trim read as the team's colour), set them here. Taking a logo down stops it being served
+        at once, and fans' apps show our badge (the team's short code) in its place within a minute; turn a whole sport's logos off in Sports.
       </Note>
       <form className="search" role="search" onSubmit={(e) => e.preventDefault()}>
         <SearchIcon width={18} height={18} style={{ flexShrink: 0 }} />
@@ -89,7 +89,7 @@ function TeamCard({ team, onChange, onError }: { team: AdminTeam; onChange: (t: 
         <span className="title">{team.name}</span>
         <span className="small muted">{[team.sport, team.detail, team.key].filter(Boolean).join(' · ')}</span>
         <span className="small muted">
-          {team.hidden ? 'Logo taken down' : { ok: 'Logo kept', failed: "Its logo couldn't be read", refused: 'Its logo was refused', waiting: 'Logo not fetched yet', none: 'Its source has no logo' }[team.logo_status]}
+          {team.hidden ? 'Logo taken down' : { ok: 'Logo kept', failed: "Its logo couldn't be fetched or read", waiting: 'Logo not fetched yet', none: 'Its source has no logo' }[team.logo_status]}
           {' · '}{team.look.set ? 'colours set here' : shown ? 'colours read from its logo' : 'no colours: its sport\'s'}
         </span>
       </div>

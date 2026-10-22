@@ -107,6 +107,13 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`crop`) with the photo, and the profile shows that square; a photo with no face found is shown from
   near its top.
   `python -m sports_follow.photos` runs the job once.
+- **Team logos, kept and served by us** (`sports_follow/logos.py`). A source that has teams' logos says where
+  (`SourceTeam.logo`, on its `logo_hosts`); the worker downloads each once, from those hosts only, redraws it as
+  a PNG and keeps it in Postgres with the colours read from it, and the app draws each team by its key
+  (`GET /api/looks`). Logos belong to their owners: the admin panel turns a sport's off, and its Teams tab takes
+  one team's down or sets its colours where its logo reads them wrong. From a shell:
+  `python -m sports_follow.logos` runs the job once; `python -m sports_follow.logos hide <team>` takes one down
+  (`show` puts it back); `python -m sports_follow.logos colours <team> <fill> [accent]` sets its colours.
 - **Profiles from Wikidata and Wikipedia, no model.** A player with a Wikidata person (their registry
   athlete; an esports pro's, once roster_wikidata.py has matched them) gets the facts on their page from
   Wikidata (`sports_follow/wiki.py`): date of birth, the country they compete for, current teams (one club

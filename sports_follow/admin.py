@@ -42,7 +42,7 @@ from sqlalchemy.orm import Session
 from . import accounts, controls, feed, feedstats, logos, rank, sports
 from .adapters import ADAPTERS, ALL, KNOWN, NEWS, VIDEOS, budget, news, videos
 from .config import APP_NAME, FEED_LAYOUT, SOURCES
-from .models import Account, AccountSession, Event, FeedCandidate, Follow, LeagueMember, MatchFollow, Pick, Player, PushSubscription, Team, TeamFollow
+from .models import Account, AccountSession, Event, FeedCandidate, Follow, LeagueMember, MatchFollow, Pick, Player, PushSubscription, Team, TeamFollow, TeamLogo
 
 log = logging.getLogger("sports_follow.admin")
 
@@ -233,7 +233,7 @@ def set_team_look(db: Session, team_id: int, body: dict[str, Any]) -> dict[str, 
             raise ValueError("hidden is true or false.")
         controls.hide_logo(logos.key(team), body["hidden"])
     db.flush()
-    return next((t for t in logos.for_admin(db, team.name) if t["id"] == team.id), {"id": team.id})
+    return logos.row(team, db.get(TeamLogo, team.id))
 
 
 # ---------------------------------------------------------------- sources and what they may spend

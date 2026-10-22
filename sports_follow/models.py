@@ -287,7 +287,7 @@ class TeamLogo(Base):
 
     team_id: Mapped[int] = mapped_column(ForeignKey("team.id", ondelete="CASCADE"), primary_key=True)
     url: Mapped[str] = mapped_column(Text)  # the source's address it was fetched from: a new one is a new logo
-    status: Mapped[str] = mapped_column(String(10))  # ok | failed | refused
+    status: Mapped[str] = mapped_column(String(10))  # ok | failed
     reason: Mapped[str | None] = mapped_column(Text)  # why there's none: "not an image", "HTTP 404"
     digest: Mapped[str | None] = mapped_column(String(32), index=True)  # of the PNG: its address
     data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)  # a PNG, SIZE pixels at most each way
