@@ -206,15 +206,19 @@ def of_question(q: dict[str, Any]) -> Preview:
 def of_invite(shown: dict[str, Any]) -> Preview:
     """A league's invite (predictions.about), as its page (/j/<code>) says it: "You're invited", the league's name in
     big type, who asked and how many are in it, on the app's own blue (a league calls any sport's games). Its code is
-    in the link alone, never in the words or the picture: a screenshot of the preview is no invite."""
+    in the link alone, never in the words or the picture: a screenshot of the preview is no invite. A name the
+    typefaces can't draw (a league named in Hindi: _drawable leaves it out) isn't in the picture: it says "Join the
+    league", or that you're asked, instead of nothing (BUG-313); the words keep it."""
     asked = f"{shown['by']} asked you" if shown.get("by") else "You're asked"  # its maker left: still an invite
     together = f"{asked} to call the games together"
     count = f"{shown['members']} in it so far"
+    word = shown["name"] if _drawable(shown["name"].upper(), "anton", "manrope")[1] else "Join the league"  # as _draw draws the big word
+    line = together if _drawable(together, "manrope")[1] else "You're asked to call the games together"  # and its lines
     return Preview(
         title=f"Join {shown['name']} on {APP_NAME}",
         description=f"{together} on {APP_NAME}: {count}. Call each game before it starts; bragging rights only.",
         path=f"/j/{shown['code']}",
-        picture=Picture(BRAND, "#ffffff", "You're invited", shown["name"], "", (together, count)),
+        picture=Picture(BRAND, "#ffffff", "You're invited", word, "", (line, count)),
         image=f"/api/leagues/{shown['code']}/share.png",
     )
 
