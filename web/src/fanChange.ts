@@ -1,4 +1,4 @@
-// What the app says as the device becomes another fan: signed in, signed out, the account deleted, or
+// What the app says and forgets as the device becomes another fan: signed in, signed out, the account deleted, or
 // signed out elsewhere (account.tsx starts the app over). Shared by the web app and the Android app (mobile/): no
 // browser here, so tests/test_web_fan_change.py runs it in Node.
 
@@ -14,3 +14,11 @@ export function welcome(added: number, teamsDropped = 0): string {
   return `Signed in.${players}${teams}`
 }
 
+/**
+ * What a device keeps of the fan it is, each under the key of the part of the app that keeps it: the fan's last look
+ * at Alerts (activity.tsx), at the Feed tab and at each player's circle (feedSeen.ts), and the address a sign-in code
+ * went to (the account page). Forgotten as the device becomes another fan, so the next person on it isn't shown the
+ * last one's (BUG-169). The web keeps them in localStorage, the Android app in AsyncStorage.
+ */
+export const WEB_KEPT = ['sf-alerts-seen', 'sf-feed-opened', 'sf-feed-seen', 'sf-signin']
+export const PHONE_KEPT = ['stann.alerts-seen', 'stann.feed-opened', 'stann.feed-seen', 'stann.signin']

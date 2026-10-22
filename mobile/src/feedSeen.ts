@@ -67,6 +67,15 @@ export function markSeen(playerId: number) {
   changed()
 }
 
+/** The phone is another fan now (account.tsx, which forgets the kept copies): what it showed as the last one goes. */
+export function forgetFeedSeen() {
+  newest = null
+  opened = null
+  seen = {}
+  asked = 0
+  changed()
+}
+
 /** Whether the Feed tab has its dot now (newer than the fan's last look). */
 export function feedHasNew(): boolean {
   return hasNew(newest, opened)
