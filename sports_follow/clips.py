@@ -312,10 +312,14 @@ def set_hidden(db: Session, slug: str, hidden: bool) -> Clip | None:
 
 def hide_from(db: Session, key_id: int) -> int:
     """Hide every live clip put up with a key (one revoked because it leaked): how many. Refused (502) when the bucket
-    fails, the ones hidden before it staying hidden."""
+    fails, the ones hidden before it staying hidden, naming the clip it failed on: hiding that one by itself finishes
+    its move."""
     hidden = 0
     for slug in list(db.scalars(select(Clip.slug).where(Clip.key_id == key_id, Clip.status == "live").order_by(Clip.id))):
-        set_hidden(db, slug, True)
+        try:
+            set_hidden(db, slug, True)
+        except Refused as refused:
+            raise Refused(refused.status, f"clip {slug}: {refused.message} Hide it by itself to finish it.") from refused
         db.flush()
         hidden += 1
     return hidden

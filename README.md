@@ -1154,6 +1154,7 @@ that build too: turn them on under Alerts. Always pass
 |---|---|---|
 | `DATABASE_URL` | `postgresql+psycopg://sports:sports@127.0.0.1:5433/sports_follow` | |
 | `REDIS_URL` | `redis://127.0.0.1:6380/0` | |
+| `SPORTS_FOLLOW_MIGRATION_LOCK_TIMEOUT` | `5s` | how long a migration waits for a lock (`migrations/env.py`) before it gives up: the deploy then stops with nothing replaced, and the next one goes on from there |
 | `SPORTS_FOLLOW_CACHE_REDIS_URL` | `REDIS_URL` | where the data sources' answers are cached (`adapters/cache.py`), shared by the API and the worker and kept across deploys. In production a Redis of its own, capped and evicting the least recently used key (deploy/compose.yaml); locally, `docker compose --profile cache up -d` and `redis://127.0.0.1:6382/0` run it as production does |
 | `SPORTS_FOLLOW_MODEL` | `openrouter:moonshotai/kimi-k2.6:nitro` | any gateway model ref, e.g. `openrouter:anthropic/claude-opus-5` |
 | `SPORTS_FOLLOW_EFFORT` | `medium` | `anthropic:` route only |

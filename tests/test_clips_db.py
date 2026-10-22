@@ -336,6 +336,30 @@ def test_a_first_hide_the_bucket_fails_halfway_through_is_finished_by_asking_aga
     assert bucket.objects == {}  # nothing left behind
 
 
+def test_a_revoked_keys_hide_the_bucket_fails_on_names_the_clip_left_to_hide(db, bucket, page, monkeypatch):
+    """A key's clips hidden as it's revoked, the bucket failing on the second: the first stays hidden, and the
+    refusal names the clip it stopped on, which hidden by itself is finished."""
+    key_id, _ = _key(db)
+    first, _ = _publish(db, bucket, key_id)
+    second, _ = _publish(db, bucket, key_id)
+    copy = bucket.copy
+
+    def flaky(source, key):
+        if source == clips.poster_key(second):
+            raise OSError("the bucket is down")
+        copy(source, key)
+
+    monkeypatch.setattr(bucket, "copy", flaky)
+    with db() as s, pytest.raises(clips.Refused) as refused:
+        clips.hide_from(s, key_id)
+    assert refused.value.status == 502 and f"clip {second}:" in refused.value.message
+    monkeypatch.setattr(bucket, "copy", copy)
+    with db() as s:
+        assert clips.set_hidden(s, second, True).status == "hidden"
+    with db() as s:
+        assert [c["id"] for c in clips.listed(s)] == []
+
+
 def test_the_poster_is_signed_for_the_size_the_app_says(db, bucket, page):
     """BUG-126: the poster's upload URL was signed for its type alone, so a file of any size could be put there (its
     2 MB was checked only at done). The app says its size, and the URL is signed for that, as the video's is."""
