@@ -221,6 +221,45 @@ def test_chess_match_page_is_one_players_board_with_both_players():
     assert lichess_chess.LichessChess.fixture_pattern.fullmatch(f"{rnd}-{CARLSEN}") and not lichess_chess.LichessChess.fixture_pattern.fullmatch(f"{rnd}:abc")
 
 
+def test_an_armageddon_drawn_is_blacks_win(monkeypatch):
+    # BUG-212 (H17 arm1): Norway Chess's form, a classical draw then an armageddon in the same round, drawn with Gukesh
+    # as Black. A draw in an armageddon is Black's win, but it was scored ½ each: "Drew the match 1–1", "Match drawn",
+    # a draw in form, no Win poster, and Call it settled Draw.
+    from sports_follow import sports
+
+    now = datetime.now(timezone.utc)
+    gukesh = {"name": "Gukesh, D", "fideId": 46616543, "rating": 2767, "title": "GM", "fed": "IND"}
+    sindarov = {"name": "Sindarov, Javokhir", "fideId": 14205483, "rating": 2726, "title": "GM", "fed": "UZB"}
+    rnd = {"id": "AbCdEf12", "name": "Round 3", "finished": True, "startsAt": int((now - timedelta(hours=4)).timestamp() * 1000)}
+    tour = {"id": "T1", "name": "Norway Chess 2027"}
+    end = "8/8/8/4k3/8/4K3/8/8 w - - 0 61"
+    classical = {"id": "game0001", "name": "Gukesh, D - Sindarov, Javokhir", "players": [gukesh, sindarov], "fen": end, "status": "½-½"}
+    armageddon = {"id": "game0002", "name": "Sindarov, Javokhir - Gukesh, D (Armageddon)", "players": [sindarov, gukesh], "fen": end, "status": "½-½"}
+    data = {"round": rnd, "tour": tour, "games": [classical, armageddon]}
+    g, s = str(gukesh["fideId"]), str(sindarov["fideId"])
+    snap = lichess_chess.parse_board(data, g, now)
+    assert (snap.status, snap.score_label, snap.clock_label) == ("final", "D Gukesh 1½–½ Javokhir Sindarov", "D Gukesh won on armageddon (2 games)")
+    assert snap.lines[g].headline == "Won the match 1½–½ vs Javokhir Sindarov on armageddon"
+    assert snap.lines[s].headline == "Lost the match ½–1½ vs D Gukesh on armageddon"
+    assert snap.state["match"]["ahead"] == g and sports.get("chess").answer("result", "final", snap.state) == g  # Call it: Gukesh
+    assert sports.get("chess").finished_poster({"headline": snap.lines[g].headline}, "", "") is not None  # his Win poster
+    mine, theirs = (lichess_chess.fixture_for(tour, rnd, lichess_chess.games_of(data, fide), fide, now) for fide in (g, s))
+    assert (lichess_chess.result_label(mine, [g]), lichess_chess.result_label(theirs, [s])) == ("Won 1½–½ on armageddon", "Lost ½–1½ on armageddon")
+    # A round of its own for the armageddon, or one whose scoring gives Black more for a draw (Lichess's custom scoring).
+    alone = {"round": {**rnd, "name": "Round 3 Armageddon"}, "tour": tour, "games": [{**armageddon, "name": "Sindarov, Javokhir - Gukesh, D"}]}
+    one = lichess_chess.parse_board(alone, g, now)
+    assert (one.clock_label, one.lines[g].headline) == ("D Gukesh won on armageddon", "Won with Black vs Javokhir Sindarov on armageddon")
+    assert sports.get("chess").answer("result", "final", one.state) == g
+    scored = {**alone, "round": {**rnd, "customScoring": {"white": {"win": 1, "draw": 0}, "black": {"win": 1, "draw": 1}}}}
+    assert lichess_chess.parse_board(scored, s, now).lines[s].headline == "Lost with White vs D Gukesh on armageddon"
+    # Its tournament's PGN (a finished round's games, as a refresh reads them) names it in the game's event.
+    pgn = ('[Event "Norway Chess 2027 Armageddon"]\n[White "Sindarov, Javokhir"]\n[Black "Gukesh, D"]\n[Result "1/2-1/2"]\n[WhiteFideId "14205483"]\n'
+           '[BlackFideId "46616543"]\n[GameURL "https://lichess.org/broadcast/t/r/AbCdEf12/game0002"]\n')
+    assert lichess_chess.match_score(lichess_chess.games_of({"games": lichess_chess.parse_pgn_rounds(pgn)["AbCdEf12"]}, g), g) == (1.0, 1)
+    # Any other game drawn is half a point each, as before.
+    assert lichess_chess.match_score(lichess_chess.games_of({**data, "games": [classical]}, g), g) == (0.5, 1)
+
+
 def test_chess_single_game_round():
     data = load("lichess/round-final")
     first = data["games"][0]  # Carlsen–Lazavik 1-0, as if it were the round's only game
