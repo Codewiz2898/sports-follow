@@ -59,10 +59,9 @@ RECENT = timedelta(days=14)  # PUBG keeps matches this long
 # minutes with 16 teams and at most 12 finishes for anyone; these bounds keep those and drop the rest.
 MIN_MINUTES, MIN_TEAMS, MAX_FINISHES = 22, 8, 25
 LOBBY_GAP = timedelta(hours=4)  # a longer break between matches starts a new lobby
-# No new match this long after the last one ended: the lobby is over. Not before a match that began within LOBBY_GAP
-# of the last one (and so would join it) has been played and listed: a lobby called over during a long break (a
-# technical delay, a stage change) and then joined by the day's later matches kept its earlier standings for good.
-OVER_AFTER = LOBBY_GAP + timedelta(minutes=30)
+# No new match this long after the last one ended: the lobby is over. A match after a longer break (a technical
+# delay, a stage change) still joins it, within LOBBY_GAP: the lobby is on again (final_may_reopen).
+OVER_AFTER = timedelta(minutes=90)
 
 
 def _time(raw: str | None) -> datetime | None:
@@ -339,6 +338,7 @@ class PubgEsports(Adapter):
     # its matches so far are told (structured.opened_live). It's found within about an hour of its first match
     # ending (the index is read every 10 minutes, a followed player's lobbies every 30).
     listed_after_start = timedelta(minutes=90)
+    final_may_reopen = True  # a match after a long break joins a lobby already called over (OVER_AFTER)
 
     def __init__(self) -> None:
         self._index: tuple[float, list[dict[str, Any]]] = (0.0, [])

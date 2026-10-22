@@ -543,7 +543,7 @@ def _refresh(player_id: int) -> None:
     with session() as db:
         seen_final = set(db.scalars(select(Event.key).where(Event.key.in_([f"{adapter.system}:{f.source_id}" for f in fixtures]), Event.status == "final")))
     for f in fixtures:
-        if f"{adapter.system}:{f.source_id}" in seen_final:
+        if f"{adapter.system}:{f.source_id}" in seen_final and not (f.status == "live" and getattr(adapter, "final_may_reopen", False)):
             f.status = "final"
     finals_all = [f for f in fixtures if f.status == "final"]
     finals = finals_all[-RECENT_LIMIT:]  # scorecards read on every refresh; older ones by history.py
@@ -763,6 +763,8 @@ def upsert_game(db: Session, adapter: Adapter, sport: str, f: Fixture) -> Event:
     event.participants = f.team_ids
     event.live_binding = {"adapter": adapter.system, "locator": f.locator, "cadence": adapter.live_cadence}
     reschedule(db, event, f.start_utc, f.status, sport, f.next_up)
+    if event.status == "final" and f.status == "live" and getattr(adapter, "final_may_reopen", False):
+        event.status = "live"  # on again after it was over (final_may_reopen): polled from here, what's new told
     db.flush()
     return event
 
@@ -1115,6 +1117,13 @@ def opened_live(adapter: Adapter, event: Event, latest: EventState | None, now: 
     return latest is None and within is not None and event.start_utc is not None and now - event.start_utc <= within
 
 
+def reopened(adapter: Adapter, latest: EventState | None, snap: Snapshot) -> bool:
+    """Whether a poll finds a game on again after it was over, from a source whose games may reopen (final_may_reopen:
+    a later match joins a lobby after a long break). It wasn't polled meanwhile, so the gap is no reason to take this
+    look as a first one: what happened since it was over is told against its last state."""
+    return latest is not None and latest.status == "final" and snap.status == "live" and bool(getattr(adapter, "final_may_reopen", False))
+
+
 def _polled(event_id: int, cadence: int) -> bool:
     """Note a poll of an event. Returns whether the one before it was recent: within POLL_GAP, or three of
     a slow source's rounds (Liquipedia reads every five minutes)."""
@@ -1200,6 +1209,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
         recent = _polled(event_id, int(live_binding.get("cadence") or 10))
         opened = opened_live(adapter, event, latest, now)
         snap = hold_result(rules, snap, latest)
+        reopens = reopened(adapter, latest, snap)
         if rules.engine:
             _evaluate(rules, db, event_id, snap, latest, [w[0] for w in watchers])
         if snap.squad:
@@ -1234,6 +1244,8 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
                 before = baseline(latest, last, snap, recent, line_json)
                 if before is None and opened:
                     before = moments.Seen("scheduled")  # a game listed only once under way, first seen just after its start
+                elif before is None and reopens:
+                    before = baseline(latest, last, snap)  # on again after it was over: against how it was then
                 told = notify.told(db, player_id, event_id) if before else []  # what a source may take back (a goal VAR rules out)
                 new_moments += notify.record(db, player_id, event_id, moments.detect(sport, name, athlete_id, before, seen, told))
             card_row = db.get(PlayerCard, player_id)

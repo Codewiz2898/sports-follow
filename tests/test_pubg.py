@@ -17,7 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from sports_follow import bus, credits, moments, registry, structured
 from sports_follow.adapters import pubg, pubg_esports as pe
 from sports_follow.adapters import KNOWN, PlayerRef, budget
-from sports_follow.models import Event, EventPlayer, Player, PlayerCard, SourceBinding
+from sports_follow.models import Event, EventPlayer, Follow, Moment, Player, PlayerCard, PlayerIdentity, SourceBinding
 
 from .test_liquipedia import PollSession
 from .test_pipeline import FakeRedis as FakeBus
@@ -108,29 +108,34 @@ def test_a_lobby_on_now_and_over_later():
     line = live.lines[PRO]  # TGLTN's own numbers over the lobby, beside 4AM's standing
     assert line.headline == "7 finishes · 702 dmg"  # 602.4 and 100.4 damage, each rounded
     assert line.stats[:4] == [{"label": "Team place", "value": "2nd"}, {"label": "Team points", "value": "21"}, {"label": "Assists", "value": "2"}, {"label": "Knocks", "value": "2"}]
-    over = pe.parse_lobby(lobby, T0 + timedelta(hours=6))  # no new match for OVER_AFTER (4.5 h) after the last ended
+    over = pe.parse_lobby(lobby, T0 + timedelta(hours=5))  # no new match for 90 minutes after the last ended
     assert (over.status, over.score_label, over.clock_label) == ("final", "DNS win · 27 pts", "Final standings")
-    f = pe.parse_fixture(lobby, T0 + timedelta(hours=6))
+    f = pe.parse_fixture(lobby, T0 + timedelta(hours=5))
     assert (f.source_id, f.title, f.competition, f.status, f.locator) == ("as-pgsc4t:2026-10-13:1", "PUBG Global Series · Day 1", "PUBG Global Series", "final", {"tournament": "as-pgsc4t", "day": "2026-10-13", "n": 1})
     assert f.sport == "" and pe.PubgEsports().sports == ("pubg",)  # its source's one sport: PUBG
     assert pe.PubgEsports().result_label(f, ["4AM"]) == "2nd of 8 · 21 pts"
     assert len(f"pubg_esports:{f.source_id}") <= 64
 
 
-def test_a_long_break_on_a_match_day_doesnt_end_the_lobby():
-    # BUG-130: a break of 90 minutes to 4 hours called the lobby over, with its final standings and alerts, and the
-    # matches after it joined that same lobby, which the poller no longer read: the rest of the day never reached fans.
+def test_a_lobby_is_over_90_minutes_after_its_last_match():
+    # A match day's standings and result are told an hour and a half after its last match, not hours later.
     lobby = _lobby(GAME1, GAME2)  # match 2 began at 7:10 and ended at 7:40
-    during = T0 + timedelta(hours=3, minutes=30)  # over two hours into a break
-    assert pe.parse_lobby(lobby, during).status == "live" and pe.parse_fixture(lobby, during).result is None
-    # The latest a match can begin and still be one of this lobby's (LOBBY_GAP after the last began), played and listed.
-    joins = T0 + timedelta(minutes=40) + pe.LOBBY_GAP - timedelta(minutes=1)
-    third = _doc("m3", joins, GAME1_PLACES, GAME1_KILLS, duration=35 * 60)
+    ended = T0 + timedelta(hours=1, minutes=10)
+    assert pe.parse_lobby(lobby, ended + timedelta(minutes=89)).status == "live"
+    assert pe.parse_lobby(lobby, ended + timedelta(minutes=91)).status == "final"
+
+
+def test_a_match_after_a_long_break_joins_the_lobby_and_puts_it_on_again():
+    # BUG-130: a break of 90 minutes to 4 hours ends the lobby, and the matches after it join that same lobby: it's
+    # on again (PUBG's finals may reopen), so the rest of the day reaches fans.
+    lobby = _lobby(GAME1, GAME2)
+    joins = T0 + timedelta(minutes=40) + pe.LOBBY_GAP - timedelta(minutes=1)  # the latest a match can begin and be one of its
+    third = _doc("m3", joins, GAME1_PLACES, GAME1_KILLS)
     [later] = pe.group_lobbies("as-pgsc4t", [pe.summarize_match(d) for d in (GAME1, GAME2, third)])
     assert pe.lobby_key(later) == pe.lobby_key(lobby) and len(later["matches"]) == 3
-    listed = joins + timedelta(minutes=35 + 15)
-    assert pe.parse_lobby(lobby, listed).status == "live"  # it was still on when its third match came in
-    assert pe.parse_lobby(later, listed + pe.OVER_AFTER).status == "final"
+    listed = joins + timedelta(minutes=40)
+    assert pe.parse_lobby(lobby, listed).status == "final" and pe.parse_lobby(later, listed).status == "live"
+    assert pe.PubgEsports.final_may_reopen
 
 
 def test_tournament_names_from_their_ids():
@@ -153,7 +158,7 @@ def test_a_chicken_dinner_and_the_lobby_result_reach_the_player():
 
     found = moments.detect("PUBG", "TGLTN", PRO, seen(one), seen(two))
     assert [(f.kind, f.title) for f in found] == [("game", "TGLTN: 4AM 4th in match 2")]
-    over = pe.parse_lobby(_lobby(GAME1, GAME2), T0 + timedelta(hours=6))
+    over = pe.parse_lobby(_lobby(GAME1, GAME2), T0 + timedelta(hours=5))
     [final] = moments.detect("PUBG", "TGLTN", PRO, seen(two), seen(over))
     assert final.title == "TGLTN: 4AM finish 2nd · 21 pts"
 
@@ -444,9 +449,14 @@ def test_a_lobby_whose_first_matches_were_never_read_isnt_offered(ageing, monkey
     assert [pe.lobby_key(lb) for lb in pe.PubgEsports().lobbies()] == ["as-pgsc4t:2026-10-13:1", "as-pgsc4t:2026-10-13:2", "as-pgsc4t:2026-10-14:1"]
 
 
-@pytest.mark.skipif(not os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL"), reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
-def test_a_finished_lobbys_stored_result_stays_as_its_matches_pass_pubgs_fortnight(ageing, monkeypatch):
-    # BUG-202, down a refresh's real path: the result a fan's history keeps, and the lobbies in it.
+NEEDS_DB = pytest.mark.skipif(not os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL"), reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
+
+
+@pytest.fixture
+def followed(ageing, monkeypatch):
+    """TGLTN, followed and bound to the adapter over the fake PUBG (ageing), in a throwaway database: the worker's and
+    the poller's real paths, the clock theirs too (Clock.at). Returns his player id, the adapter, the Redis their
+    marks are kept in, and the fake PUBG's matches."""
     engine = create_engine(os.environ["SPORTS_FOLLOW_TEST_DATABASE_URL"])
     with engine.begin() as c:
         c.execute(text("TRUNCATE player, event RESTART IDENTITY CASCADE"))
@@ -464,32 +474,75 @@ def test_a_finished_lobbys_stored_result_stays_as_its_matches_pass_pubgs_fortnig
         finally:
             s.close()
 
+    redis = FakeBus()
     monkeypatch.setattr(structured, "session", unit)
-    monkeypatch.setattr(bus, "_sync", FakeBus())
+    monkeypatch.setattr(structured, "_now", lambda: Clock.at)
+    monkeypatch.setattr(structured.notify, "dispatch", lambda ids: None)  # what's told is what's stored; nothing is sent
+    monkeypatch.setattr(bus, "_sync", redis)
     adapter = pe.PubgEsports()
     monkeypatch.setitem(structured.ADAPTERS, "pubg_esports", adapter)
-    # One lobby of six matches, begun before midnight; 4AM wins the first two.
-    _day(ageing, "m", ["2026-10-13T22:30:00", "2026-10-13T23:05:00", "2026-10-13T23:40:00", "2026-10-14T00:15:00", "2026-10-14T00:50:00", "2026-10-14T01:25:00"], won=2)
     ref = PlayerRef("pubg_esports", PRO, "TGLTN", ["4AM"], ["4AM"], league="pubg", game="PUBG")
     with unit() as db:
         player = Player(slug="tgltn", name="TGLTN", sport="PUBG", status="active")
         db.add(player)
         db.flush()
+        db.add(PlayerIdentity(player_id=player.id, system="pubg_esports", external_id=PRO, confidence=1.0))
         db.add(SourceBinding(player_id=player.id, purpose="fixtures", adapter="pubg_esports", locator=asdict(ref), confidence=1.0, priority=10, health={}))
         db.add(PlayerCard(player_id=player.id, status="building", card={}))
+        db.add(Follow(fan_id="fan", player_id=player.id, alert_rules={"level": "everything"}))
+    yield player.id, adapter, redis, ageing
+    engine.dispose()
 
-    def stored(at: str) -> list[tuple[str, str]]:
-        Clock.at = _at(at)
-        adapter._index = (0.0, [])
-        structured._refresh(player.id)
-        with unit() as db:
-            rows = db.execute(select(Event.key, EventPlayer.result).join(EventPlayer, EventPlayer.event_id == Event.id).where(EventPlayer.player_id == player.id))
-            return sorted((key, (result or {}).get("result")) for key, result in rows)
 
-    try:
-        whole = stored("2026-10-26T12:00:00")
-        assert whole == [("pubg_esports:as-pgsc4t:2026-10-13:1", "2nd of 8 · 60 pts")]
-        assert stored("2026-10-27T23:10:00") == whole  # its first two matches gone from PUBG
-        assert stored("2026-10-28T00:20:00") == whole  # and those before midnight: not added again under the 14th
-    finally:
-        engine.dispose()
+def _refresh(player_id: int, adapter: pe.PubgEsports, at: str) -> list[tuple[str, str, str]]:
+    """A refresh of the player's lobbies then: each one's key, status and the result their history keeps."""
+    Clock.at = _at(at)
+    adapter._index = (0.0, [])
+    structured._refresh(player_id)
+    with structured.session() as db:
+        rows = db.execute(select(Event.key, Event.status, EventPlayer.result).join(EventPlayer, EventPlayer.event_id == Event.id).where(EventPlayer.player_id == player_id))
+        return sorted((key, status, (result or {}).get("result")) for key, status, result in rows)
+
+
+@NEEDS_DB
+def test_a_finished_lobbys_stored_result_stays_as_its_matches_pass_pubgs_fortnight(followed):
+    # BUG-202, down a refresh's real path: the result a fan's history keeps, and the lobbies in it.
+    player_id, adapter, _, docs = followed
+    # One lobby of six matches, begun before midnight; 4AM wins the first two.
+    _day(docs, "m", ["2026-10-13T22:30:00", "2026-10-13T23:05:00", "2026-10-13T23:40:00", "2026-10-14T00:15:00", "2026-10-14T00:50:00", "2026-10-14T01:25:00"], won=2)
+    whole = _refresh(player_id, adapter, "2026-10-26T12:00:00")
+    assert whole == [("pubg_esports:as-pgsc4t:2026-10-13:1", "final", "2nd of 8 · 60 pts")]
+    assert _refresh(player_id, adapter, "2026-10-27T23:10:00") == whole  # its first two matches gone from PUBG
+    assert _refresh(player_id, adapter, "2026-10-28T00:20:00") == whole  # and those before midnight: not added again under the 14th
+
+
+@NEEDS_DB
+def test_a_lobby_on_again_after_a_long_break_tells_its_later_matches_and_its_new_result(followed):
+    # BUG-130: a lobby is over 90 minutes after its last match, and a match after a longer break joins it: it's on
+    # again, polled, and the match after the break and the lobby's new result reach its players' fans.
+    player_id, adapter, redis, docs = followed
+    key = "pubg_esports:as-pgsc4t:2026-10-20:1"
+
+    def poll() -> list[tuple[str, str]]:
+        """A poll of the lobby; what it told TGLTN's fans."""
+        with structured.session() as db:
+            event_id = db.scalar(select(Event.id).where(Event.key == key))
+            seen = set(db.scalars(select(Moment.id).where(Moment.player_id == player_id)))
+        structured.poll_once(event_id)
+        with structured.session() as db:
+            return [(m.kind, m.title) for m in db.scalars(select(Moment).where(Moment.player_id == player_id).order_by(Moment.id)) if m.id not in seen]
+
+    _day(docs, "a", ["2026-10-20T08:00:00", "2026-10-20T08:40:00"])  # 4AM 8th in both
+    assert _refresh(player_id, adapter, "2026-10-20T09:20:00") == [(key, "live", None)]
+    assert poll() == [("start", "TGLTN is playing"), ("game", "TGLTN: 4AM 8th in match 1"), ("game", "TGLTN: 4AM 8th in match 2")]
+    Clock.at = _at("2026-10-20T10:45:00")  # 95 minutes after match 2: over
+    assert poll() == [("final", "TGLTN: 4AM finish 3rd · 14 pts")]
+    assert _refresh(player_id, adapter, "2026-10-20T10:46:00") == [(key, "final", "3rd of 8 · 14 pts")]
+
+    _day(docs, "b", ["2026-10-20T11:50:00"], won=1)  # after a 2 h 40 min break (it began 3 h 10 min after match 2 did)
+    redis.delete(*[k for k in redis.data if k.startswith("polled:")])  # no poll while it was over: the last is hours old
+    assert _refresh(player_id, adapter, "2026-10-20T12:35:00") == [(key, "live", "3rd of 8 · 14 pts")]  # on again
+    assert poll() == [("dinner", "Chicken dinner: 4AM")]  # match 3, after the break
+    Clock.at = _at("2026-10-20T14:00:00")
+    assert poll() == [("final", "TGLTN: 4AM finish 2nd · 30 pts")]  # the new result, told as it is now
+    assert _refresh(player_id, adapter, "2026-10-20T14:01:00") == [(key, "final", "2nd of 8 · 30 pts")]
