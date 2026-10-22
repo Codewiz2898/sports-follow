@@ -282,8 +282,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `POST /api/admin/clip-keys`; the key is shown once). The app sends `Authorization: Bearer slam_pk_…` to
   `POST /api/clips` with the match page's address, the moment it read, length, size, its poster's size and source,
   and gets two upload URLs signed for 15 minutes, each for its file's type and size. It puts the video and its poster frame straight into the bucket (Cloudflare R2;
-  the server never carries a video), then `POST /api/clips/<id>/done`: both files are checked and the clip goes
-  live, served from the CDN domain. A clip recorded from a browser window (a broadcast, its organiser's production)
+  the server never carries a video), at the upload's own names (`uploads/`), then `POST /api/clips/<id>/done`: both
+  files are checked, copied to where fans are served them (`clips/`), and the clip goes live, served from the CDN
+  domain. A link can't be taken back, so one used after done puts a file nobody is shown, which the daily sweep clears. A clip recorded from a browser window (a broadcast, its organiser's production)
   is refused while Slam itself posts clips (`clips.RIGHTS`, BHA-369). Fans report a clip once each
   (`POST /api/clips/<id>/report`), which flags it for the admin panel (`/api/admin/clips?status=reported`) to hide
   or take down; reports never hide a clip by themselves, as an anonymous fan is just a request without a cookie.

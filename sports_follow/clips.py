@@ -5,8 +5,9 @@ Publishing, by a publishing key's holder (admins, for now):
 
   1. POST /api/clips with what the app knows (the match page's address, the moment, length and size): a clip
      row, and two upload URLs signed for a few minutes (clipstore.py), for the video and its poster frame.
-  2. The app puts both files straight into the bucket: the server never carries a video.
-  3. POST /api/clips/<id>/done: the files are checked (there, not too big) and the clip goes live.
+  2. The app puts both files straight into the bucket, at the upload's own names: the server never carries a video.
+  3. POST /api/clips/<id>/done: the files are checked (there, not too big), copied to where fans are served them,
+     and the clip goes live. An upload link can't be taken back, so one still running then changes nothing fans see.
 
 What may be published depends on what it was recorded from (RIGHTS): a game's own window, or a file of one's
 own game, yes; a browser window (a stream, which is the broadcaster's production) is kept on the device while
@@ -45,7 +46,7 @@ MAX_POSTER = 2 * 1024 * 1024
 MAX_PLAYERS = 20
 PAGE = 30
 SWEEP = 500  # clips a sweep (retention.py) looks at, of each kind
-LINGER = timedelta(days=3)  # how far back a sweep looks for clips failed or taken down while a link could still put a file
+LINGER = timedelta(days=3)  # how far back a sweep looks for files a link still running put after its clip moved on
 # What may be published, by what it was recorded from (BHA-369). A stream is its broadcaster's production:
 # while the app's own admins post clips, those stay on the device.
 RIGHTS = {"game_client": True, "file": True, "browser": False}
@@ -74,6 +75,23 @@ def video_key(slug: str) -> str:
 
 def poster_key(slug: str) -> str:
     return f"clips/{slug}.jpg"
+
+
+def upload_key(key: str) -> str:
+    """Where the app's upload puts a clip's file (`key`: where fans are served it, "clips/<id>.mp4"), "uploads/<id>.mp4":
+    done copies it from there, so an upload link still running after it (they can't be taken back) puts a file nobody
+    is shown, which sweep clears."""
+    return "uploads/" + key.split("/", 1)[1]
+
+
+def _uploads(slug: str) -> list[str]:
+    """Where a clip's upload puts its files."""
+    return [upload_key(video_key(slug)), upload_key(poster_key(slug))]
+
+
+def _files(slug: str) -> list[str]:
+    """A clip's files where fans are served them, and where its upload puts them."""
+    return [video_key(slug), poster_key(slug), *_uploads(slug)]
 
 
 # ---------------------------------------------------------------- publishing keys
@@ -182,8 +200,10 @@ def create(db: Session, key: ClipKey, body: dict[str, Any], now: datetime | None
                 created_at=now or datetime.now(timezone.utc))
     db.add(clip)
     db.flush()
-    # Each URL is signed for the size the app said, so a bigger file can't be put in its place.
-    return Upload(clip, bucket.put_url(video_key(clip.slug), VIDEO_TYPE, size), bucket.put_url(poster_key(clip.slug), POSTER_TYPE, poster_size))
+    # Each URL is signed for the size the app said, so a bigger file can't be put in its place; and for the upload's own
+    # name, which done copies from, so nothing it puts after done is what fans are shown.
+    return Upload(clip, bucket.put_url(upload_key(video_key(clip.slug)), VIDEO_TYPE, size),
+                  bucket.put_url(upload_key(poster_key(clip.slug)), POSTER_TYPE, poster_size))
 
 
 def _own(db: Session, key: ClipKey, slug: str) -> Clip:
@@ -194,21 +214,32 @@ def _own(db: Session, key: ClipKey, slug: str) -> Clip:
 
 
 def finish(db: Session, key: ClipKey, slug: str, now: datetime | None = None) -> Clip:
-    """The uploader says both files are up: checked, and the clip goes live; else it's failed (status), its
-    files gone."""
+    """The uploader says both files are up: copied from the upload's names to where fans are served them, checked
+    there (there, not too big), and the clip goes live; else it's failed (status), its files gone. Checked where no
+    upload link reaches, what a link still running puts (a poster's link an app from before signed for no size, say)
+    is never what fans are shown. Refused (502) when the bucket fails on it: the clip waits, and asking again
+    finishes it."""
     bucket = store()
     clip = _own(db, key, slug)
     if clip.status == "live":
         return clip  # told twice (an answer lost on the way): it's up
     if clip.status != "uploading":
         raise Refused(409, f"This clip is {clip.status}.")
-    video = bucket.size(video_key(slug))
-    poster = bucket.size(poster_key(slug))
+    try:
+        for served in (video_key(slug), poster_key(slug)):
+            # Not at the upload's name: copied already (an answer lost on the way), or put where it's served by an
+            # upload begun before uploads had names of their own.
+            if bucket.size(upload_key(served)) is not None:
+                bucket.copy(upload_key(served), served)
+                bucket.delete(upload_key(served))
+        video, poster = bucket.size(video_key(slug)), bucket.size(poster_key(slug))
+    except Exception as exc:
+        raise Refused(502, f"The clips bucket failed on its files ({type(exc).__name__}): try again.") from exc
     if not video or video > MAX_BYTES or not poster or poster > MAX_POSTER:
         # Kept as failed (not raised: the row's change must stick), its files gone; the app starts again.
         clip.status = "failed"
-        bucket.delete(video_key(slug))
-        bucket.delete(poster_key(slug))
+        for file in _files(slug):
+            bucket.delete(file)
         return clip
     clip.bytes = video
     clip.status = "live"
@@ -223,9 +254,10 @@ def remove(db: Session, slug: str, key: ClipKey | None = None) -> bool:
     if clip is None:
         return False
     bucket = store()
-    for file in (video_key(slug), poster_key(slug)):
+    for file in _files(slug):
         bucket.delete(file)
-        if clip.hidden_as:
+    if clip.hidden_as:
+        for file in (video_key(slug), poster_key(slug)):
             bucket.delete(clipstore.hidden(clip.hidden_as, file))
     clip.status = "removed"
     return True
@@ -292,8 +324,8 @@ def hide_from(db: Session, key_id: int) -> int:
 def sweep(db: Session, now: datetime | None = None, count: bool = False) -> int:
     """Clips' files nothing will read (retention.py, daily): an upload that never reached done (the app gave up, or its
     key was revoked), once its upload links have run out (clipstore.SIGNED_FOR), its files deleted and the clip kept as
-    failed; and a file a link still running put back after its clip failed or was taken down. How many clips had any;
-    with count, nothing is changed. Without a bucket, none."""
+    failed; and a file a link still running put after its clip went live, failed or was taken down. How many clips had
+    any; with count, nothing is changed. Without a bucket, none."""
     bucket = clipstore.STORE
     if bucket is None:
         return 0
@@ -303,14 +335,16 @@ def sweep(db: Session, now: datetime | None = None, count: bool = False) -> int:
     for clip in db.scalars(select(Clip).where(Clip.status == "uploading", Clip.created_at < ran_out).order_by(Clip.id).limit(SWEEP)):
         found += 1
         if not count:
-            bucket.delete(video_key(clip.slug))
-            bucket.delete(poster_key(clip.slug))
+            for file in _files(clip.slug):
+                bucket.delete(file)
             clip.status = "failed"
     if not count:
         db.flush()
-    lately = select(Clip.slug).where(Clip.status.in_(("failed", "removed")), Clip.created_at < ran_out, Clip.created_at >= now - LINGER)
-    for slug in list(db.scalars(lately.order_by(Clip.id).limit(SWEEP))):
-        there = [f for f in (video_key(slug), poster_key(slug)) if bucket.size(f) is not None]
+    # A live or hidden clip's served files are its own; only what its upload's names hold is left over.
+    lately = select(Clip.slug, Clip.status).where(Clip.status != "uploading", Clip.created_at < ran_out, Clip.created_at >= now - LINGER)
+    for slug, status in list(db.execute(lately.order_by(Clip.id).limit(SWEEP))):
+        files = _files(slug) if status in ("failed", "removed") else _uploads(slug)
+        there = [f for f in files if bucket.size(f) is not None]
         if there:
             found += 1
             if not count:
