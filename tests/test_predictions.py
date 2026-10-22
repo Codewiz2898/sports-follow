@@ -196,6 +196,21 @@ def test_cricket_closes_at_the_first_ball_and_settles_from_the_winner():
     assert CRICKET.answer("result", final.status, final.state) == "6"
 
 
+def test_a_cricket_result_whose_note_garbles_the_winners_name_still_settles():
+    """BUG-188: with no winner marked, a note Sportmonks garbled ("Royal Challengers won by 6Bengaluru wickets") named
+    no side by its whole name, so the call waited unanswered and the sweep voided it: right calls scored nothing. A
+    name that's the start of exactly one side's is that side now; one that's the start of both, or of neither, waits."""
+    rcb = {"id": "8", "name": "Royal Challengers Bengaluru", "abbr": "RCB", "winner": None}
+    pbks = {"id": "9", "name": "Punjab Kings", "abbr": "PBKS", "winner": None}
+    garbled = {"teams": [rcb, pbks], "summary": "Royal Challengers won by 6Bengaluru  wickets (with 12 balls remaining)"}
+    assert CRICKET.answer("result", "final", garbled) == "8"
+    level = {"teams": [{"id": "1", "name": "India A"}, {"id": "2", "name": "India Women"}], "summary": "India won by 5 runs"}
+    nobody = [{**garbled, "summary": f"{said} won by 6 wickets"} for said in ("Roy", "Challengers")]  # not the start of a name, in whole words
+    assert [CRICKET.answer("result", "final", s) for s in (level, *nobody)] == [None, None, None]
+    exact = {"teams": [{"id": "1", "name": "India A"}, {"id": "2", "name": "India"}], "summary": "India won by 5 runs"}
+    assert CRICKET.answer("result", "final", exact) == "2"  # a whole name still comes first
+
+
 def test_a_cricket_tie_no_result_or_washout_is_voided_and_one_put_back_waits():
     level = {**CHASE, "score": 221, "overs": 20}
     boards = [sc.parse_match(cricket_match("Finished", [FIRST, level], note="Match tied")), sc.parse_match(cricket_match("Finished", [FIRST], note="No result")),
