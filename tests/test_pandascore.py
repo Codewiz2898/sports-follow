@@ -250,8 +250,23 @@ def test_a_pros_sport_is_their_game():
 def test_form_counts_series_and_maps():
     items = [({"result": "Won 2–1"}, None), ({"result": "Lost 0–2"}, None), ({"result": "Won by forfeit"}, None)]
     stats, note = form.summarize("Esports", items, ["Sentinels"])
-    assert stats == [{"label": "W–L", "value": "2–1"}, {"label": "Maps", "value": "2–3"}]
+    assert stats == [{"label": "W–L", "value": "1–1"}, {"label": "Maps", "value": "2–3"}]
     assert note == "Last 3 series"
+
+
+def test_a_forfeit_isnt_in_the_win_loss():
+    """A series given by forfeit wasn't played, so it's left out of a player's W–L and their team's Form, as a
+    tennis walkover is (BUG-142); its row still says "Won by forfeit"."""
+    unplayed = [_game(1, "not_started"), _game(2, "not_started"), _game(3, "not_started")]
+    forfeit = _match("canceled", games=unplayed, forfeit=True, winner_id=SEN, begin_at=None)
+    [f] = ps.parse_fixtures([forfeit])
+    kept = structured.result_item(ps.PandascoreEsports(), f, ps.parse_match(forfeit), None, ps.parse_player(PLAYER))
+    assert (kept["result"], kept["outcome"]) == ("Won by forfeit", None)
+    items = [({"result": "Won 2–1", "outcome": "W"}, None), (kept, None), ({"result": "Lost by forfeit"}, None)]
+    stats, note = form.summarize("Valorant", items, ["Sentinels"])
+    assert (stats[0], note) == ({"label": "W–L", "value": "1–0"}, "Last 3 series")
+    # The team page's Form reads each result's words.
+    assert [sports.of("Valorant").outcome(r, ["Sentinels"]) for r in ("Won 2–1", "Won by forfeit", "Lost by forfeit")] == ["W", None, None]
 
 
 # ---------------------------------------------------------------- registry, search, credits, scheduling
