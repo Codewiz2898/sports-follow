@@ -6,7 +6,7 @@
 
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AppState } from 'react-native'
-import { withFollowed } from '../../web/src/resync'
+import { listed, withFollowed } from '../../web/src/resync'
 import { useAccount } from './account'
 import { api, type AlertLevel, type Card, type FollowedMatch, type FollowedTeam, type FollowTarget } from './api'
 import { useNotificationsArriving } from './push'
@@ -69,7 +69,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const matchesRef = useRef(matches)
   matchesRef.current = matches
   const timer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
-  // Counts follows and unfollows begun and finished: a reload that overlapped one may have read the list
+  // Counts follows, unfollows and levels begun and finished: a reload that overlapped one may have read the list
   // from before it, so its answer is dropped and the next one wins.
   const writes = useRef(0)
   // Which fan this is (account.tsx's epoch): an answer asked for by an earlier one is dropped.
@@ -83,15 +83,16 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const matchWrites = useRef({ busy: 0, seen: 0 })
   const alertWrites = useRef(new Map<number, { latest: number; saved: AlertLevel; queue: Promise<void> }>())
 
-  // The list as the server has it now: a player unfollowed elsewhere (or a whole account signed out) goes.
-  // True when it came back changed (heard).
+  // The list as the server has it now: a player unfollowed elsewhere (or a whole account signed out) goes, and each
+  // one's level is the server's, but for one being changed here (alertWrites), which stays as tapped till the server
+  // has it, as on the web (resync.listed: BUG-280). True when it came back changed (heard).
   const reload = useCallback(async (): Promise<boolean> => {
     const before = writes.current
     const asked = fan.current
     try {
       const { players, teams: theirs = [] } = await api.following()
       if (writes.current !== before || fan.current !== asked) return false
-      setCards(players)
+      setCards((prev) => listed(players, prev, (id) => alertWrites.current.has(id)))
       setTeams(theirs)
       setLoaded(true)
       setFailed(false)
@@ -201,13 +202,15 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
 
   // As the web's: a level shows the moment it's tapped; its PUTs go one at a time per player, and one already
   // replaced by a newer tap isn't sent, so the server ends on the last one. If that fails, the level goes
-  // back to the last one saved, and the error is the caller's.
+  // back to the last one saved, and the error is the caller's. A re-read of the list that overlapped a tap's save
+  // (writes) is dropped, as one that overlapped a follow is: it may have the level from before it (BUG-280).
   const setAlerts = useCallback((playerId: number, level: AlertLevel) => {
     const show = (value: AlertLevel) => setCards((prev) => prev.map((c) => (c.player_id === playerId ? { ...c, alerts: value } : c)))
     const pending = alertWrites.current.get(playerId) ?? { latest: 0, saved: cardsRef.current.find((c) => c.player_id === playerId)?.alerts ?? 'key', queue: Promise.resolve() }
     alertWrites.current.set(playerId, pending)
     const n = ++pending.latest
     show(level)
+    writes.current++
     const done = pending.queue.then(async () => {
       if (n !== pending.latest) return
       try {
@@ -218,6 +221,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
         throw e
       } finally {
         if (n === pending.latest) alertWrites.current.delete(playerId)
+        writes.current++
       }
     })
     pending.queue = done.catch(() => {})
