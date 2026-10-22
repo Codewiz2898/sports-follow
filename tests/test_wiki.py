@@ -77,6 +77,13 @@ SUMMARY = {
     "extract": "Asha Rao is an Indian international cricketer who bats right-handed.\n\nShe captains Mumbai Indians.",
     "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Asha_Rao"}},
 }
+# What Wikipedia answers for a link that redirects: the summary of the article it leads to, a list of a club's players.
+LIST_SUMMARY = {
+    "type": "standard", "title": "List of Riverside County Cricket Club players", "wikibase_item": "Q6000",
+    "titles": {"canonical": "List_of_Riverside_County_Cricket_Club_players", "normalized": "List of Riverside County Cricket Club players"},
+    "extract": "Riverside County Cricket Club, in its current form, was formed in 1992.",
+    "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/List_of_Riverside_County_Cricket_Club_players"}},
+}
 
 
 # ---------------------------------------------------------------- reading
@@ -195,6 +202,30 @@ def test_a_player_without_an_article_or_a_person_has_no_about(wikimedia):
     wikimedia(entity=None)
     assert wiki.read("Q5", "Cricket") is None  # an item that's gone
     assert wiki.read("pandascore:20401", "Valorant") is None  # an esports pro's source key: no request
+
+
+@pytest.mark.parametrize("badge", ["Q70893996", "Q70894304"])  # a sitelink to a redirect; an intentional one
+def test_an_article_link_that_is_a_redirect_gives_no_about(wikimedia, badge):
+    # BUG-248: a lesser-known cricketer's English link is a redirect to a list of a club's players, and Wikipedia
+    # answers its summary with the list's: their About was a club's history, and the agent never wrote theirs.
+    badged = {**CRICKETER, "sitelinks": {"enwiki": {"site": "enwiki", "title": "Asha Rao", "badges": [badge]}}}
+    served = wikimedia(entity=badged, summary=LIST_SUMMARY)
+    found = wiki.read("Q1", "Cricket")
+    assert found and (found.summary, found.article, found.born) == (None, None, "1994-03-09")
+    assert len(served.asked) == 2  # the summary isn't even asked for
+
+
+def test_a_summary_of_another_article_than_the_players_is_no_about(wikimedia):
+    # A link Wikidata didn't badge leads to another article all the same (theirs was merged into a list since).
+    wikimedia(entity=CRICKETER, summary=LIST_SUMMARY)
+    found = wiki.read("Q1", "Cricket")
+    assert found and (found.summary, found.article) == (None, None)
+    # Wikipedia's summary names the article it's of: the player's own, renamed since Wikidata linked it, is theirs.
+    linked = lambda title: {**CRICKETER, "sitelinks": {"enwiki": {"site": "enwiki", "title": title, "badges": []}}}  # noqa: E731
+    wikimedia(entity=linked("Asha Rao (batter)"), summary={**SUMMARY, "wikibase_item": "Q2", "titles": {"canonical": "Asha_Rao_(cricketer)"}})
+    assert wiki.read("Q2", "Cricket").summary == "Asha Rao is an Indian international cricketer who bats right-handed. She captains Mumbai Indians."
+    wikimedia(entity=linked("Asha Rao (bowler)"), summary={**SUMMARY, "titles": {"canonical": "Asha_Rao_(bowler)"}})
+    assert wiki.read("Q3", "Cricket").summary
 
 
 def test_wikimedia_asking_us_to_wait_is_unavailable(wikimedia):
