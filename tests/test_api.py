@@ -113,6 +113,23 @@ class Redis:
     async def delete(self, *keys):
         return sum(self.data.pop(k, None) is not None for k in keys)
 
+    async def sadd(self, key, *members):
+        held = self.data.setdefault(key, set())
+        assert isinstance(held, set)
+        new = set(members) - held
+        held.update(new)
+        return len(new)
+
+    async def scard(self, key):
+        return len(self.data.get(key) or ())  # type: ignore[arg-type]
+
+    async def srem(self, key, *members):
+        held = self.data.get(key) or set()
+        assert isinstance(held, set)
+        gone = held & set(members)
+        held.difference_update(gone)
+        return len(gone)
+
     async def expire(self, key, seconds, nx=False):
         return True
 
@@ -1284,6 +1301,29 @@ def test_a_device_moves_to_another_fan_only_with_its_own_keys(api):
     assert subscribe("fan-b", "new-key", "new-auth").status_code == 200 and api.devices[endpoint] == ("fan-b", "new-key", "new-auth")
     trims = [s for s in api.statements if isinstance(s, Delete) and s.table.name == "push_subscription"]
     assert len(trims) == 3  # the device cap, after each subscription that went through
+
+
+# ---------------------------------------------------------------- devices and test pushes from one network (BUG-181, BUG-182)
+
+
+def test_one_network_turns_notifications_on_for_only_so_many_new_devices_a_day(api, monkeypatch):
+    # BUG-181: new cookies are free, so the cap of a fan's devices didn't bound one network's.
+    monkeypatch.setattr(server, "DEVICES_PER_ADDRESS", 3, raising=False)
+    monkeypatch.setattr(server.fcm, "enabled", lambda: True)
+
+    def browser(fan: str, n: int, address: str = PUBLIC) -> int:
+        body = {"subscription": {"endpoint": f"https://fcm.googleapis.com/fcm/send/{n}", "keys": {"p256dh": f"k{n}", "auth": "a"}}}
+        return api.call("POST", "/api/push/subscriptions", fan=fan, address=address, body=body).status_code
+
+    def phone(fan: str, n: int, address: str = PUBLIC) -> int:
+        return api.call("POST", "/api/push/fcm", fan=fan, address=address, body={"token": f"dGVzdC1pbnN0YW5jZQ:APA91bE{n}" + "x" * 140}).status_code
+
+    assert [browser(f"script-{n}", n) for n in range(2)] + [phone("script-2", 2), browser("script-3", 3), phone("script-4", 4)] == [200, 200, 200, 429, 429]
+    # A device already counted, sent again as each start of the app sends it, is never refused; nor is another network.
+    assert browser("script-0", 0) == 200 and phone("script-2", 2) == 200
+    assert browser("someone", 9, "81.2.69.143") == 200
+    assert set(api.devices) == {"https://fcm.googleapis.com/fcm/send/0", "https://fcm.googleapis.com/fcm/send/1", "https://fcm.googleapis.com/fcm/send/9",
+                                "dGVzdC1pbnN0YW5jZQ:APA91bE2" + "x" * 140}
 
 
 def test_starters_are_offered_as_the_fan_sees_them(api, monkeypatch):
