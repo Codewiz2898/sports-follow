@@ -579,7 +579,35 @@ def test_a_refresh_calls_a_tiebreak_over_no_sooner_than_its_polls_and_from_its_g
         round_now.update(wch_tiebreak("1-0", "1-0", "0-1", finished_ago=ago))
         [fixture] = chess.fixtures(gukesh)
         assert (fixture.status, lichess_chess.result_label(fixture, [GUKESH])) == (status, result), ago
-    assert asked[-1] == (f"{lichess_chess.API}broadcast/{WCH['id']}.pgn", 24 * 3600)  # the event over: kept a day
+    # The event over: a copy is taken if it was read after its last round ended, up to a day old.
+    url, ttl = asked[-1]
+    assert url == f"{lichess_chess.API}broadcast/{WCH['id']}.pgn" and abs(ttl - lichess_chess.GRACE) < 5  # ended GRACE + ROUNDS_TTL ago
+    round_now.update(wch_tiebreak("1-0", "1-0", "0-1", finished_ago=2 * 24 * 3600))
+    chess.fixtures(gukesh)
+    assert asked[-1] == (url, 24 * 3600)
+
+
+def test_a_refresh_long_after_a_tiebreak_ended_doesnt_take_a_pgn_copy_from_before_its_last_game(monkeypatch):
+    # The reviewer's case, through the source cache itself: the World Championship's tiebreak, its event's last round. A
+    # refresh read the event's PGN five minutes before game 3 ended, game 3 still being played; the next comes 45
+    # minutes after the round ended (a tick skipped, a 429, a restart). Every round over long enough, a day-old copy
+    # would do, and that one said "Drew 1–1", final, kept a day. A copy is taken only if it was read after the round
+    # ended (and its rounds' copy, ROUNDS_TTL old at most, could say so): this one is read again, and the match is 1–2.
+    clock = {"now": time.time()}
+    monkeypatch.setattr(cache, "time", SimpleNamespace(time=lambda: clock["now"]))
+    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: Kept())
+    monkeypatch.setattr(lichess_chess.LichessChess, "_tours", lambda self, ref, now: [WCH])
+    pgn_url = f"{lichess_chess.API}broadcast/{WCH['id']}.pgn"
+    ended = 45 * 60
+    answers = {pgn_url: httpx.Response(200, text=as_pgn(wch_tiebreak("1-0", "1-0", "*"))),
+               f"{lichess_chess.API}broadcast/{WCH['id']}": httpx.Response(200, json={"tour": WCH, "rounds": [wch_tiebreak("1-0", "1-0", "0-1", finished_ago=ended)["round"]]})}
+    lichess_answering(monkeypatch, answers)
+    clock["now"] -= ended + 5 * 60
+    lichess_chess.get_json(pgn_url, ttl=lichess_chess.ROUNDS_TTL, text=True)  # the copy a refresh read, game 3 on
+    clock["now"] += ended + 5 * 60
+    answers[pgn_url] = httpx.Response(200, text=as_pgn(wch_tiebreak("1-0", "1-0", "0-1")))
+    [fixture] = lichess_chess.LichessChess().fixtures(PlayerRef("lichess_chess", GUKESH, "Gukesh D", [GUKESH], ["Gukesh D"]))
+    assert (fixture.status, lichess_chess.result_label(fixture, [GUKESH])) == ("final", "Lost 1–2")
 
 
 def test_the_recorded_grand_finals_board_between_its_sets_isnt_won(monkeypatch):

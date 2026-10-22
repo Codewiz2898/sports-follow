@@ -978,11 +978,14 @@ class LichessChess(Adapter):
             pairings: set[frozenset[str]] = set()  # every pairing in its rounds read: one, in a match between two players
             finished = {}
             if any(r.get("finished") for r in rounds):
-                # Kept a day once every round is over, and long enough that its last games are in it: Lichess calls a
-                # round finished between a tiebreak's games, and its event's last round may go on (round_status).
-                done = all((finished_for(r, now) or 0) >= GRACE + ROUNDS_TTL for r in rounds)
+                # Kept up to a day once every round is over and has been long enough to be done with (Lichess calls a
+                # round finished between a tiebreak's games, and its event's last round may go on: round_status), but
+                # only a copy read after the last of them ended, its rounds' copy up to ROUNDS_TTL late to say so: one
+                # read before that may lack its last games (a refresh skipped, a 429, a restart in between).
+                over = min(finished_for(r, now) or 0 for r in rounds)
+                ttl = min(24 * 3600, over - ROUNDS_TTL) if over >= GRACE + ROUNDS_TTL else ROUNDS_TTL
                 try:
-                    finished = parse_pgn_rounds(get_json(f"{API}broadcast/{tour['id']}.pgn", ttl=24 * 3600 if done else ROUNDS_TTL, text=True))
+                    finished = parse_pgn_rounds(get_json(f"{API}broadcast/{tour['id']}.pgn", ttl=ttl, text=True))
                 except RateLimited:
                     raise
                 except AdapterError:
