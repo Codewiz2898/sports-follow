@@ -390,6 +390,11 @@ class Chess(Sport):
         fmt = lambda x: (str(int(x)) if x == int(x) else f"{int(x)}½" if x > 1 else "½")  # noqa: E731
         return [{"label": "Score", "value": f"{fmt(mine)}/{fmt(games)}"}, {"label": "Score %", "value": f"{100 * mine / games:.0f}%"}]
 
+    def form_games(self, items: list[dict[str, Any]]) -> tuple[str, str]:
+        """Games, unless one of the results is a knockout's mini-match (several games, "Won 3½–2½"): then rounds, as the
+        record counts it once and the score each of its games ("W–D–L 9–6–2 · Score 22½/32 · Last 17 rounds")."""
+        return ("round", "rounds") if any(sum(p) > 1 for p in (_points(r.get("result", "")) for r in items) if p) else self.games
+
     # ---- the Feed's content judge (curate.py)
 
     restream_after = None  # analysis and players' own streams run for hours: the judge's model tells re-uploads
