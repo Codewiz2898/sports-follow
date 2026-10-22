@@ -1,7 +1,7 @@
 import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type League, type LeagueGame, type MyPredictions } from '../api'
-import { dayLabel, shortWhen } from '../format'
+import { dayLabel, endedOn, shortWhen } from '../format'
 import { wordSize } from '../lines'
 import { callNote, callWords } from '../predictions'
 import { sharedLook, useShared } from '../shared'
@@ -60,7 +60,7 @@ export function LeagueResultCard({ game, now, calls = null }: { game: LeagueGame
       <span className="dsp word" style={{ '--word': `${wordSize(word)}px` } as CSSProperties}>{word}</span>
       <span className="stack" style={{ gap: 2 }}>
         {word !== game.title && <span className="line strong">{game.line || game.title}</span>}
-        <span className="line soft one">{leagueAbout(game, dayLabel(game.start_utc, new Date(now)))}</span>
+        <span className="line soft one">{leagueAbout(game, dayLabel(endedOn(game), new Date(now)))}</span>
         <CallTag note={call} />
       </span>
     </LeagueCard>

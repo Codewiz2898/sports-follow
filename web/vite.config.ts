@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { join, relative, sep } from 'node:path'
 import react from '@vitejs/plugin-react'
 import { defineConfig, type Plugin } from 'vite'
 
@@ -41,10 +41,14 @@ function appName(): Plugin {
 }
 
 /**
- * Stamps the build into the service worker (public/sw.js, `const BUILD`): a hash of every other file
- * the build writes. A deploy that changes anything is then a new sw.js, which browsers install and the
- * app offers with Reload; a build that changes nothing keeps the worker it had.
+ * Stamps the build into the service worker (public/sw.js): `const BUILD`, a hash of every other file the build
+ * writes, and the build's files (/assets/), which the worker stores as it installs (`BUILD_FILES`), so the app opens
+ * offline from a fan's first visit and right after a deploy (BUG-305, BUG-310); those over STORE_LATER_BYTES (the
+ * chess engine's) are stored when first used (`BUILD_FILES_LATER`). A deploy that changes anything is then a new
+ * sw.js, which browsers install and the app offers with Reload; a build that changes nothing keeps the worker it had.
  */
+const STORE_LATER_BYTES = 1_000_000
+
 function stampServiceWorker(): Plugin {
   return {
     name: 'stamp-service-worker',
@@ -53,9 +57,23 @@ function stampServiceWorker(): Plugin {
       if (!dir) return
       const sw = join(dir, 'sw.js')
       const files = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(d, e.name)) : [join(d, e.name)]))
+      const built = files(dir).filter((f) => f !== sw).sort()
       const hash = createHash('sha256')
-      for (const file of files(dir).filter((f) => f !== sw).sort()) hash.update(relative(dir, file)).update(readFileSync(file))
-      writeFileSync(sw, readFileSync(sw, 'utf8').replace(/const BUILD = '[^']*'/, `const BUILD = '${hash.digest('hex').slice(0, 12)}'`))
+      for (const file of built) hash.update(relative(dir, file)).update(readFileSync(file))
+      const address = (file: string) => `/${relative(dir, file).split(sep).join('/')}`
+      const assets = built.filter((f) => address(f).startsWith('/assets/'))
+      const later = (file: string) => statSync(file).size > STORE_LATER_BYTES
+      const stamps: [RegExp, string][] = [
+        [/const BUILD = '[^']*'/, `const BUILD = '${hash.digest('hex').slice(0, 12)}'`],
+        [/const BUILD_FILES = \[\]/, `const BUILD_FILES = ${JSON.stringify(assets.filter((f) => !later(f)).map(address))}`],
+        [/const BUILD_FILES_LATER = \[\]/, `const BUILD_FILES_LATER = ${JSON.stringify(assets.filter(later).map(address))}`],
+      ]
+      let text = readFileSync(sw, 'utf8')
+      for (const [blank, stamp] of stamps) {
+        if (!blank.test(text)) throw new Error(`public/sw.js: nothing to stamp at ${blank}`)
+        text = text.replace(blank, stamp)
+      }
+      writeFileSync(sw, text)
     },
   }
 }

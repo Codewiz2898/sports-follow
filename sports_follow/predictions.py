@@ -23,10 +23,11 @@ settles again.
 
 Fans see how everyone split once they've picked, or once the question's closed; friends' picks in a league once
 it's closed (before, only who has). While it's open the split shows as it stood when last refreshed, once SPLIT_FROM
-had picked and again each time SPLIT_EVERY more have, so it never moves with one friend's pick. Only picks that count
-are in it and in what a right pick scores: an account's, or a fan's whose cookie came with it, not one from a fan the
-request itself made up, which is theirs and scored but moves nobody else's numbers (Pick.counted). A league's table
-is its members' points on the questions settled since it was made.
+had picked and again each time SPLIT_EVERY more have, so it never moves with one friend's pick; and it's of fans in no
+league, so a friend who made the rest of a batch can't read one off it either (_refresh). Only picks that count are in
+it and in what a right pick scores: an account's, or a fan's whose cookie came with it, not one from a fan the request
+itself made up, which is theirs and scored but moves nobody else's numbers (Pick.counted). A league's table is its
+members' points on the questions settled since it was made.
 """
 
 from __future__ import annotations
@@ -134,8 +135,8 @@ def ensure(db: Session, system: str, fixture: str, sport: str | None, status: st
     """A game's questions: those its sport asks of its board, made now if it hasn't started and its start is known
     (each one closed by now left out), and those made before, by their place in it; each knowing every event key
     it's shown under and, where one's given, the event it's polled by. A game to come whose start moved has its
-    first question's close move with it while it's open; one closed stays closed (friends' picks may have shown).
-    Returns the game's key and its questions."""
+    first question's close move with it while it's open, and one whose board has other sides now its answers (_sides);
+    one closed stays closed (friends' picks may have shown). Returns the game's key and its questions."""
     now = now or _now()
     rules = _rules(sport, state)
     game = game_key(system, fixture, rules.question_board(state))
@@ -163,7 +164,25 @@ def ensure(db: Session, system: str, fixture: str, sport: str | None, status: st
         ask = asks.get(q.ask)
         if ask is not None and ask.first and start is not None and start > now and q.status == OPEN and q.locks_at != start:
             q.locks_at, q.reminded_at = start, None  # moved: reminded again before its new start
+        if ask is not None and q.status == OPEN and {k for k, _ in ask.options} != {o["key"] for o in q.options or []}:
+            _sides(db, q, ask, title)
     return game, rows
+
+
+def _sides(db: Session, q: Question, ask: sports.Ask, title: str) -> None:
+    """A question still open whose game's board has other sides now (one decided since it was asked: a final's, once
+    its other semi-final is over): its answers as its sport asks them now, and its game's title. A pick on a side
+    that's gone goes too, and its fan can pick again: the side that came through would be no answer to the question
+    as it was, which would be voided, every pick with it."""
+    gone = [o["key"] for o in q.options or [] if o["key"] not in {k for k, _ in ask.options}]
+    q.options = [{"key": k, "label": label} for k, label in ask.options]
+    if title:
+        q.game_title = title[:300]
+    if gone:
+        db.flush()  # its answers first: a pick made meanwhile, checked against the old ones, waits for them and goes too
+        db.execute(delete(Pick).where(Pick.question_id == q.id, Pick.option.in_(gone)))
+        if q.split:
+            q.split = {k: n for k, n in q.split.items() if k not in gone} or None
 
 
 def polled(db: Session, event: Event, status: str, state: dict[str, Any], now: datetime) -> list[int]:
@@ -432,19 +451,25 @@ def _to_come(db: Session, q: Question) -> bool:
     return all(s is None or s in TO_COME for s in (status, polled, read))
 
 
-def _counts(db: Session, ids: list[int]) -> dict[int, dict[str, int]]:
-    """How many picks that count (Pick.counted) each answer of these questions has."""
+def _counts(db: Session, ids: list[int], unleagued: bool = False) -> dict[int, dict[str, int]]:
+    """How many picks that count (Pick.counted) each answer of these questions has; `unleagued`, only those of fans
+    in no league (an open question's split: _refresh)."""
+    where = [Pick.question_id.in_(ids), Pick.counted]
+    if unleagued:
+        where.append(~exists().where(LeagueMember.fan_id == Pick.fan_id))
     out: dict[int, dict[str, int]] = {}
-    for qid, option, n in db.execute(select(Pick.question_id, Pick.option, func.count()).where(Pick.question_id.in_(ids), Pick.counted).group_by(Pick.question_id, Pick.option)):
+    for qid, option, n in db.execute(select(Pick.question_id, Pick.option, func.count()).where(*where).group_by(Pick.question_id, Pick.option)):
         out.setdefault(qid, {})[option] = n
     return out
 
 
 def _refresh(db: Session, q: Question) -> None:
     """An open question's split as fans see it (Question.split), taken once SPLIT_FROM have picked and again each time
-    SPLIT_EVERY more have (a tenth more, from a hundred on): a friend's pick only ever moves it among others', never by
-    itself. A pick changed or taken back moves it no sooner."""
-    counts = _counts(db, [q.id]).get(q.id, {})
+    SPLIT_EVERY more have (a tenth more, from a hundred on). Of fans in no league: a league member's pick is in no open
+    split, so a member who made every other pick of a batch (fans of their own) can't read a friend's off how it moved
+    when their league's page said the friend had picked. Theirs join it as it closes (shown). A pick changed or taken
+    back moves it no sooner."""
+    counts = _counts(db, [q.id], unleagued=True).get(q.id, {})
     total, last = sum(counts.values()), sum((q.split or {}).values())
     if total >= (last + max(SPLIT_EVERY, last // 10) if q.split else SPLIT_FROM):
         q.split = counts
@@ -739,9 +764,10 @@ def table(db: Session, league: League) -> list[dict[str, Any]]:
 
 def league(db: Session, fan: str, code: str, now: datetime | None = None) -> dict[str, Any]:
     """A league's page, for its members: its table, and the questions its members have picked that are still to
-    settle, soonest first, then those settled lately, newest first (LEAGUE_CALLS of each at most, of sports that are
-    on), each with who picked what once it's closed (before, only who has picked). Raises Refused for no such
-    league, or one this fan isn't in."""
+    settle, those taking picks first, soonest first, then those under way or held for a postponed game's new date,
+    latest start first; then those settled lately, newest first (LEAGUE_CALLS still to settle at most, and as many
+    settled, of sports that are on), each with who picked what once it's closed (before, only who has picked).
+    Raises Refused for no such league, or one this fan isn't in."""
     now = now or _now()
     found = find(db, code)
     if found is None or db.get(LeagueMember, (found.id, fan)) is None:
@@ -753,8 +779,15 @@ def league(db: Session, fan: str, code: str, now: datetime | None = None) -> dic
     # Sports turned off are left out before the cut, and the calls still to settle come first: else members' calls
     # settled lately take every place, and the open ones (whose "still to pick" is the page's point) go.
     theirs.append(Question.sport.not_in([s for s in db.scalars(select(Question.sport).where(*theirs).distinct()) if not sports.on(s)]))
-    coming = list(db.scalars(select(Question).where(*theirs, Question.status.in_(UNSETTLED))
+    # Those taking picks come before those whose start has gone by (under way, or a postponed game's, held a month):
+    # else twenty of those take every place, and tonight's call goes.
+    postponed = select(Event.id).where(Event.status == "postponed")
+    taking = and_(Question.status == OPEN, or_(Question.locks_at.is_(None), Question.locks_at > now), or_(Question.event_id.is_(None), Question.event_id.not_in(postponed)))
+    coming = list(db.scalars(select(Question).where(*theirs, taking)
                              .order_by(Question.locks_at.asc().nulls_last(), Question.game, Question.position).limit(LEAGUE_CALLS)))
+    if len(coming) < LEAGUE_CALLS:
+        coming += db.scalars(select(Question).where(*theirs, Question.status.in_(UNSETTLED), ~taking)
+                             .order_by(Question.starts_at.desc().nulls_last(), Question.game, Question.position).limit(LEAGUE_CALLS - len(coming)))
     settled = list(db.scalars(select(Question).where(*theirs, Question.status.not_in(UNSETTLED))
                               .order_by(Question.settled_at.desc(), Question.game, Question.position).limit(LEAGUE_CALLS)))
     questions = {q.id: q for q in [*coming, *settled]}

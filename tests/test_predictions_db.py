@@ -315,6 +315,46 @@ def test_a_football_match_and_a_t20i_are_asked_and_settled_by_their_polls(db, re
     assert db.scalars(predictions.watched()).all() == []
 
 
+def test_a_final_is_asked_once_both_sides_are_known_and_one_asked_before_takes_the_side_that_came_through(db, redis):
+    """BUG-311: a final with one side still "TBC" is asked nothing (its winner would be no answer to "India / TBC",
+    so every call would be voided). One asked before that, still open when its other semi-final is over, has the side
+    that came through in the TBC's place: a pick on the TBC goes, the others stay, and the final settles as any game."""
+    start = soon()
+    db.add(Event(id=8, key="sportmonks_cricket:71215", sport="Cricket", title="India v TBC", start_utc=start, status="armed",
+                 live_binding={"adapter": "sportmonks_cricket", "locator": {"fixture": "71215"}, "cadence": 10}))
+    db.commit()
+    cricket = sc.parse_match(cricket_match("NS", [])).state
+    india, tbc, sri_lanka = cricket["teams"][0], {"id": "9999", "name": "TBC"}, {"id": "8", "name": "Sri Lanka"}
+    keys = ["sportmonks_cricket:71215"]
+    _, rows = predictions.ensure(db, "sportmonks_cricket", "71215", "cricket", "scheduled", {**cricket, "teams": [india, tbc]}, start, "India v TBC, Final", keys, 8)
+    assert rows == []
+    # Asked before this, as it was: India or TBC, a pick on each.
+    q = Question(game="sportmonks_cricket:71215", ask="result", keys=keys, event_id=8, sport="cricket", match="sportmonks_cricket/71215", title="Who wins?",
+                 game_title="India v TBC, Final", options=[{"key": str(IND), "label": "India"}, {"key": "9999", "label": "TBC"}], status="open",
+                 starts_at=start, locks_at=start)
+    db.add(q)
+    db.commit()
+    predictions.pick(db, "asha", q.id, str(IND))
+    predictions.pick(db, "ravi", q.id, "9999")
+    db.commit()
+    # The other semi-final's over: Sri Lanka are through.
+    decided = {**cricket, "teams": [india, sri_lanka]}
+    predictions.ensure(db, "sportmonks_cricket", "71215", "cricket", "scheduled", decided, start, "India v Sri Lanka, Final", keys, 8)
+    db.commit()
+    db.expire_all()
+    q = db.get_one(Question, q.id)
+    assert ([(o["key"], o["label"]) for o in q.options], q.game_title, q.status) == ([(str(IND), "India"), ("8", "Sri Lanka")], "India v Sri Lanka, Final", "open")
+    assert dict(db.execute(select(Pick.fan_id, Pick.option).where(Pick.question_id == q.id)).all()) == {"asha": str(IND)}
+    predictions.pick(db, "meera", q.id, "8")
+    db.commit()
+    # Sri Lanka win it: settled, not voided three days on.
+    won = {**decided, "teams": [{**india, "winner": False}, {**sri_lanka, "winner": True}]}
+    assert predictions.settle(db, [q], sports.get("cricket"), "final", won, start + timedelta(hours=4)) == [q.id]
+    db.commit()
+    assert (q.status, q.answer) == ("settled", "8")
+    assert dict(db.execute(select(Pick.fan_id, Pick.points).where(Pick.question_id == q.id)).all()) == {"asha": 0, "meera": 50}
+
+
 def test_a_pick_waiting_keeps_its_game_polled_and_the_tick_closes_and_voids(db, redis, monkeypatch):
     start = soon()
     chess_board(db, start)
@@ -575,6 +615,28 @@ def test_fans_signed_in_behind_one_network_address_dont_use_up_each_others_picks
     with pytest.raises(server.HTTPException) as hers:
         pick("acct-asha", 1)
     assert hers.value.status_code == 429
+
+
+def test_picks_from_an_ipv6_48s_64s_together_stop_at_its_ceiling(db, redis, monkeypatch):
+    """BUG-106, reopened: picks from fans without an account were limited an hour per /64, and one /48 (a free tunnel,
+    many fibre plans) holds 65,536 of them. Its /64s together have a ceiling now, many /64s' worth (PICKS_PER_IPV6_48)."""
+    monkeypatch.setitem(server.state, "redis", Counts())
+    monkeypatch.setattr(server, "PICKS_PER_ADDRESS", 1)
+    monkeypatch.setattr(server, "PICKS_PER_IPV6_48", 3, raising=False)
+    chess_board(db, soon())
+    poll(1, board(status="*"))
+    q = db.scalars(select(Question)).one()
+
+    def pick(fan: str, client: str) -> int:
+        try:
+            asyncio.run(server.make_pick(request(client=client), q.id, {"option": CARLSEN}, fan, None))
+        except server.HTTPException as refused:
+            return refused.status_code
+        return 200
+
+    assert [pick("a", "2a00:1450:4009:1::1"), pick("b", "2a00:1450:4009:1::2")] == [200, 429]  # one /64's one an hour
+    assert [pick(f"c{i}", f"2a00:1450:4009:{i:x}::1") for i in range(2, 5)] == [200, 200, 429]  # the /48's three
+    assert pick("d", "2a00:1450:400a:1::1") == 200  # another /48
 
 
 def test_a_series_asked_days_ahead_keeps_its_later_maps_till_it_plays(db, redis):

@@ -608,6 +608,19 @@ def test_recent_results_keep_their_order_and_a_failed_read_only_its_scorecard(mo
     assert polls == [(15, "final", "A 5 – 0 B")]  # game 5, which the poller didn't see finish, gets its final poll
 
 
+def test_a_refresh_says_when_each_result_was_found_over(monkeypatch, redis):
+    # BUG-319: a game of several days (a Test) is a result of the day it ended, as the poller found it over
+    # (structured.found_over); one never found over goes by its start.
+    source, card_row, polls = five_finals(monkeypatch)
+    ended = NOW - timedelta(days=5, hours=20)
+    asked = []
+    monkeypatch.setattr(structured, "found_over", lambda db, event_ids: asked.append(sorted(event_ids)) or {14: ended}, raising=False)  # raising: not there before BUG-319
+    structured.refresh(1)
+    assert asked == [[11, 12, 13, 14, 15]]  # every finished game's, once
+    assert [r["ended_utc"] for r in card_row.card["recent_results"]] == [None, ended.isoformat(), None, None, None]
+    assert structured.merged_result({"ended_utc": ended.isoformat()}, {"ended_utc": None}, scorecard=False)["ended_utc"] == ended.isoformat()  # a later read without it
+
+
 class SpentSource:
     """A source whose share for the refresh lane is spent (budget.RateLimited, raised before any request), or that
     fails (`fails`)."""

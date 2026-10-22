@@ -2,16 +2,17 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { api, type Account, type Me, type ServerConfig } from './api'
 import { CloseIcon } from './components/Icons'
 import { WEB_KEPT, welcome } from './fanChange'
-import { changedHands } from './resync'
+import { changedHands, whoAsker, type WhoAsker } from './resync'
 
 /**
  * Who this device is signed in as (sports_follow/accounts.py), asked at start, which also renews the session,
- * and again when the app wakes or its stream connects again (`recheck`). Signing in, out or deleting the
- * account starts the app over: every list, stream and cached answer belonged to the fan this device was a
- * moment ago. So does finding the device signed out elsewhere, or in to another account in another tab.
+ * and again when the app wakes or its stream connects again (`recheck`): till the server answers, a failed ask
+ * asked again (resync.whoAsker). Signing in, out or deleting the account starts the app over: every list, stream
+ * and cached answer belonged to the fan this device was a moment ago. So does finding the device signed out
+ * elsewhere, or in to another account in another tab.
  */
 interface AccountState {
-  me: Me | null  // null until the server answers
+  me: Me | null  // null until the server answers: unknown, not signed out (BUG-306)
   config: ServerConfig | null
   /** What just happened to this device's sign-in, said once at the top of the page. */
   notice: string | null
@@ -20,8 +21,9 @@ interface AccountState {
   signedIn: (account: Account, back?: string) => void
   signOut: (everywhere?: boolean) => Promise<void>
   deleteAccount: () => Promise<void>
-  /** Ask again who this device is (the app woke, its stream connected again), at most once in RECHECK_MS. */
-  recheck: () => void
+  /** Ask again who this device is (the app woke, its stream connected again), at most once in RECHECK_MS; `now`:
+   * at once (its stream said its session ended). */
+  recheck: (now?: boolean) => void
 }
 
 const AccountContext = createContext<AccountState | null>(null)
@@ -86,6 +88,11 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   const meRef = useRef(me)
   meRef.current = me
   const asked = useRef(Date.now())  // the last time who this device is was asked
+  const who = useRef<WhoAsker | null>(null)
+  // The app is starting over (signed in, out or deleted here, or found someone else): one start over, saying what
+  // happened. A sign-out here ends the session, which the server says on this tab's own stream before it answers:
+  // asked again then, the app started over a second time, as signed out elsewhere, on the page it was on.
+  const leaving = useRef(false)
   const [config, setConfig] = useState<ServerConfig | null>(null)
   const [notice, setNotice] = useState<string | null>(() => {
     try {
@@ -117,27 +124,38 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     }
     // Turned back at Google's (/account?error=…): no page to come back to after a later sign-in.
     if (new URLSearchParams(window.location.search).has('error')) takeAfterSignIn()
-    api.account().then((answer) => {
-      setMe(answer)
-      if (answer.signed_in === false && answer.reason === 'signed_out') {
+    // Signed out elsewhere (everywhere from another device, the account deleted or blocked), the app kept showing the
+    // account, its players and its alerts (BUG-162): asked again as it wakes and as its stream connects again, a
+    // device that's someone else now starts over as who it is, here. A first answer is who it is: signed out while
+    // the app was closed, it says so.
+    const asker = whoAsker(() => api.account(), (now) => {
+      const shown = meRef.current
+      if (changedHands(shown, now)) {
+        if (leaving.current) return
+        leaving.current = true
+        const out = !now.signed_in
+        startOver(window.location.pathname + window.location.search, out ? SIGNED_OUT : null, out)
+        return
+      }
+      meRef.current = now
+      setMe(now)
+      if (shown === null && now.signed_in === false && now.reason === 'signed_out') {
         forgetCachedAnswers()
         setNotice((said) => said ?? SIGNED_OUT)
       }
-    }).catch(() => setMe({ signed_in: false }))
+    })
+    who.current = asker
+    asker.ask()
     api.config().then(setConfig).catch(() => {})
+    return () => asker.stop()
   }, [])
 
-  // Signed out elsewhere (everywhere from another device, the account deleted or blocked), the app kept showing the
-  // account, its players and its alerts (BUG-162): asked again as it wakes and as its stream connects again, a
-  // device that's someone else now starts over as who it is, here.
-  const recheck = useCallback(() => {
-    if (meRef.current === null || Date.now() - asked.current < RECHECK_MS) return
+  const recheck = useCallback((now = false) => {
+    // Not known yet: asked at once (a stream connecting again says the server is back). `now`: anew, an answer under
+    // way from before the session ended dropped.
+    if (leaving.current || (!now && meRef.current !== null && Date.now() - asked.current < RECHECK_MS)) return
     asked.current = Date.now()
-    api.account().then((now) => {
-      if (!changedHands(meRef.current, now)) return setMe(now)
-      const out = !now.signed_in
-      startOver(window.location.pathname + window.location.search, out ? SIGNED_OUT : null, out)
-    }, () => { /* offline: asked again on the next wake */ })
+    who.current?.ask(now)
   }, [])
 
   useEffect(() => {
@@ -148,16 +166,25 @@ export function AccountProvider({ children }: { children: ReactNode }) {
 
   const dismissNotice = useCallback(() => setNotice(null), [])
   const signedIn = useCallback((account: Account, back?: string) => {
+    leaving.current = true
     startOver(ownPage(back) ?? '/account', welcome(account.players_added ?? 0, account.teams_dropped ?? 0), false)
   }, [])
-  const signOut = useCallback(async (everywhere = false) => {
-    await api.signOut(everywhere)
-    await startOver('/', everywhere ? 'Signed out on every device.' : 'Signed out. Your players are kept in your account.', true)
+  /** Sign out or delete the account (`end`), then start over saying `said`. If that fails, the app is as it was, and
+   * who it is is asked again: the server may have ended the session all the same. */
+  const leave = useCallback(async (end: () => Promise<unknown>, said: string) => {
+    if (leaving.current) return
+    leaving.current = true
+    try {
+      await end()
+    } catch (e) {
+      leaving.current = false
+      who.current?.ask(true)
+      throw e
+    }
+    await startOver('/', said, true)
   }, [])
-  const deleteAccount = useCallback(async () => {
-    await api.deleteAccount()
-    await startOver('/', 'Your account and everything kept with it are deleted.', true)
-  }, [])
+  const signOut = useCallback((everywhere = false) => leave(() => api.signOut(everywhere), everywhere ? 'Signed out on every device.' : 'Signed out. Your players are kept in your account.'), [leave])
+  const deleteAccount = useCallback(() => leave(() => api.deleteAccount(), 'Your account and everything kept with it are deleted.'), [leave])
 
   const value = useMemo<AccountState>(
     () => ({ me, config, notice, dismissNotice, signedIn, signOut, deleteAccount, recheck }),

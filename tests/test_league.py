@@ -27,14 +27,15 @@ def redis(monkeypatch):
 
 
 class Source:
-    """A made-up source that lists its competitions' games, and the days it was asked for."""
+    """A made-up source that lists its competitions' games starting between the days asked for (as Sportmonks'
+    starts_between does; and those with no start yet), and the days it was asked for."""
 
     def __init__(self, system: str, sports: tuple[str, ...], games: list[Fixture] | None = None):
         self.system, self.sports, self.games, self.asked = system, sports, games or [], []
 
     def schedule(self, start: date, end: date) -> list[Fixture]:
         self.asked.append((start, end))
-        return self.games
+        return [f for f in self.games if f.start_utc is None or start <= f.start_utc.date() <= end]
 
 
 @pytest.fixture
@@ -62,8 +63,8 @@ class Db:
 
 
 def test_a_read_keeps_what_its_sport_ranks_finished_or_to_come(sources, redis, monkeypatch):
-    """Three days back to a fortnight on; a game on now is Live now's, a postponed one is nobody's, and one its
-    sport doesn't rank isn't kept."""
+    """Three days back (and a day before them: a football match that ended in them may have started then) to a
+    fortnight on; a game on now is Live now's, a postponed one is nobody's, and one its sport doesn't rank isn't kept."""
     sources.pitch.games = [
         fixture("1", "final", NOW - timedelta(days=1), result={"home": {"score": "2"}, "away": {"score": "1"}}),
         fixture("2", "scheduled", NOW + timedelta(days=2)),
@@ -74,7 +75,7 @@ def test_a_read_keeps_what_its_sport_ranks_finished_or_to_come(sources, redis, m
     ]
     monkeypatch.setattr(sports.BY_KEY["football"], "notable", lambda f: None if f.detail == "small" else Notable(40, word="2–1" if f.status == "final" else "", why="Leaders"))
     assert league.read("pitch", NOW) == 2
-    assert sources.pitch.asked == [(date(2026, 10, 13), date(2026, 10, 30))]
+    assert sources.pitch.asked == [(date(2026, 10, 12), date(2026, 10, 30))]
     kept = json.loads(redis["league:games:pitch"])
     assert kept["as_of"] == NOW.isoformat()
     assert [(g["key"], g["status"], g["word"], g["why"], g["sport"]) for g in kept["games"]] == [("pitch:1", "final", "2–1", "Leaders", "football"), ("pitch:2", "scheduled", "", "Leaders", "football")]
@@ -165,6 +166,51 @@ def test_since_yesterday_is_where_the_fan_is(sources, redis):
     # And with only the 14th's, that's the latest day there.
     keep(redis, "pitch", [game("pitch:14th", "final", datetime(2026, 10, 14, 12, tzinfo=timezone.utc), 40)], as_of=late)
     assert league.offer(Db(), late, tz=330)[0]["results"]["day"] == "2026-10-14"
+
+
+def test_a_game_of_several_days_is_a_result_of_the_day_it_ended(sources, redis, monkeypatch):
+    """BUG-319: a Test that started five days ago and ended yesterday is since yesterday, and dated so: its event here
+    says when it was found over (structured.found_over). One that's no event here goes by its start; one that started
+    within the day isn't looked up (it's since yesterday wherever the fan is)."""
+    from sports_follow import structured
+
+    ended = NOW - timedelta(hours=20)
+    looked = []
+    monkeypatch.setattr(structured, "found_over", lambda db, event_ids: looked.append(sorted(event_ids)) or {7: ended}, raising=False)  # raising: not there before BUG-319
+    keep(redis, "pitch", [game("pitch:test", "final", NOW - timedelta(days=5), 70, "cricket"), game("pitch:other", "final", NOW - timedelta(days=5), 90, "cricket"),
+                          game("pitch:today", "final", NOW - timedelta(hours=3), 40)])
+    served, _ = league.offer(Db({"pitch:test": 7, "pitch:other": 8, "pitch:today": 9}), NOW)
+    assert served["results"]["day"] is None
+    assert [(g["key"], g.get("ended_utc")) for g in served["results"]["games"]] == [("pitch:test", ended.isoformat()), ("pitch:today", None)]
+    assert looked == [[7, 8]]
+    # Where nothing since yesterday, the latest day is the one a game ended on.
+    monkeypatch.setattr(structured, "found_over", lambda db, event_ids: {7: NOW - timedelta(days=3)}, raising=False)
+    keep(redis, "pitch", [game("pitch:test", "final", NOW - timedelta(days=5), 70, "cricket"), game("pitch:other", "final", NOW - timedelta(days=4), 90, "cricket")])
+    assert league.offer(Db({"pitch:test": 7}), NOW)[0]["results"]["day"] == (NOW - timedelta(days=3)).date().isoformat()
+
+
+def test_a_read_reaches_back_as_far_as_its_sports_games_run_for_a_test_that_went_the_distance(sources, redis, monkeypatch):
+    """BUG-319 (review): a read covers the games that may have been over in its BACK days, so it reaches back as far
+    before them as its sports' games run (Sport.lasts): a Test of five days that ended yesterday, or one won in four
+    days the day before that, started a week ago. Cricket's source reaches back six days more, football's one. A game
+    over before the read's days isn't a result, however far it reaches."""
+    from sports_follow import structured
+
+    test = lambda id, days: fixture(id, "final", NOW - timedelta(days=days), sport="cricket")  # noqa: E731
+    ground = Source("ground", ("cricket",), [test("distance", 5), test("four-days", 6), test("last-week", 9), test("long-ago", 12)])
+    monkeypatch.setitem(league.ADAPTERS, "ground", ground)
+    monkeypatch.setattr(sports.BY_KEY["cricket"], "notable", lambda f: Notable(70, word="By 8 wickets", why="Test"))
+    assert league.read("ground", NOW) == 3
+    assert ground.asked == [(date(2026, 10, 7), date(2026, 10, 30))]
+    league.read("pitch", NOW)
+    assert sources.pitch.asked == [(date(2026, 10, 12), date(2026, 10, 30))]
+    # Found over yesterday, three days ago, and nine (its start, as it's no event here).
+    over = {7: NOW - timedelta(hours=20), 8: NOW - timedelta(days=2, hours=20)}
+    monkeypatch.setattr(structured, "found_over", lambda db, event_ids: {e: over[e] for e in event_ids if e in over}, raising=False)
+    served, _ = league.offer(Db({"ground:distance": 7, "ground:four-days": 8}), NOW)
+    assert [g["key"] for g in served["results"]["games"]] == ["ground:distance"]
+    served, _ = league.offer(Db({"ground:four-days": 8}), NOW)
+    assert (served["results"]["day"], [g["key"] for g in served["results"]["games"]]) == ("2026-10-13", ["ground:four-days"])
 
 
 def test_coming_up_is_the_next_fortnight_biggest_first_then_soonest(sources, redis):

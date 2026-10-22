@@ -128,7 +128,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`follow_player(background_only=True)`), and nothing else it says is kept: no news items and no news
   alerts, whose news is the publishers' (`news.py`). `python -m sports_follow.wiki Q213854 cricket` prints one player's profile.
 - **Search answers from the registry.** `GET /api/search` (`sports_follow/search.py`) reads Postgres only:
-  players on Sports Follow, then registry athletes by popularity, with a trigram index for typos ("did you
+  players on Sports Follow (those more signed-in fans follow first, and "N following" counts them, an inbox's
+  plus-address accounts as one: a cookie's follow only breaks a tie, so a script's can't steer it; teams the same), then registry athletes by popularity, with a trigram index for typos ("did you
   mean"). ESPN's search and Lichess's FIDE search are asked only when the registry has fewer than three
   matches. Two athletes with the typed name get a picker with birth years.
 - **Following binds the exact athlete.** A registry athlete is looked up in their live source by the id
@@ -194,7 +195,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   its own at `poll_event`'s pace: at once when livescores drops it, every round while it's in play and
   changing, otherwise once a minute.
 - **One stream per fan.** The app holds one SSE connection for all of a fan's players; a player's page
-  listens on it too, and opens that player's own stream only for someone the fan doesn't follow.
+  listens on it too, and opens that player's own stream only for someone the fan doesn't follow. An API process
+  holds so many streams at once (`server.STREAMS_PER_PROCESS`): so many a fan's own (`STREAMS_PER_FAN`; a player's
+  stream isn't counted there), a client address, and an IPv6 /48's /64s together (an IPv4 /24 is only logged at that
+  ceiling: a phone network's NAT puts many fans behind a few); a player's stream with neither a fan's cookie nor a
+  session takes one of the few kept for those (`STREAMS_WITHOUT_FAN`), so the rest stay fans'.
 - **A page for every game.** Every game on Today opens its match page, `/match/<source>/<game id>`
   (`sports_follow/match.py`, `GET /api/match/...`), live, over or to come: the fan's live boards, results
   and games to come, the big results and big games coming up, and Live now's games; so does a game on a
@@ -315,11 +320,14 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   The split shows to a fan once they've picked and at least 20 have, and to everyone once the question's closed.
   While it's open it's shares of the split as it stood when last refreshed (at 20 picks, then each 10 more, a tenth
   more past a hundred: `Question.split`), with that count, never the exact one: else its moves would tell a fan a
-  friend's pick. Only picks from an account, or from a fan whose cookie came with the pick, count in the split and
-  in what a right pick scores (`Pick.counted`): a request without a cookie is a new fan, whose pick is theirs and
-  scored but moves nobody else's numbers. Picks on questions still open move into an account on sign-in, those
-  already under way stay the device's (no calling a game three ways and signing in on the right browser). A game
-  whose source is off asks nothing, and picks are limited per address. In the app: "Call it" on a match page (beside the
+  friend's pick. And it's of fans in no league, whose picks join it as it closes: a member who made the rest of a
+  batch with fans of their own can't read a friend's off it. Only picks from an account, or from a fan whose cookie
+  came with the pick, count in the split and in what a right pick scores (`Pick.counted`): a request without a
+  cookie is a new fan, whose pick is theirs and scored but moves nobody else's numbers. Picks on questions still
+  open move into an account on sign-in, those already under way stay the device's (no calling a game three ways and
+  signing in on the right browser). A game
+  whose source is off asks nothing, and picks are limited per address (an IPv6 client's /64, its /48's /64s together
+  having a ceiling of their own, as every per-address limit does). In the app: "Call it" on a match page (beside the
   game on a wide screen, in the side column) and on a campaign page (its players' games); on Today and in the side
   column, a game's card says "Call it" until the fan has, then their pick, then "You called it · +38" or what they said
   (`GET /api/me/predictions`, `web/src/components/Calls.tsx`); `/me/leagues`, `/league/<code>` and the invite `/j/<code>`, whose sign-in comes back
@@ -450,7 +458,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **For you and Following, edge to edge or full screen** (BHA-349, `web/src/components/FeedLayouts.tsx`): the Feed
   tab opens on For you (`?tab=for_you`), which mixes in videos of players the fan doesn't follow, 3 of every 5 items
   the fan's own and 2 others' (`feed.others`: of the players with something served, the fan's sports first, then
-  anyone with a big moment in the last day, then the most followed on the app; 50 at most, the pool's among them,
+  anyone with a big moment in the last day, then the most followed on the app (by signed-in fans, then by anyone); 50 at most, the pool's among them,
   below), each entry saying `following`, so its card offers Follow, which works in place. Others' videos of the
   last two months (`feed.OTHERS_WINDOW`, BHA-382) are one list, best first by their score faded for age whatever
   their day, so a strong official video of three weeks ago comes before a weak one of today's; older ones follow.
@@ -784,7 +792,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   **gap search** for each followed player with nothing the Feed would serve published in the last 7 days (the
   coverage gauge's test): their name and their sport's words (`Sport.video_words`: "Shreyas Iyer cricket", "TenZ
   Valorant"), videos of the last 14 days, most viewed first, embeddable and syndicated, as a viewer in India finds
-  them. The most followed go first, up to `SPORTS_FOLLOW_FEED_GAP_SEARCHES` in any 24 hours (20); a
+  them. The most followed (by signed-in fans, then by anyone) go first, up to `SPORTS_FOLLOW_FEED_GAP_SEARCHES` in any 24 hours (20); a
   player is searched once a day at most, and after a search that kept nothing, not again for 3 days. Then the
   **wide sweep** (BHA-340): every followed player, gaps or not, for videos of the last six months (183 days), most
   viewed first, which the score weighs for their age and the Feed fades as it serves them; each player at most once
@@ -1007,7 +1015,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **Starter players**, who a new fan is offered in each sport (the welcome, an empty Today, search's
   "Try"), find themselves, the same way for every sport (`sports_follow/starters.py`): who's playing
   now or soon, worked out as asked from the live cards; the most followed by signed-in fans (at least two:
-  a cookie's follow is its own), counted as asked; and the
+  a cookie's follow is its own, and an inbox is one fan however many plus-addresses' accounts it has made), counted as asked; and the
   best known (Wikipedia editions, the home country's counting double: `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY`)
   with a game soon, which the worker finds in their sources once a day. The operator can pin a few
   ahead of them with `players starter add <registry id>` (it checks the source has them, and keeps
@@ -1146,7 +1154,7 @@ that build too: turn them on under Alerts. Always pass
 | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | every trace | e.g. `parentbased_traceidratio` and `0.2` to keep a fifth; a job keeps its request's choice |
 | `OTEL_SERVICE_NAME` | `sports-follow-api`, `sports-follow-worker` | the process's name in the traces (`OTEL_RESOURCE_ATTRIBUTES` adds more, e.g. `deployment.environment.name=production`) |
 | `SPORTS_FOLLOW_MAIL_LOG` | `0` | `1` logs sign-in codes instead of emailing them, for development; never over HTTPS |
-| `SPORTS_FOLLOW_MAIL_CODES_PER_DAY` | `100` | sign-in codes a UTC day to everyone, the mail plan's daily allowance (Resend's free plan: 100); one network gets at most 20 a day |
+| `SPORTS_FOLLOW_MAIL_CODES_PER_DAY` | `100` | sign-in codes a UTC day to everyone, the mail plan's daily allowance (Resend's free plan: 100); one client address (an IPv4 address, an IPv6 /64) gets at most 20 a day; 30% is kept for accounts at least a day old, and of the rest, for new addresses, an IPv6 /48's /64s together get half at most (and 200); an inbox (plus-addresses together) gets 5 an hour |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_ID` | none | the Google OAuth web client for "Continue with Google"; redirect URI `<origin>/api/auth/google/callback` (locally `http://localhost:5173/...`) |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET` | from `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET_FILE`, else `~/.config/sports-follow/google-client-secret` | that client's secret; without it the Google button is hidden |
 | `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE` | `~/.config/sports-follow/admin-password` | the admin panel's password hash and authenticator key, written by `python -m sports_follow.admin password` and `code`; without it there's no panel |
@@ -1188,7 +1196,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_CLIPS_PUBLIC_BASE` | none | where fans fetch clips from: the CDN domain on the bucket (`https://clips.example.com`) |
 | `SPORTS_FOLLOW_CLIPS_KEY_FILE` | `~/.config/sports-follow/clips-key` | the bucket's access key id, then its secret, a line each |
 | `SPORTS_FOLLOW_CLIPS_REGION` | `auto` | the region the bucket's URLs are signed for: R2's `auto`, or an AWS region |
-| `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |
+| `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64; an IPv6 /48's /64s together get four times it); not counted for private addresses |
 | `SPORTS_FOLLOW_AGENT` | `1` | `0` runs without the research agent, as with no OpenRouter key: fans follow athletes their sources have (from the registry and search), those pages come from the sources (scores, games, stats, live and alerts) with their profile from Wikidata and Wikipedia and no news, nothing offers AI research, and pages the agent built before stay as they were, no longer updated |
 | `SPORTS_FOLLOW_RESEARCH` | `0` | `1` gives players no live source has a page the research agent writes whole: a typed name no source knows, a registry athlete no source has, offered as "AI research" (3 a fan a day). Off, they can't be followed, search doesn't list them, and nothing offers AI research; the agent only writes the background of a player Wikipedia has no article on |
 | `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game); only with `SPORTS_FOLLOW_RESEARCH=1` |

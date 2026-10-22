@@ -18,7 +18,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, delete, func, literal, or_, select, update
+from sqlalchemy import ColumnElement, SQLColumnExpression, case, delete, func, literal, null, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -34,6 +34,8 @@ SESSION_LIFE = timedelta(days=365)  # since the device last opened the app
 COOKIE_MAX_AGE = 400 * 24 * 3600  # browsers keep a cookie at most 400 days; the app renews it daily
 BUMP_EVERY = timedelta(days=1)
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s.]+")
+GMAIL = ("gmail.com", "googlemail.com")  # one mailbox, where dots in an address make no difference (inbox)
+STANDING_AFTER = timedelta(days=1)  # an account this old has standing: the sign-in codes kept for accounts are for it
 
 
 @dataclass(frozen=True)
@@ -56,9 +58,29 @@ def email_key(email: str) -> str:
 
 def normal_email(raw: object) -> str | None:
     """The address as accounts are kept by (trimmed, lower case), or None if it isn't one: one with a control or
-    an invisible character in it isn't (BUG-096)."""
+    an invisible character in it isn't (BUG-096). Its +tag stays: me+1@ is an account of its own (inbox counts it)."""
     email = str(raw or "").strip().lower()
     return email if len(email) <= 254 and email.isprintable() and EMAIL.fullmatch(email) else None
+
+
+def inbox(email: str) -> str:
+    """The mailbox an address (normal_email's) reaches, for counting accounts, never for who one is: its +tag dropped
+    (me+1@ and me+2@ reach me@), and on Gmail its dots too, googlemail.com being gmail.com. One inbox can make any
+    number of accounts so, so whatever counts accounts counts inboxes (BUG-296). inbox_of is its SQL twin."""
+    local, _, domain = email.partition("@")
+    local = local.split("+", 1)[0] or local  # nothing before the tag: the address as it is
+    if domain in GMAIL:
+        return f"{local.replace('.', '')}@gmail.com"
+    return f"{local}@{domain}"
+
+
+def inbox_of(email: SQLColumnExpression[str | None]) -> ColumnElement[str | None]:
+    """inbox, in SQL: the inbox of the address in a column, for a query that counts fans (models.followers,
+    starters._most_followed); NULL for none, as an outer join's row with no account has."""
+    local, domain = func.split_part(email, "@", 1), func.split_part(email, "@", 2)
+    untagged = func.coalesce(func.nullif(func.split_part(local, "+", 1), ""), local)
+    return case((email.is_(None), null()), (domain.in_(GMAIL), func.concat(func.replace(untagged, ".", ""), "@gmail.com")),
+                else_=func.concat(untagged, "@", domain))
 
 
 def find_or_create(db: Session, email: str) -> int:
@@ -87,9 +109,12 @@ def find_or_create_google(db: Session, sub: str, email: str) -> int | None:
     return None
 
 
-def known(db: Session, email: str) -> bool:
-    """Whether this address has an account: part of the day's sign-in codes is kept for those (server.email_start)."""
-    return db.scalar(select(Account.id).where(Account.email == email)) is not None
+def standing(db: Session, email: str) -> bool:
+    """Whether this address has an account that has stood a day (STANDING_AFTER): part of the day's sign-in codes is
+    kept for those (server.email_start). Not any account: one made minutes before, for it, could spend them (BUG-093).
+    Every account signs in as it's made, so one that has stood a day is one that signed in before today's."""
+    made = db.scalar(select(Account.created_at).where(Account.email == email))
+    return made is not None and made <= datetime.now(timezone.utc) - STANDING_AFTER
 
 
 def blocked(db: Session, email: str | None = None, account_id: int | None = None) -> bool:
@@ -165,6 +190,12 @@ def end_sessions(db: Session, account_id: int, session_id: int | None = None) ->
         fan = db.scalar(select(Account.fan_id).where(Account.id == account_id))
         db.execute(delete(PushSubscription).where(PushSubscription.fan_id == fan))
     return hashes
+
+
+def fan_of(db: Session, account_id: int) -> str | None:
+    """The account's fan id: its own channel's (bus.follows_channel), where its devices' open streams hear that its
+    sessions ended. None if there's no such account."""
+    return db.scalar(select(Account.fan_id).where(Account.id == account_id))
 
 
 def purge_expired() -> int:

@@ -54,7 +54,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import controls, feedpool, rank, sports, titles
+from . import controls, feedpool, models, rank, sports, titles
 from .adapters import VIDEOS, feed_source
 from .adapters import Mark as SourceMark
 from .config import FEED_LAYOUT, FEED_ZONES
@@ -507,21 +507,24 @@ def others(db: Session, followed: Sequence[int], now: datetime) -> dict[int, int
     """The players For you mixes in for a fan who follows these, OTHERS at most, each with its tier, in order: of the
     players the Feed serves a video of, in a sport that runs, those the fan doesn't follow; the fan's sports first
     (every sport alike for one who follows nobody), then those with a big moment in the last BIG_FOR (a key one of
-    BIG_MOMENT or more, not taken back), then the most followed on the app, then by the pool's order (feedpool.ids:
+    BIG_MOMENT or more, not taken back), then the most followed on the app (by signed-in fans, then by anyone:
+    models.followers), then by the pool's order (feedpool.ids:
     its players nobody follows, the best known first). The tier is the first two of those
     (0: the fan's sport with a big moment, up to 3: neither): For you serves a tier's videos before the next's."""
     served = select(FeedCandidate.player_id).where(FeedCandidate.served(), FeedCandidate.source.in_(list(VIDEOS))).distinct().subquery()
-    rows = db.execute(select(Player.id, Player.sport, func.count(Follow.id)).join(served, served.c.player_id == Player.id)
-                      .outerjoin(Follow, Follow.player_id == Player.id).group_by(Player.id, Player.sport)).all()  # fmt: skip
+    # Their followers: signed-in fans rank, anyone's follows break a tie.
+    fans = models.followers(Follow.player_id, Follow.fan_id).where(Follow.player_id.in_(select(served.c.player_id))).subquery()
+    rows = db.execute(select(Player.id, Player.sport, func.coalesce(fans.c.accounts, 0), func.coalesce(fans.c.follows, 0)).join(served, served.c.player_id == Player.id)
+                      .outerjoin(fans, fans.c.id == Player.id)).all()  # fmt: skip
     mine = set(followed)
     theirs = {sports.family(s) for s in db.scalars(select(Player.sport).where(Player.id.in_(mine))) if s} if mine else set()
     taken_back = select(Moment.corrects).where(Moment.corrects.is_not(None))
     big = set(db.scalars(select(Moment.player_id).where(Moment.level == "key", Moment.priority >= BIG_MOMENT, Moment.created_at >= now - BIG_FOR,
                                                         Moment.created_at <= now, Moment.kind.not_in(rank.NOT_A_HEAD), Moment.id.not_in(taken_back))))  # fmt: skip
     place = {pid: i for i, pid in enumerate(feedpool.ids())}
-    pool = [(2 * (bool(theirs) and sports.family(sport) not in theirs) + (pid not in big), -n, place.get(pid, len(place)), pid)
-            for pid, sport, n in rows if pid not in mine and sports.on(sport)]  # fmt: skip
-    return {pid: tier for tier, _, _, pid in sorted(pool)[:OTHERS]}
+    pool = [(2 * (bool(theirs) and sports.family(sport) not in theirs) + (pid not in big), -accounts, -follows, place.get(pid, len(place)), pid)
+            for pid, sport, accounts, follows in rows if pid not in mine and sports.on(sport)]  # fmt: skip
+    return {pid: tier for tier, *_, pid in sorted(pool)[:OTHERS]}
 
 
 def _mix(mine: list[Any], theirs: list[Any]) -> list[Any]:

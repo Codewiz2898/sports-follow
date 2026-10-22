@@ -452,8 +452,8 @@ class Players:
             rows = [(system, ext, pid) for (system, ext), pid in self.ids.items()]
         elif column is PlayerCard.player_id:
             rows = [(pid, "ready", {}) for pid in set(self.ids.values())]
-        else:  # followers per player
-            rows = list(self.followers.items())
+        else:  # followers per player: signed-in fans, and every follow (models.followers)
+            rows = [(pid, n, n) for pid, n in self.followers.items()]
         return SimpleNamespace(all=lambda: rows)
 
     def scalars(self, stmt):

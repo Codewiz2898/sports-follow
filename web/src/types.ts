@@ -99,6 +99,7 @@ export interface RecentResult {
   result: string
   date?: string | null  // the UTC day, or an agent's bare date
   start_utc?: string | null  // when the game started: the app shows the fan's local day of it
+  ended_utc?: string | null  // when the server found it over: Today's since yesterday dates it so (format.ts: endedOn)
   player_contribution?: string | null
   competition?: string | null
   source_url?: string | null
@@ -361,6 +362,9 @@ export type StreamEvent =
   | { type: 'progress'; player_id: number; message: string }
   | { type: 'moved'; from: number; to: number }
   | { type: 'live_error'; player_id: number; message: string }
+  // The fan stream's last word when this device's session has ended elsewhere (signed out everywhere, the account
+  // deleted or blocked): who it is now is asked at once (BUG-162).
+  | { type: 'signed_out' }
 
 /** One credit on the Credits page (sports_follow/credits.py). */
 export interface Credit { name: string; url?: string; what?: string; licence?: string; licence_url?: string; note?: string }
@@ -523,6 +527,7 @@ export interface LeagueGame {
   competition: string
   detail?: string | null
   start_utc: string
+  ended_utc?: string | null  // when it was found over, where it's an event here: a Test's last day (format.ts: endedOn)
   rank: number
   word: string  // "4–1", "By 6 wickets", a lobby's winner; "" for a game to come
   line: string  // "Arsenal beat Chelsea"; "" says the title

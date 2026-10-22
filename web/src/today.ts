@@ -3,7 +3,7 @@
 // components) and the Android app (mobile/), so it touches nothing of a browser's. A sport is passed by
 // its key (each app finds it its own way).
 
-import { ahead, countdown, dateOnly, daysAgo, day, lineStats, parseDate, playedOn, shortName, shortWhen } from './format'
+import { ahead, countdown, dateOnly, daysAgo, day, endedOn, lineStats, parseDate, playedOn, shortName, shortWhen } from './format'
 import { highlight, type GameResult } from './lines'
 import { fold } from './search'
 import { drawable } from './sports/facts'
@@ -130,8 +130,9 @@ export function teamsLive(teams: FollowedTeam[], cards: Card[], matches: Followe
 }
 
 /**
- * The fan's results for the rail: every game of their players since yesterday where the fan is, else the
- * latest day that had any (`day`, its date; null since yesterday). A game two of their players were in is one card (a
+ * The fan's results for the rail: every game of their players over since yesterday where the fan is (a game of
+ * several days, a Test, by the day it ended: endedOn), else the latest day that had any (`day`, its date; null
+ * since yesterday). A game two of their players were in is one card (a
  * chess board too, a fixture of each player's). The biggest
  * lines go first (a triple-double or a hundred, then any game with the player's numbers), then the newest.
  * Each card carries all its results (the follow list sends them), and the stream updates it as a game ends.
@@ -145,12 +146,12 @@ export function results(cards: Card[], now: number, keyOf: (sport?: string | nul
   const today = new Date(now)
   const all = cards.flatMap((c) => (c.recent_results ?? []).flatMap((r) => {
     // A game dated after today (an agent's slip) isn't a result yet.
-    const days = daysAgo(playedOn(r), today)
+    const days = daysAgo(endedOn(r), today)
     return days != null && days >= 0 ? [{ days, player: { result: { ...r, player_id: c.player_id, player_name: c.player.name }, sport: c.player.sport, teams: c.player.teams } as GameResult['players'][number] }] : []
   }))
   // And each of their teams' last result, from its side ("Won 2–1"), the team standing in its card for a player.
   for (const t of teams) {
-    const days = t.last ? daysAgo(playedOn(t.last), today) : null
+    const days = t.last ? daysAgo(endedOn(t.last), today) : null
     if (t.last && days != null && days >= 0) all.push({ days, player: { result: { ...t.last, player_id: 0, player_name: t.name }, sport: t.sport, teams: [t.name], team: t.team_id } })
   }
   if (!all.length) return null
@@ -165,10 +166,10 @@ export function results(cards: Card[], now: number, keyOf: (sport?: string | nul
     if (!game) games.set(key, { key, players: [player] })
     else if (!game.players.some((p) => who(p) === who(player))) game.players.push(player)
   }
-  const time = (g: GameResult) => Math.max(...g.players.map((p) => parseDate(playedOn(p.result))?.getTime() ?? 0))
+  const time = (g: GameResult) => Math.max(...g.players.map((p) => parseDate(endedOn(p.result))?.getTime() ?? 0))
   for (const g of games.values()) g.players.sort((a, b) => weight(b) - weight(a))
   const ranked = [...games.values()].sort((a, b) => weight(b.players[0]) - weight(a.players[0]) || time(b) - time(a))
-  const day = latest <= 1 ? null : parseDate(playedOn(shown[0].player.result))!.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
+  const day = latest <= 1 ? null : parseDate(endedOn(shown[0].player.result))!.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
   return { games: ranked, day }
 }
 

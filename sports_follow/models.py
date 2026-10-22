@@ -18,16 +18,18 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
+    Select,
     String,
     Text,
     UniqueConstraint,
     and_,
     func,
+    select,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.elements import ColumnElement
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, InstrumentedAttribute, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -713,7 +715,8 @@ class PushSubscription(Base):
     quiet_end: Mapped[str | None] = mapped_column(String(5))  # "07:00"
     created_at: Mapped[datetime] = _now()
     last_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    failures: Mapped[int] = mapped_column(Integer, default=0)
+    failures: Mapped[int] = mapped_column(Integer, default=0)  # failed pushes in a row (notify._health)
+    failing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # when they began; None while it works
     # The Android app's live cards (livecards.py), as the phone says (server.register_fcm, stop_live_card): whether
     # it shows them (Alerts' Live scores), and the games whose card it stopped, newest last: none goes to it.
     live_cards: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
@@ -736,6 +739,18 @@ class Account(Base):
     last_sign_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # When an admin blocked it (admin.py): it can't sign in, and its sessions ended then.
     blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+def followers(key: InstrumentedAttribute[int], fan: InstrumentedAttribute[str]) -> Select[int, int, int]:
+    """The followers of each player anyone follows (key and fan: Follow.player_id, Follow.fan_id) or team (TeamFollow's):
+    its id, "accounts" and "follows". Accounts are the signed-in fans an admin hasn't blocked, one an inbox (me+1@ and
+    me+2@ are one person's: accounts.inbox_of, BUG-296), as starters count them: what's shown as "N following", and what
+    ranks (search, For you's most followed, the Feed's sweeps). Follows are every one, an anonymous fan's too, which only
+    break a tie: a new cookie is free, so a script's mustn't steer what every fan is shown (BUG-293)."""
+    from .accounts import inbox_of  # accounts.py builds on this module
+
+    return (select(key.label("id"), func.count(inbox_of(Account.email).distinct()).label("accounts"), func.count().label("follows"))
+            .outerjoin(Account, and_(Account.fan_id == fan, Account.blocked_at.is_(None))).group_by(key))
 
 
 class AccountSession(Base):
@@ -796,9 +811,9 @@ class Question(Base):
     # When its pushes went (predictions_push.py): "Make your pick" before its game, how each pick went after.
     reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     told_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # Its split as fans see it while it's open: the counted picks of each answer when it was last refreshed, which is
-    # only once enough more have picked that a friend's one pick isn't told by it (predictions.pick). None till
-    # predictions.SPLIT_FROM have.
+    # Its split as fans see it while it's open: the counted picks of each answer, of fans in no league, when it was
+    # last refreshed, which is only once enough more have picked that a friend's one pick isn't told by it
+    # (predictions.pick). None till predictions.SPLIT_FROM have.
     split: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = _now()
 

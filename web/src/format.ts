@@ -28,6 +28,12 @@ export function playedOn(r?: { date?: string | null; start_utc?: string | null }
   return r?.start_utc || r?.date || null
 }
 
+/** When a result was over: when the server found it over, so a game of several days (a Test) is a result of the
+ * day it ended (Today's since yesterday); else when it was played. */
+export function endedOn(r?: { ended_utc?: string | null; date?: string | null; start_utc?: string | null } | null): string | null {
+  return r?.ended_utc || playedOn(r)
+}
+
 /** "in 3d", "in 4h 12m", "12m ago"; for a day without a time, whole days ("today", "tomorrow", "in 3d"). */
 export function relative(value?: string | null, now = Date.now()): string {
   const d = parseDate(value)

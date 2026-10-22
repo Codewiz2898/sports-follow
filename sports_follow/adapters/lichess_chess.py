@@ -370,25 +370,84 @@ def moves_ply(moves: list[list[Any]]) -> int:
 
 def moves_to(kept: dict[str, Any] | None, fen: str | None, last_move: str | None) -> dict[str, Any] | None:
     """A live board's moves kept so far ({"moves": parse_pgn_game's rows, "more": moves added since, as the
-    board gives its last one, "d5e3"; "at": the board's last move when they last reached it) brought to its
-    position: as they are when they reach it, with its last move added when they're one short, or as they are
-    when they're ahead of it (a look at an older copy of the round than the one they were kept up by). None when
-    they can't be: none kept, a move or more missed in between, or the board's last move not the one they
-    reached it with (a relay correcting a move): its PGN is read again."""
+    board gives its last one, "d5e3"; "fen": the board's position when they last reached it) brought to its
+    position: as they are when they reach it, with its last move added when they're one short and it's that move on
+    from where they reached (one_move_on), or as they are when they're ahead of it with its last move theirs at its
+    place (a look at an older copy of the round than the one they were kept up by). None when they can't be: none
+    kept, a move or more missed in between, or a position they don't lead to (a relay correcting a move, or taking
+    one back): its PGN is read again."""
     ply = fen_ply(fen)
     if kept is None or ply is None:
         return None
     have = moves_ply(kept.get("moves") or []) + len(kept.get("more") or [])
     if have > ply:
-        return kept
+        return kept if _theirs_at(kept, ply, last_move) else None
+    at = _squares(kept.get("fen"))
     if have == ply:
-        at = kept.get("at")
-        if at is not None and last_move and at != last_move:
+        if at is not None and at != _squares(fen):
             return None
-        return kept if at == last_move or not last_move else {**kept, "at": last_move}
-    if have + 1 == ply and last_move:
-        return {**kept, "more": [*(kept.get("more") or []), last_move], "at": last_move}
+        return kept if kept.get("fen") == fen else {**kept, "fen": fen}
+    if have + 1 == ply and last_move and one_move_on(kept.get("fen"), fen, last_move):
+        return {**kept, "more": [*(kept.get("more") or []), last_move], "fen": fen}
     return None
+
+
+def _squares(fen: str | None) -> dict[str, str] | None:
+    """A FEN's pieces by square ({"e1": "K", "e8": "k", …}); None for one that doesn't say (none kept)."""
+    rows = (fen or "").split(" ")[0].split("/")
+    if len(rows) != 8:
+        return None
+    board: dict[str, str] = {}
+    for rank, row in zip("87654321", rows):
+        file = 0
+        for c in row:
+            if c.isdigit():
+                file += int(c)
+                continue
+            if file > 7:
+                return None
+            board["abcdefgh"[file] + rank] = c
+            file += 1
+    return board
+
+
+def one_move_on(before: str | None, after: str | None, move: str) -> bool:
+    """Whether a board (`after`, its FEN) is one move (`move`, as a board gives its last one: "g1f3") on from another
+    (`before`): the piece gone from where it moved and one of its side's where it went, every square the move doesn't
+    touch as it was (a castling's rook and an en passant's pawn it does). True where either doesn't say."""
+    was, now = _squares(before), _squares(after)
+    squares = re.fullmatch(r"([a-h][1-8])([a-h][1-8])[qrbn]?", move or "")
+    if was is None or now is None or squares is None:
+        return True
+    start, to = squares[1], squares[2]
+    piece = was.get(start)
+    if piece is None:
+        return False
+    touched = {start, to}
+    if piece in "Kk":
+        touched |= {file + start[1] for file in "abcdefgh"}  # castling: its rook moves along the rank too
+    elif piece in "Pp" and start[0] != to[0] and to not in was:
+        touched.add(to[0] + start[1])  # en passant: the pawn taken is beside where it went
+    if any(was.get(sq) != now.get(sq) for sq in was.keys() | now.keys() if sq not in touched):
+        return False
+    landed = now.get(to)
+    return piece in "Kk" or (start not in now and landed is not None and landed.isupper() == piece.isupper())
+
+
+def _theirs_at(kept: dict[str, Any], ply: int, last_move: str | None) -> bool:
+    """Whether moves kept ahead of a board have its last move as the one that made its ply: as the board gives it,
+    where it's one of those added since; by the square it went to, where the PGN wrote it ("a6", "Nxe5+"). True where
+    nothing says otherwise (no last move: the start; a move no square says, castling)."""
+    if not last_move or ply < 1:
+        return True
+    moves = kept.get("moves") or []
+    base = moves_ply(moves)
+    if ply > base:
+        return (kept.get("more") or [])[ply - base - 1] == last_move
+    row = next((m for m in moves if int(m[0]) == (ply + 1) // 2), None)
+    written = row[1 if ply % 2 else 2] if row else None
+    went = re.findall(r"[a-h][1-8]", written or "")
+    return not went or went[-1] == last_move[2:4]
 
 
 def games_of(round_data: dict[str, Any], fide_id: str) -> list[dict[str, Any]]:
@@ -1090,10 +1149,11 @@ class LichessChess(Adapter):
         """A live board's moves so far (moves_to's), kept in Redis for the worker and the API alike, under its
         game: each poll of the board, and each read of its match page, that finds it a move on adds that move,
         at no request, so a game whose page someone opened is read once and kept up by every look after.
-        With `read` (the match page's own read, at most once a minute a game while it's open), its PGN is read
-        where they can't be brought to the board (none kept yet, or moves missed between looks: a fast
-        exchange, time trouble). None where there are none (a poll before anyone opened the page, or a PGN
-        Lichess wouldn't give: the page shows the board alone till the next read)."""
+        Moves kept that can't be brought to the board (moves missed between looks: a fast exchange, time
+        trouble; or a move the relay has corrected or taken back since) are dropped, by any look, so none adds to a
+        list that may be wrong; with `read` (the match page's own read, at most once a minute a game while it's
+        open), its PGN is read where there are none. None where there are none (a poll before anyone opened the
+        page, or a PGN Lichess wouldn't give: the page shows the board alone till the next read)."""
         game_id, fen = state.get("game_id"), state.get("fen")
         if not game_id or fen_ply(fen) is None:
             return None
@@ -1105,6 +1165,12 @@ class LichessChess(Adapter):
         except Exception:  # Redis down: a read still brings them, nothing is kept
             r, kept = None, None
         now = moves_to(kept, fen, state.get("last_move"))
+        if now is None and kept is not None:
+            kept = None
+            try:
+                r.delete(key)
+            except Exception:
+                pass  # Redis down: the next look drops them
         if now is None and read:
             try:
                 # Without clocks, comments and side lines: a smaller answer, and not the finished game's copy
@@ -1112,15 +1178,15 @@ class LichessChess(Adapter):
                 pgn = parse_pgn_game(get_json(f"{API}study/{round_id}/{game_id}.pgn?clocks=false&comments=false&variations=false", ttl=10, text=True))
             except AdapterError as exc:  # refused or unreachable (RateLimited too): the board alone this time
                 log.info("lichess: no live moves for %s/%s: %s", round_id, game_id, exc)
-                return kept
-            read_ = {"moves": pgn["moves"], "more": [], "opening": pgn["opening"], "at": None}
+                return None
+            read_ = {"moves": pgn["moves"], "more": [], "opening": pgn["opening"], "fen": None}
             now = moves_to(read_, fen, state.get("last_move")) or read_
         if now is not None and now != kept and r is not None:
             try:
                 r.set(key, json.dumps(now), ex=LIVE_MOVES_KEEP)
             except Exception:
                 pass  # Redis down: the next look reads them again
-        return now if now is not None else kept
+        return now
 
     def match(self, source_id: str) -> LiveGame | None:
         """One board by a fixture of it ("<round id>-<FIDE id>", one player's game or mini-match in a round),

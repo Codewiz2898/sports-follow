@@ -15,7 +15,7 @@ follows goes.
     .venv/bin/python -m sports_follow.teams restore <system> <team id>
 
 **A follow** (TeamFollow) is a fan, a team and their level. A followed team's games are read from its source
-(refresh: Adapter.team_fixtures, as often as a followed player's near a game, every QUIET otherwise: stale) and
+(refresh: Adapter.team_fixtures, as often as a followed player's near a game or just after one, every QUIET otherwise: stale) and
 linked to it (EventTeam), and from then on each is followed as a game followed by itself is (matches.py): armed
 by its sport's lead, polled in the live lane by the same allowances, its own moments from both sides
 (Sport.game_moments) reaching the team's fans by their level, and its result told from the team's side
@@ -38,7 +38,7 @@ from sqlalchemy import ColumnElement, Select, Text, and_, delete, func, or_, sel
 from sqlalchemy.dialects.postgresql import distinct_on, insert
 from sqlalchemy.orm import Session, aliased
 
-from . import bus, logs, matches, moments, naming, registry, search, sports, structured
+from . import bus, logs, matches, models, moments, naming, registry, search, sports, structured
 from .adapters import ADAPTERS, KNOWN, Adapter, AdapterError, Fixture, PlayerRef, SourceTeam, budget, serving, source_name
 from .db import session
 from .models import Event, EventState, EventTeam, Moment, NotificationMute, Team, TeamFollow, TeamOverride
@@ -58,6 +58,7 @@ NAMESAKES = 20  # and teams with exactly the name typed, however many past LIMIT
 REFRESH_LOCK = 20 * 60  # as a player's refresh (structured.REFRESH_LOCK)
 LOOK_AGAIN = 10 * 60  # a page nobody follows the team of asks its source again at most this often
 SOON = timedelta(hours=48)  # a team with a game on or this soon has its games read as often as a followed player's
+AFTER = timedelta(hours=6)  # and one whose game ended this lately too: its next may be set the same day (a Swiss round)
 QUIET = timedelta(hours=6)  # and one without, this often: a schedule days off doesn't change by the half hour
 READS = 6  # and pages ask at most this many reads a minute of one source's allowance, whichever teams (as match.READS)
 STREAM_AHEAD = timedelta(hours=36)  # a fan's teams' games this soon are on their stream (event_ids)
@@ -228,8 +229,9 @@ def restore(db: Session, system: str, team_id: str) -> bool:
 
 def find(db: Session, query: str, sport: str | None = None, fan: str | None = None, limit: int = LIMIT) -> list[dict[str, Any]]:
     """Teams whose name or code has a word starting with every typed word (search as you type, beside players):
-    a whole name typed first (every team with it, up to NAMESAKES), then the fan's own, then the most followed, the
-    biggest, the shortest name, `limit` in all unless more have the whole name. Only teams of sports running whose
+    a whole name typed first (every team with it, up to NAMESAKES), then the fan's own, then the most followed by
+    signed-in fans, the biggest, the most followed by anyone (models.followers), the shortest name, `limit` in all
+    unless more have the whole name. Only teams of sports running whose
     source runs. `sport` narrows to one sport, or a group's (esports); so does a sport's name typed with a team's
     ("india cricket", "liquid valorant"), when the words together find no team."""
     typed = registry.words(query)
@@ -251,12 +253,13 @@ def _find(db: Session, typed: list[str], sport: str | None, fan: str | None, lim
         keys = [k for k in keys if k in sports.within(sport)]
     if not keys:
         return []
-    fans = select(TeamFollow.team_id, func.count().label("n")).group_by(TeamFollow.team_id).subquery()
+    fans = models.followers(TeamFollow.team_id, TeamFollow.fan_id).subquery()
+    accounts, follows = func.coalesce(fans.c.accounts, 0), func.coalesce(fans.c.follows, 0)
     whole = " ".join(typed)
     exact = or_(Team.search_text.like(f" {whole} |%"), Team.search_text.like(f"%| {whole} |%"))
     mine = Team.id.in_(select(TeamFollow.team_id).where(TeamFollow.fan_id == fan)) if fan else None
-    order = [exact.desc(), *([mine.desc()] if mine is not None else []), func.coalesce(fans.c.n, 0).desc(), Team.tier.desc(), func.length(Team.name), Team.id]
-    rows = db.execute(select(Team, func.coalesce(fans.c.n, 0), exact).outerjoin(fans, fans.c.team_id == Team.id)
+    order = [exact.desc(), *([mine.desc()] if mine is not None else []), accounts.desc(), Team.tier.desc(), follows.desc(), func.length(Team.name), Team.id]
+    rows = db.execute(select(Team, accounts, exact).outerjoin(fans, fans.c.id == Team.id)
                       .where(*[Team.search_text.like(f"% {w}%") for w in typed], Team.sport.in_(keys), Team.system.in_(list(ADAPTERS)))
                       .order_by(*order).limit(max(limit, NAMESAKES))).all()
     rows = [(t, n) for i, (t, n, named) in enumerate(rows) if i < limit or named]
@@ -330,15 +333,16 @@ def set_level(db: Session, fan: str, team_id: int, level: str) -> bool:
 
 def stale(team: Team, now: datetime | None = None) -> bool:
     """Whether a team's games are due to be read again: as often as a followed player's (FIXTURES_MAX_AGE) while
-    it has a game on or within SOON, as its last read had them, else every QUIET. A game of it that ends has them
-    read at the next tick (ended)."""
+    it has a game on or within SOON, as its last read had them, or had one end within AFTER (ended), else every
+    QUIET. A game of it that ends has them read at the next tick (ended)."""
     from .config import FIXTURES_MAX_AGE
 
     now = now or _now()
     if team.fetched_at is None:
         return True
+    card = team.card or {}
     soon = any(g.get("status") in ("armed", "live") or (g.get("start_utc") and datetime.fromisoformat(g["start_utc"]) <= now + SOON)
-               for g in (team.card or {}).get("upcoming") or [])
+               for g in card.get("upcoming") or []) or bool(card.get("ended_at") and datetime.fromisoformat(card["ended_at"]) > now - AFTER)  # fmt: skip
     return team.fetched_at < now - (timedelta(seconds=FIXTURES_MAX_AGE) if soon else QUIET)
 
 
@@ -463,6 +467,7 @@ def _refresh(team_id: int, adapter: Adapter, external: str, card: dict[str, Any]
         upcoming = [_upcoming(f, events[f.source_id], external) for f in ahead[:UPCOMING]]
         if not fixtures:
             upcoming = [g for g in card.get("upcoming") or [] if g.get("start_utc") and datetime.fromisoformat(g["start_utc"]) > now]
+        ended_at = (team.card or {}).get("ended_at")  # as the row has it now: a game of it may have ended during the read (ended)
         team.card = {
             "upcoming": upcoming,
             "recent": list(kept),
@@ -470,6 +475,7 @@ def _refresh(team_id: int, adapter: Adapter, external: str, card: dict[str, Any]
             "squad_at": squad_at,
             "source": source_name(adapter.system),
             "fetched_at": now.isoformat(),
+            **({"ended_at": ended_at} if ended_at and datetime.fromisoformat(ended_at) > now - AFTER else {}),
         }
         team.fetched_at = now
         _health(team.id, ok=True, db=db)
@@ -676,7 +682,8 @@ def page(db: Session, team_id: int, fan: str | None) -> dict[str, Any] | None:
     if team is None or not followable(team.sport):
         return None
     card = team.card or {}
-    followers = db.scalar(select(func.count()).select_from(TeamFollow).where(TeamFollow.team_id == team.id)) or 0
+    counted = db.execute(models.followers(TeamFollow.team_id, TeamFollow.fan_id).where(TeamFollow.team_id == team.id)).first()
+    followers = counted.accounts if counted else 0  # signed-in fans, as search says (models.followers)
     level = _following(db, fan, [team.id]).get(team.id)
     can = readable(ADAPTERS.get(team.system))
     blocked = registry.blocked(db)
@@ -738,8 +745,11 @@ def in_game(db: Session, fan: str | None, system: str, state: dict[str, Any], ev
 
 def ended(db: Session, event_id: int) -> None:
     """A game of followed teams just ended (its last poll, structured._game_moments): their games are read again at
-    the next tick, not a half hour on, so the result reaches Following and Today's Results from their side soon."""
-    db.execute(update(Team).where(Team.id.in_(select(EventTeam.team_id).where(EventTeam.event_id == event_id)), Team.id.in_(select(TeamFollow.team_id))).values(fetched_at=None))
+    the next tick, not a half hour on, so the result reaches Following and Today's Results from their side soon;
+    and as often as a team's with a game soon for AFTER on (stale), since that read may have the schedule as the
+    source kept it from before the result, and the next game may be set and played the same day (a Swiss round)."""
+    db.execute(update(Team).where(Team.id.in_(select(EventTeam.team_id).where(EventTeam.event_id == event_id)), Team.id.in_(select(TeamFollow.team_id)))
+               .values(fetched_at=None, card=func.coalesce(Team.card, func.jsonb_build_object()).op("||")(func.jsonb_build_object("ended_at", _now().isoformat()))))  # fmt: skip
 
 
 def look_again(team: Team) -> bool:

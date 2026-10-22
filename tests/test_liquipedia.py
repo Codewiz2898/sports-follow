@@ -8,6 +8,7 @@ from __future__ import annotations
 import time
 from datetime import datetime, timedelta, timezone
 from functools import partial
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -271,6 +272,8 @@ class PollSession:
         model = stmt.column_descriptions[0]["entity"]
         if model is Player:
             return [(self.player.id, self.player.name, self.player.sport)]
+        if model is EventState:  # when a lobby found over ended (structured.found_over), for its result: not asked here
+            return SimpleNamespace(all=list)
         assert model is SourceBinding  # the team ids moments are told from
         return [(self.player.id, {"team_ids": self.team_ids})]
 

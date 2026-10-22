@@ -25,7 +25,7 @@ from types import SimpleNamespace
 from sports_follow import adapters, bus, photos, players, registry, sports, starters
 from sports_follow.adapters import Adapter, AdapterError, Fixture, PlayerRef, Roster, Rostered, pubg
 from sports_follow.adapters.budget import RateLimited
-from sports_follow.models import Account, Athlete, AthleteOverride, AthleteUnmatch, Follow, Moment, Photo, Player, PlayerCard, PlayerIdentity, Starter
+from sports_follow.models import Account, Athlete, AthleteOverride, AthleteUnmatch, Follow, Moment, Photo, Player, PlayerAlias, PlayerCard, PlayerIdentity, Starter
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -434,14 +434,15 @@ def test_a_starter_whose_source_id_went_missing_isnt_offered(db, capsys):
 
 def test_a_starter_already_on_the_app_says_who_follows_them(db):
     system = chess_starters(db)
+    fans = signed_in(db, 2)
     db.add(Player(id=7, slug="gukesh-d", name="Gukesh D", sport="Chess", wikidata_qid="Q10"))
     db.flush()
     db.add_all([PlayerCard(player_id=7, status="ready", card={}), PlayerIdentity(player_id=7, system=system, external_id="gukesh", confidence=1.0),
-                Follow(fan_id="fan", player_id=7, alert_rules={}), Follow(fan_id="other", player_id=7, alert_rules={})])
+                *[Follow(fan_id=f, player_id=7, alert_rules={}) for f in (*fans, "cookie")]])
     db.commit()
     assert players.main(["starter", "add", "Q10"]) == 0
-    [row] = starters.offer(db, "fan")[0]["players"]
-    assert (row["player_id"], row["following"], row["followers"]) == (7, True, 2)
+    [row] = starters.offer(db, fans[0])[0]["players"]
+    assert (row["player_id"], row["following"], row["followers"]) == (7, True, 2)  # its signed-in fans, as a starter's counted (BUG-293)
     assert starters.offer(db, "someone new")[0]["players"][0]["following"] is False
 
 
@@ -580,6 +581,76 @@ def test_only_signed_in_fans_make_a_player_a_starter_and_only_a_page_a_live_sour
     # With research on, a page with no live source is one the agent keeps up, and may be offered.
     monkeypatch.setattr(config, "RESEARCH", True)
     assert [r["name"] for r in starters.offer(db, "someone new", NOW)[0]["players"]] == ["Lionel Messi", "Mohamed Salah"]
+
+
+def test_search_ranks_players_by_their_signed_in_fans_and_anyones_follows_only_break_a_tie(db):
+    """Search put players on Sports Follow in order of every follow, a cookie's too, ahead of whether their name starts
+    with what was typed, and said "N following" of them: three cookieless follows put Mohammed Sallah over Mohamed
+    Salah for "moha" (BUG-293). Now signed-in fans an admin hasn't blocked count, as starters count them; anyone's
+    follows only break a tie the rest leaves, so search on a young app, with few accounts, still ranks."""
+    from sports_follow import search
+
+    fans = signed_in(db, 2, blocked=1)
+
+    def page(pid: int, name: str, followers: list[str], alias: str = "") -> None:
+        db.add(Player(id=pid, slug=name.lower().replace(" ", "-"), name=name, sport="Football"))
+        db.flush()
+        db.add_all([PlayerCard(player_id=pid, status="ready", card={}), PlayerAlias(alias=alias or name.lower().replace(" ", "-"), player_id=pid),
+                    *[Follow(fan_id=f, player_id=pid, alert_rules={}) for f in followers]])
+
+    page(27, "Mohamed Salah", [fans[0], "cookie-1"])
+    page(26, "Mohammed Sallah", [fans[1], *[f"cookie-{n}" for n in range(1, 7)]])  # an account an admin blocked, and a script's cookies
+    page(25, "Mohan Kumar", ["cookie-1"])
+    page(24, "The Egyptian King", [f"cookie-{n}" for n in range(1, 10)], alias="mohamed-the-king")  # found by another name
+    db.commit()
+    ranked = search.rank("moha", search.local(db, "moha", None, None), [])
+    assert [(r.name, r.followers) for r in ranked] == [("Mohamed Salah", 1), ("Mohammed Sallah", 0), ("Mohan Kumar", 0), ("The Egyptian King", 0)]
+    assert "follows" not in search.public(ranked[0])  # what breaks a tie isn't said
+
+
+def test_search_counts_an_inbox_as_one_fan_as_starters_do(db):
+    """BUG-296 with BUG-293: "N following", and the order search, For you and the Feed's sweeps rank by, counted
+    accounts, and me+1@ and me+2@ are one inbox's two accounts, while starters counted inboxes. Followers are counted
+    by inbox everywhere now (models.followers)."""
+    from sports_follow import models, search
+
+    emails = ["me+1@gmail.com", "m.e@googlemail.com", "me@gmail.com", "you@example.com", "them@example.com"]
+    db.add_all([Account(email=e, fan_id=f"acct-{i}") for i, e in enumerate(emails)])
+    db.flush()
+
+    def page(pid: int, name: str, followers: list[str]) -> None:
+        db.add(Player(id=pid, slug=name.lower().replace(" ", "-"), name=name, sport="Football"))
+        db.flush()
+        db.add_all([PlayerCard(player_id=pid, status="ready", card={}), PlayerAlias(alias=name.lower().replace(" ", "-"), player_id=pid),
+                    *[Follow(fan_id=f, player_id=pid, alert_rules={}) for f in followers]])
+
+    page(27, "Mohamed Salah", ["acct-0", "acct-1", "acct-2", "cookie-1"])  # one inbox's three accounts, and a cookie
+    page(26, "Mohammed Sallah", ["acct-3", "acct-4"])  # two people
+    db.commit()
+    ranked = search.rank("moha", search.local(db, "moha", None, None), [])
+    assert [(r.name, r.followers) for r in ranked] == [("Mohammed Sallah", 2), ("Mohamed Salah", 1)]
+    assert {pid: (inboxes, follows) for pid, inboxes, follows in db.execute(models.followers(Follow.player_id, Follow.fan_id))} == {27: (1, 4), 26: (2, 2)}
+
+
+def test_one_inbox_is_one_fan_however_many_accounts_its_plus_addresses_made(db, pools):
+    """BUG-296: two signed-in fans following a page made it a starter for every new fan, and me+1@ and me+2@ reach one
+    inbox: one person's two accounts were two fans. Followers are counted by inbox now (accounts.inbox_of)."""
+    system = chess_starters(db)
+    emails = ["me+1@gmail.com", "m.e@googlemail.com", "me+2@gmail.com", "you@example.com"]
+    db.add_all([Account(email=e, fan_id=f"acct-{i}") for i, e in enumerate(emails)])
+    db.flush()
+
+    def page(pid: int, name: str, followers: list[int]) -> None:
+        db.add(Player(id=pid, slug=f"p{pid}", name=name, sport="Chess"))
+        db.flush()
+        db.add_all([PlayerCard(player_id=pid, status="ready", card={}), PlayerIdentity(player_id=pid, system=system, external_id=f"x{pid}", confidence=1.0),
+                    *[Follow(fan_id=f"acct-{i}", player_id=pid, alert_rules={}) for i in followers]])
+
+    page(1, "One Inbox", [0, 1, 2])  # three accounts, one inbox
+    page(2, "Two Fans", [2, 3])
+    db.commit()
+    [offer] = starters.offer(db, "someone new", NOW)
+    assert [(r["name"], r["why"]) for r in offer["players"] if r["why"] == "followed"] == [("Two Fans", "followed")]
 
 
 def test_with_nobody_followed_or_pinned_the_best_known_are_offered(db, pools):

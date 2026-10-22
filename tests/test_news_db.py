@@ -258,6 +258,65 @@ def test_a_headline_the_publisher_corrects_at_the_same_address_reaches_the_card_
     assert stories() == [(asha, link, "Daily Wicket")] and run()[0] == ["Verma to miss only the first Test, board says"]
 
 
+def test_a_correction_that_names_another_player_takes_the_story_off_the_first_ones_card_wire_and_feed(world, monkeypatch):
+    # BUG-245, round two: only the rows the poll found the story for again took the publisher's change, so a story
+    # corrected to name another player kept its first wording on the first one's row: "Asha Verma ruled out" stayed
+    # on her card, her Feed and her fans' Wire after the publisher said it was Kiran Rao. Every row of the story from
+    # that feed takes the new words; one whose player they no longer name goes back to the judge, unserved meanwhile,
+    # however alike the two wordings are otherwise. Another feed's copy at the same address changes nothing.
+    maker, feeds = world
+    monkeypatch.setattr(publisher_rss, "FEED_TTL", 1e-6)  # every poll reads the feeds again
+    asha = player("Asha Verma", ["Riverside XI"], card={"player": {"name": "Asha Verma"}, "news": []})
+    rao = player("Kiran Rao", ["Riverside XI"], followed=False, card={"player": {"name": "Kiran Rao"}, "news": []})
+    with db_module.session() as s:
+        s.add(Follow(fan_id="other", player_id=rao, alert_rules={}))  # her fans aren't Asha's
+    link = "https://wicket.example.com/r/1"
+    first = ("Asha Verma ruled out of the second Test with a hamstring injury", link, "The Riverside batter will miss the game in Delhi.", 3)
+    fixed = ("Kiran Rao ruled out of the second Test with a hamstring injury", link, "The Riverside batter will miss the game in Delhi. An earlier version named the wrong player.", 3)
+    feeds[WICKET], feeds[GAZETTE] = rss(first), rss()
+    assert news.poll(NOW)["cricket"]["kept"] == 1
+    judged: list[tuple[str, str]] = []
+
+    def judge_many(cands):
+        cands = list(cands)
+        judged.extend((c.player.name, c.title) for c in cands)
+        return [curate.Verdict.model_validate(said(about_player="subject" if c.player.name in f"{c.title} {c.text}" else "no")) for c in cands]
+
+    monkeypatch.setattr(curate, "judge_many", judge_many)
+    monkeypatch.setattr(bus, "store_card", lambda pid, card: None)
+
+    def run(pid: int, fan: str) -> tuple[list[str], list[str], list[str]]:
+        """The player's card stories, their Feed's news and their fan's Wire, after the curator's judge and ranking."""
+        rank.judge(NOW)
+        rank.rescore(NOW)
+        rank.cards(NOW)
+        s = maker()
+        try:
+            card, page = s.get(PlayerCard, pid), feed.feed_for(s, pid, fan)
+            assert card is not None and page is not None
+            return ([st["headline"] for st in card.card.get("stories") or []], [i.title for g in page.groups for i in g.items if i.kind == "news"],
+                    [r["text"] for r in week.wire(s, fan, NOW)])  # fmt: skip
+        finally:
+            s.close()
+
+    assert run(asha, "fan") == ([first[0]], [first[0]], [first[0]])
+    feeds[WICKET] = rss(fixed)
+    assert news.poll(NOW + timedelta(minutes=20))["cricket"]["kept"] == 1  # Kiran's row
+    assert run(asha, "fan") == ([], [], [])
+    with db_module.session() as s:
+        row = s.scalar(select(FeedCandidate).where(FeedCandidate.player_id == asha))
+        assert row is not None and row.candidate["title"] == fixed[0] and row.verdict["about_player"] == "no" and row.score is None
+    assert run(rao, "other") == ([fixed[0]], [fixed[0]], [fixed[0]])
+    assert sorted(judged) == sorted([("Asha Verma", first[0]), ("Asha Verma", fixed[0]), ("Kiran Rao", fixed[0])])
+
+    # Another feed's copy of the story at the same address, worded its own way, isn't the publisher's correction.
+    feeds[GAZETTE] = rss(("Riverside lose a batter for Delhi", link, "A syndicated copy.", 2))
+    news.poll(NOW + timedelta(minutes=40))
+    with db_module.session() as s:
+        assert {r.player_id: r.candidate["title"] for r in s.scalars(select(FeedCandidate))} == {asha: fixed[0], rao: fixed[0]}
+    assert len(judged) == 3
+
+
 def test_a_story_an_admin_hid_is_kept_hidden_for_a_player_found_in_it_later(world):
     # An admin's Hide is on the story, whoever it was found for (BUG-117): a player followed after, whom it names
     # too, doesn't bring it back.

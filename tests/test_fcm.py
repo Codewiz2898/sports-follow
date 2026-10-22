@@ -214,7 +214,7 @@ def test_what_fcm_answers_is_what_the_devices_health_reads(fake_fcm):
     fake_fcm.failing = 400
     assert fcm.push(TOKEN, GOAL, 600) == 400  # our message's fault: counted, but nobody's device is removed at once
     fake_fcm.failing = 500
-    assert fcm.push(TOKEN, GOAL, 600) == 500  # FCM's own trouble: counted, removed only after MAX_FAILURES
+    assert fcm.push(TOKEN, GOAL, 600) == 500  # FCM's own trouble: counted, removed only once it's failed for a day (notify._health)
     fake_fcm.failing = None
     fake_fcm.revoked = True
     assert fcm.push(TOKEN, GOAL, 600) == fcm.OURS  # this server's key: never the device's fault

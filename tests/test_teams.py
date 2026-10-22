@@ -282,7 +282,7 @@ def test_following_a_team_reads_its_games_and_has_them_polled(db, redis, source,
     assert [(g["title"], g["versus"], g["match"]) for g in shown["upcoming"]] == [("Arsenal vs Chelsea", "Chelsea", "pitch/100"), ("Tottenham Hotspur vs Arsenal", "Tottenham Hotspur", "pitch/101")]
     assert [(r["result"], r["versus"]) for r in shown["recent"]] == [("Drew 1–1", "Chelsea"), ("Won 2–0", "Tottenham Hotspur")] and shown["form"] == ["D", "W"]
     assert [(p["name"], p["system"], p["athlete_id"]) for p in shown["squad"]] == [("Bukayo Saka", "pitch", "7")]
-    assert (shown["following"], shown["alerts"], shown["followers"], shown["can_follow"], shown["source"]) == (True, "key", 1, True, "Pitch")
+    assert (shown["following"], shown["alerts"], shown["followers"], shown["can_follow"], shown["source"]) == (True, "key", 0, True, "Pitch")  # signed-in followers: gooner's a cookie
     events = {e.key: e for e in db.scalars(select(Event))}
     assert set(events) == {"pitch:50", "pitch:51", "pitch:100", "pitch:101"} and events["pitch:100"].participants == [ARS, CHE] and events["pitch:100"].sport == "Football"
     assert db.scalar(select(func.count()).select_from(EventTeam).where(EventTeam.team_id == arsenal.id)) == 4
@@ -437,10 +437,10 @@ def test_the_fan_stream_carries_a_teams_games_from_a_day_and_a_half_before_they_
 
     # And the stream subscribes to those games' channels, with the fan's teams in its first frame.
     subscribed: list[list[str]] = []
-    monkeypatch.setattr(server, "_stream", lambda channels, first, request, again=None: subscribed.append(channels) or "stream")
+    monkeypatch.setattr(server, "_stream", lambda channels, first, request, again=None, **_: subscribed.append(channels) or "stream")
     monkeypatch.setattr(server, "_sse", lambda body, places=None: body)
     monkeypatch.setattr(server, "streaming", server.Counter())  # the stream's places, given back by its answer
-    assert asyncio.run(server.my_stream(SimpleNamespace(client=None), fan="gooner")) == "stream"
+    assert asyncio.run(server.my_stream(SimpleNamespace(client=None, cookies={}), fan="gooner")) == "stream"
     assert subscribed == [[f"match:{key['pitch:100']}", "follows:gooner"]]  # and the fan's own channel (BUG-165)
 
 
@@ -547,6 +547,45 @@ def test_a_followed_teams_game_ending_has_its_games_read_again_at_the_next_tick(
     teams.refresh(arsenal.id)
     db.expire_all()
     assert teams.mine(db, "gooner")[0]["last"]["result"] == "Won 2–1"
+
+
+@needs_db
+def test_a_followed_teams_next_game_set_the_day_its_last_one_ended_is_found_before_it_starts(db, redis, source, monkeypatch):
+    # BUG-290: the read after a game of it ended had the source's schedule as kept from before the result, with no
+    # next game yet, so the team looked quiet and was read again only QUIET on: a next round set and played within
+    # those hours (a Swiss round, a bracket's) was never linked, so never armed, told or on Coming up. For AFTER
+    # once a game of it ends, it's read as often as a team with a game soon.
+    from sports_follow.config import FIXTURES_MAX_AGE
+
+    clock = [NOW]
+    monkeypatch.setattr(teams, "_now", lambda: clock[0])
+    monkeypatch.setattr(structured, "_now", lambda: clock[0])
+    teams.import_teams(source.fake, NOW)
+    arsenal = team(db, ARS)
+    teams.follow(db, "gooner", arsenal.id)
+    db.commit()
+    source.fixtures[ARS] = [fixture("100", NOW - timedelta(minutes=100), "live")]
+    teams.refresh(arsenal.id)
+    event_id = db.scalar(select(Event.id).where(Event.key == "pitch:100"))
+    db.execute(update(Event).where(Event.id == event_id).values(status="final"))
+    teams.ended(db, event_id)
+    db.commit()
+    clock[0] = NOW + timedelta(minutes=1)
+    assert pipeline.due_work(clock[0]).teams == [arsenal.id]
+    teams.refresh(arsenal.id)  # the kept schedule: the game on still, nothing after it
+    db.expire_all()
+    assert team(db, ARS).card["upcoming"] == []
+    # Its next game is set meanwhile, for three hours on: the next read, a half hour on, has it.
+    source.fixtures[ARS] = [fixture("100", NOW - timedelta(minutes=100), "final"), fixture("101", NOW + timedelta(hours=3), home=TOT, away=ARS)]
+    clock[0] += timedelta(seconds=FIXTURES_MAX_AGE + 60)
+    assert pipeline.due_work(clock[0]).teams == [arsenal.id]
+    teams.refresh(arsenal.id)
+    db.expire_all()
+    assert [g["title"] for g in team(db, ARS).card["upcoming"]] == ["Tottenham Hotspur vs Arsenal"]
+    assert db.scalar(select(func.count()).select_from(EventTeam).join(Event, Event.id == EventTeam.event_id).where(Event.key == "pitch:101", EventTeam.team_id == arsenal.id)) == 1
+    # Once AFTER has passed with nothing set, it's read every QUIET again.
+    quiet = Team(name="Arsenal", sport="football", system="pitch", external_id=ARS, fetched_at=NOW, card={"upcoming": [], "ended_at": (NOW - teams.AFTER).isoformat()})
+    assert not teams.stale(quiet, NOW + timedelta(seconds=FIXTURES_MAX_AGE + 60)) and teams.stale(quiet, NOW + teams.QUIET + timedelta(minutes=1))
 
 
 @needs_db
@@ -917,6 +956,27 @@ def test_search_lists_every_team_with_the_name_typed_and_a_sport_typed_with_it_n
     assert [(t["name"], t["sport"]) for t in teams.find(db, "india cricket")] == [("India", "cricket")]
     assert [(t["name"], t["sport"]) for t in teams.find(db, "cricket india")] == [("India", "cricket")]
     assert teams.find(db, "india cricket", sport="football") == [] and teams.find(db, "cricket") == []
+
+
+@needs_db
+def test_team_search_ranks_teams_by_their_signed_in_fans_and_anyones_follows_only_break_a_tie(db, redis, source):
+    # Team search put teams in order of every follow, a cookie's too, and said "N following" of them, as the team's
+    # page did: a script's cookies steered both (BUG-293). Signed-in fans an admin hasn't blocked count, as starters
+    # count them; anyone's follows break a tie the source's own tier leaves.
+    def club(name: str, short: str, external: str, tier: int = 1) -> Team:
+        made = Team(name=name, short=short, sport="football", system="pitch", external_id=external, tier=tier, search_text=teams.search_text(name, short))
+        db.add(made)
+        return made
+
+    city, united, rovers, wanderers = club("Manchester City", "MCI", "61"), club("Manchester United", "MUN", "62"), club("Manchester Rovers", "MRO", "63"), club("Manchester Wanderers", "MWA", "64", tier=0)
+    db.add_all([Account(email="a@example.com", fan_id="acct-a"), Account(email="b@example.com", fan_id="acct-b", blocked_at=NOW)])
+    db.flush()
+    db.add_all([TeamFollow(fan_id="acct-a", team_id=city.id, alert_rules={}), TeamFollow(fan_id="acct-b", team_id=united.id, alert_rules={}),
+                *[TeamFollow(fan_id=f"cookie-{n}", team_id=united.id, alert_rules={}) for n in range(5)],  # a blocked account and a script's cookies
+                TeamFollow(fan_id="cookie-0", team_id=rovers.id, alert_rules={}), *[TeamFollow(fan_id=f"cookie-{n}", team_id=wanderers.id, alert_rules={}) for n in range(9)]])
+    db.commit()
+    assert [(t["name"], t["followers"]) for t in teams.find(db, "manchester")] == [("Manchester City", 1), ("Manchester United", 0), ("Manchester Rovers", 0), ("Manchester Wanderers", 0)]
+    assert [page["followers"] for page in (teams.page(db, city.id, None), teams.page(db, united.id, None)) if page] == [1, 0]
 
 
 @needs_db

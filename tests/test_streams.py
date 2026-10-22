@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
 import sys
 import time
@@ -110,6 +111,7 @@ class Redis:
 
 class Request:
     headers: dict[str, str] = {}
+    cookies: dict[str, str] = {}  # no fan's cookie, no session
     client = None  # no public address: only the fan's streams are counted
 
     async def is_disconnected(self):
@@ -117,10 +119,12 @@ class Request:
 
 
 class From(Request):
-    """A request from a public address."""
+    """A request from a public address, with `fan`'s cookie if given."""
 
-    def __init__(self, address: str):
+    def __init__(self, address: str, fan: str | None = None):
         self.client = SimpleNamespace(host=address)
+        if fan:
+            self.cookies = {server.FAN_COOKIE: server.sign_fan(fan)}
 
 
 @pytest.fixture
@@ -231,7 +235,7 @@ def test_a_follow_on_another_device_reaches_the_fans_open_streams(api, monkeypat
     module = sys.modules[__name__]
     monkeypatch.setattr(module, "FOLLOWS", before)
     monkeypatch.setattr(api.redis, "pubsub", lambda: Told(api.redis.log))
-    response = asyncio.run(server.my_stream(Request(), fan="fan"))
+    response = asyncio.run(server.my_stream(Request(), fan="fan", signed=None))
 
     def elsewhere():
         monkeypatch.setattr(module, "FOLLOWS", [(2, {"level": "off"})])
@@ -241,6 +245,39 @@ def test_a_follow_on_another_device_reaches_the_fans_open_streams(api, monkeypat
     assert [p["player_id"] for p in first["players"]] == [p for p, _ in before] and first["sports"] == []
     assert again == {"type": "following", "players": [{**again["players"][0], "player_id": 2, "alerts": "off"}], "matches": [], "teams": [], "sports": ["chess", "cricket"]}
     assert api.redis.log[0].startswith("subscribe") and api.redis.log[0].endswith("follows:fan")
+
+
+def to_the_end(response) -> list[dict]:
+    """Every event a stream sends till it ends; within seconds, or the test fails."""
+
+    async def read():
+        return [json.loads(frame.removeprefix("data: ")) async for frame in response.body_iterator if frame.startswith("data: ")]
+
+    return asyncio.run(asyncio.wait_for(read(), 5))
+
+
+def test_a_stream_whose_session_ended_tells_its_app_and_ends(api, monkeypatch):
+    """BUG-162, round two: an app left open in front, its device signed out elsewhere (everywhere from another device,
+    the account deleted or blocked), kept its stream, which kept the account it had connected as: the account's
+    moments kept coming, and the app, told nothing, kept showing the account. Ending sessions says so on the account's
+    own channel (tests/test_accounts.py); a stream hearing it asks for its session again, and if it has ended, tells its
+    app so (the app asks who it is now, and starts over) and ends, its connection back in the pool."""
+    sana = server.accounts.Signed(account_id=1, fan_id="fan", session_id=7)
+    sessions = {"sana": sana}
+
+    async def account_of(request):
+        return sessions.get("sana")
+
+    monkeypatch.setattr(server, "account_of", account_of)
+    monkeypatch.setattr(api.redis, "pubsub", lambda: Told(api.redis.log))
+    # Still signed in (a follow on another device, say): the list again.
+    first, again = frames(asyncio.run(server.my_stream(Request(), fan="fan", signed=sana)), 2, lambda: None)
+    assert first["type"] == again["type"] == "following"
+    # Signed out elsewhere: the app is told, and the stream ends.
+    sessions.clear()
+    said = to_the_end(asyncio.run(server.my_stream(Request(), fan="fan", signed=sana)))
+    assert [e["type"] for e in said] == ["following", "signed_out"]
+    assert api.redis.log[-1] == "close"  # its connection given back
 
 
 def test_the_player_stream_rebuilds_a_lost_hot_copy_without_holding_a_session(api):
@@ -352,6 +389,7 @@ def test_a_fan_an_address_and_the_process_hold_only_so_many_streams_and_one_that
     Redis from 25 connections to 227), connections the worker's polling, locks and limits need too. Past a
     fan's or an address's share the next is refused (429), past the process's too (503), and a stream that
     ends gives its place back."""
+    monkeypatch.setattr(server, "cookie_key", lambda: b"a test key for fan cookies, 32+ bytes")
     monkeypatch.setattr(server, "STREAMS_PER_FAN", 2, raising=False)
     monkeypatch.setattr(server, "STREAMS_PER_ADDRESS", 1, raising=False)  # an IPv6 /64's
     monkeypatch.setattr(server, "STREAMS_PER_IPV4", 3, raising=False)
@@ -362,11 +400,11 @@ def test_a_fan_an_address_and_the_process_hold_only_so_many_streams_and_one_that
             asyncio.run(stream)
         return refusal.value.status_code
 
-    first = asyncio.run(server.my_stream(From("81.2.69.142"), fan="fan"))
-    asyncio.run(server.my_stream(From("81.2.69.143"), fan="fan"))
-    assert refused(server.my_stream(From("81.2.69.144"), fan="fan")) == 429  # the fan's third, from anywhere
+    first = asyncio.run(server.my_stream(From("81.2.69.142", fan="fan"), fan="fan"))
+    asyncio.run(server.my_stream(From("81.2.69.143", fan="fan"), fan="fan"))
+    assert refused(server.my_stream(From("81.2.69.144", fan="fan"), fan="fan")) == 429  # the fan's third, from anywhere
     ended(first)
-    asyncio.run(server.my_stream(From("81.2.69.142"), fan="fan"))  # its place is free again
+    asyncio.run(server.my_stream(From("81.2.69.142", fan="fan"), fan="fan"))  # its place is free again
     # A player's stream needs no cookie: its address's share holds it.
     for _ in range(2):
         asyncio.run(server.player_stream(1, From("81.2.69.142")))
@@ -378,6 +416,52 @@ def test_a_fan_an_address_and_the_process_hold_only_so_many_streams_and_one_that
     asyncio.run(server.player_stream(1, From("2a02:c7c:1::1")))  # an IPv6 household holds fewer than an IPv4 address
     assert refused(server.player_stream(1, From("2a02:c7c:1::2"))) == 429
     assert server.streaming["all"] == 5  # a refused stream holds nothing
+
+
+def held(stream) -> int:
+    """A stream route's answer as a status: 200 for a stream that opened (and holds its places), else the refusal's."""
+    try:
+        asyncio.run(stream)
+    except HTTPException as refusal:
+        return refusal.status_code
+    return 200
+
+
+def test_streams_with_no_fan_take_only_part_of_a_process_so_fans_still_get_their_live_updates(api, monkeypatch):
+    """BUG-299: a player's stream needs no cookie, and its address's share was all that held it, so four IPv4
+    addresses (or seventeen /64s of one /48) held every stream of a process, and every web fan's live scores got a
+    503. A stream with neither a fan's cookie nor a session takes one of the few kept for those now
+    (STREAMS_WITHOUT_FAN): the rest are fans'. A player's stream with a fan's cookie is a fan's, outside their own
+    share (their phone and their laptop may each have a player's page open)."""
+    monkeypatch.setattr(server, "cookie_key", lambda: b"a test key for fan cookies, 32+ bytes")
+    monkeypatch.setattr(server, "STREAMS_PER_FAN", 2, raising=False)
+    monkeypatch.setattr(server, "STREAMS_PER_IPV4", 3, raising=False)
+    monkeypatch.setattr(server, "STREAMS_WITHOUT_FAN", 6, raising=False)
+    monkeypatch.setattr(server, "STREAMS_PER_PROCESS", 10, raising=False)
+    assert [held(server.player_stream(1, From(host))) for host in ("81.2.69.1", "82.2.69.1") for _ in range(3)] == [200] * 6  # two networks, no cookie
+    assert held(server.player_stream(1, From("83.2.69.1"))) == 503  # the streams kept for no fan are all held
+    assert held(server.my_stream(From("83.2.69.1"), fan="made-up")) == 503  # as is a fan's own without its cookie: a new fan each request
+    assert held(server.my_stream(From("84.2.69.1", fan="asha"), fan="asha")) == 200  # a fan's own still opens
+    assert [held(server.player_stream(1, From(f"8{4 + i}.2.69.1", fan="asha"))) for i in range(3)] == [200] * 3  # and players' with her cookie
+    assert server.streaming["fanless"] == 6 and server.streaming["fan:asha"] == 1 and server.streaming["all"] == 10
+
+
+def test_an_ipv6_48s_64s_together_hold_only_so_many_streams_and_an_ipv4_24_is_logged_there(api, monkeypatch, caplog):
+    """BUG-299: each address had its share and nothing else did, so a /48's 65,536 /64s (free from a tunnel broker)
+    together held every stream of a process. A /48 has a ceiling of its own now (STREAMS_PER_PREFIX), well under the
+    process's. An IPv4 /24's addresses each have their own share and a phone network's NAT puts many fans behind a few
+    /24s, so one is only logged at that ceiling; a /48 reaching it is logged too."""
+    caplog.set_level(logging.WARNING, "sports_follow.limits")
+    monkeypatch.setattr(server, "_ceilings_logged", {}, raising=False)
+    monkeypatch.setattr(server, "STREAMS_PER_IPV4", 3, raising=False)
+    monkeypatch.setattr(server, "STREAMS_PER_ADDRESS", 2, raising=False)
+    monkeypatch.setattr(server, "STREAMS_PER_PREFIX", 4, raising=False)
+    monkeypatch.setattr(server, "STREAMS_PER_PROCESS", 100, raising=False)
+    assert [held(server.my_stream(From(f"81.2.69.{1 + i // 3}"), fan=f"fan-{i}")) for i in range(6)] == [200] * 6  # three from each of two addresses
+    assert held(server.my_stream(From("81.2.69.1"), fan="more")) == 429  # an address's own share still holds
+    assert [held(server.my_stream(From(f"2a00:1450:4009:{i // 2:x}::1"), fan=f"v6-{i}")) for i in range(5)] == [200] * 4 + [429]
+    assert held(server.my_stream(From("2a00:1450:400a::1"), fan="other-v6")) == 200  # another /48
+    assert len([r for r in caplog.records if r.name == "sports_follow.limits" and "ceiling for streams" in r.getMessage()]) == 2
 
 
 def test_the_apis_redis_connections_have_a_ceiling_and_streams_a_pool_of_their_own(monkeypatch):
