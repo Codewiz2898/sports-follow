@@ -126,6 +126,10 @@ class Snapshot:
     # Who its lines are, by the same ids, where the source names them (a scorecard's batters and bowlers):
     # a game's own moments name its players (Sport.game_moments). Optional; a line of someone unnamed isn't told.
     names: dict[str, str] = field(default_factory=dict)
+    # The side each player is in, by the same ids, as the id its board gives that side (state's teams), where the
+    # source says (a scorecard's rosters, a line-up): whether a player won is told from the side they played for, a
+    # traded player's old one too (structured.result_item). Optional; a sport whose results say it ("Won 2–1") needs none.
+    sides: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

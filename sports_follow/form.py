@@ -30,7 +30,8 @@ def summarize(sport: str, results: list[tuple[dict[str, Any], Line | None]], tea
 
 
 def _record(rules: sports.Sport, items: list[dict[str, Any]], teams: list[str]) -> dict[str, str] | None:
-    known = [o for o in (rules.outcome(r.get("result", ""), teams) for r in items) if o]
+    # Each result's outcome as it was kept with it (results._judged), the one its row shows; else read from its words.
+    known = [o for o in (r["outcome"] if "outcome" in r else rules.outcome(r.get("result", ""), teams) for r in items) if o]
     if not known:
         return None
     w, d, l = (known.count(x) for x in "WDL")

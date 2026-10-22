@@ -685,7 +685,12 @@ class Sport:
 
     draws = False  # a record always shows draws (W–D–L), even with none
 
-    def outcome(self, result: str, teams: list[str]) -> str | None:
+    def outcome(self, result: str, teams: list[str], board: dict[str, Any] | None = None, side: str | None = None) -> str | None:
+        """W, D or L for a player in a finished game, None where it can't be told: by default from its result as their
+        source puts it from their side ("Won 2–1"). `teams` names the sides they play for; `board` is the game's sides as
+        its source marks them (its final Snapshot.state, else the schedule's Fixture.result), and `side` the id of the one
+        they played for in it, where known: a sport whose result is the game's own ("India won by 57 runs") reads them.
+        Decided as a result is kept (structured.result_item), so the app shows it rather than guessing from names."""
         return outcome(result)
 
     def form(self, items: list[dict[str, Any]], lines: list[Line]) -> list[dict[str, str]]:

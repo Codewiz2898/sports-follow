@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type Card, type Form, type GameDetail, type RecentResult, type ResultsPage } from '../api'
-import { day, hostname, outcome, playedOn, safeHref } from '../format'
+import { day, hostname, playedOn, resultOutcome, safeHref } from '../format'
 import { sportInfo } from '../sports'
 import { SourceNote, StatGrid } from './Blocks'
 import { ChevronIcon } from './Icons'
@@ -12,7 +12,7 @@ function GameRow({ r, playerId, teams, teamOnly }: { r: RecentResult; playerId: 
   const [detail, setDetail] = useState<GameDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const canOpen = r.event_id != null
-  const wl = outcome(r.result, teams)
+  const wl = resultOutcome(r, teams)
   // The badge says won or lost, so the score stands alone ("Won 133–128" → "133–128").
   const score = wl ? r.result.replace(/^(Won|Lost|Drew)\s+/, '') : r.result
 

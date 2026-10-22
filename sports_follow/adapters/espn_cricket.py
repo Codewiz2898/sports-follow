@@ -183,6 +183,8 @@ def parse_summary(data: dict[str, Any]) -> Snapshot:
         moments=[],
         source_url=f"https://www.espncricinfo.com/ci/engine/match/{header.get('id')}.html",
         names={str(a["id"]): a["displayName"] for side in data.get("rosters") or [] for p in side.get("roster") or [] if (a := p.get("athlete") or {}).get("id") and a.get("displayName")},
+        sides={str(a["id"]): str(team["id"]) for side in data.get("rosters") or [] if (team := side.get("team") or {}).get("id")
+               for p in side.get("roster") or [] if (a := p.get("athlete") or {}).get("id")},
     )
 
 
