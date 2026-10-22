@@ -57,6 +57,7 @@ SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?")
 TAKEN = frozenset({
     "api", "admin", "assets", "icons", "welcome", "following", "live", "match", "search", "player", "team", "athlete", "notifications", "credits", "account",
     "privacy", "go",  # BHA-239's short links
+    "terms",  # the terms of using the app (BHA-652: YouTube's API terms)
     "watch",  # a stream's player alone, for the Android app (watch.page)
     "me", "leagues", "league", "j",  # predictions with friends: a fan's leagues (/me/leagues), one league's page, an invite (/j/<code>)
     "feed",  # the Android app's Feed tab (the web's is /me/feed)

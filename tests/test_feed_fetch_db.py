@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, delete, func, select, text, update
 from sports_follow import bus, candidates, db as db_module, feed as feed_module, metrics
 from sports_follow.adapters import VIDEOS, Upload
 from sports_follow.models import FeedCandidate, Follow, Player, PlayerAlias
-from tests.test_feed_fetch import CHANNEL, NOW, Fake, feed, listing, video
+from tests.test_feed_fetch import CHANNEL, NOW, Fake, listing, uploads, video
 from tests.test_feed_metrics import counts
 from tests.test_metrics import measured  # noqa: F401  (the fixture)
 
@@ -90,7 +90,7 @@ def test_a_poll_keeps_the_videos_that_name_a_followed_player_and_pass_the_hard_f
     kohli = player("Virat Kohli", aliases=("virat-kohli",))
     bumrah = player("Jasprit Bumrah")
     player("Rohit Sharma", followed=False)  # nobody follows him: never looked for
-    world.feeds[CHANNEL] = feed(
+    world.uploads[CHANNEL] = uploads(
         ("kohlibumrah", "Kohli and Bumrah on the tour", "Analysis"),
         ("kohlishort0", "Kohli's best shot", "#shorts"),
         ("bumrahblock", "Bumrah's yorkers", ""),
@@ -117,7 +117,7 @@ def test_a_poll_keeps_the_videos_that_name_a_followed_player_and_pass_the_hard_f
 
 def test_a_video_already_kept_is_kept_for_a_newly_followed_player_without_asking_again(world):
     kohli = player("Virat Kohli")
-    world.feeds[CHANNEL] = feed(("kohlibumrah", "Kohli and Bumrah on the tour", ""))
+    world.uploads[CHANNEL] = uploads(("kohlibumrah", "Kohli and Bumrah on the tour", ""))
     world.videos["kohlibumrah"] = video("kohlibumrah")
     candidates.poll(NOW)
     bumrah = player("Jasprit Bumrah")
@@ -130,7 +130,7 @@ def test_a_video_already_kept_is_kept_for_a_newly_followed_player_without_asking
 
 def test_a_day_later_a_kept_video_is_read_again_for_its_pace(world):
     player("Virat Kohli")
-    world.feeds[CHANNEL] = feed(("kohli000001", "Kohli: the chase", ""))
+    world.uploads[CHANNEL] = uploads(("kohli000001", "Kohli: the chase", ""))
     world.videos["kohli000001"] = video("kohli000001", views=100, likes=4)
     candidates.poll(NOW)
     with db_module.session() as s:  # the judge read it
@@ -154,7 +154,7 @@ def test_a_day_later_a_kept_video_is_read_again_for_its_pace(world):
 def test_the_weekly_check_drops_the_videos_gone_and_reads_the_rest_again(world):
     kohli = player("Virat Kohli")
     names = ("removed0000", "private0000", "blockedin00", "noembed0000", "fine0000000")
-    world.feeds[CHANNEL] = feed(*((v, f"Kohli {v}", "") for v in names))
+    world.uploads[CHANNEL] = uploads(*((v, f"Kohli {v}", "") for v in names))
     world.videos.update({v: video(v) for v in names})
     candidates.poll(NOW)
     assert len(rows()) == 5
@@ -175,7 +175,7 @@ def test_the_weekly_check_drops_the_videos_gone_and_reads_the_rest_again(world):
 def test_removing_a_player_takes_their_candidates_and_a_poll_doesnt_bring_them_back(world):
     kohli = player("Virat Kohli")
     bumrah = player("Jasprit Bumrah")
-    world.feeds[CHANNEL] = feed(("kohlibumrah", "Kohli and Bumrah", ""))
+    world.uploads[CHANNEL] = uploads(("kohlibumrah", "Kohli and Bumrah", ""))
     world.videos["kohlibumrah"] = video("kohlibumrah")
     candidates.poll(NOW)
     with db_module.session() as s:
@@ -190,7 +190,7 @@ def test_without_a_key_nothing_is_read(world, monkeypatch):
 
     player("Virat Kohli")
     monkeypatch.setattr(youtube, "key", lambda: None)
-    world.feeds[CHANNEL] = feed(("kohli000001", "Kohli", ""))
+    world.uploads[CHANNEL] = uploads(("kohli000001", "Kohli", ""))
     assert candidates.poll(NOW)["channels"] == 0 and candidates.check(NOW + timedelta(days=30)) == {"read": 0, "dropped": 0}
     assert world.asked == [] and rows() == []
 
@@ -208,7 +208,7 @@ def test_a_followed_player_is_known_by_their_aliases(world):
 
 def test_a_premiere_not_aired_yet_is_asked_about_again_within_the_hour(world):
     kohli = player("Virat Kohli")
-    world.feeds[CHANNEL] = feed(("premiere000", "Kohli: the documentary", ""), ("shortclip00", "Kohli in 30 seconds", ""))
+    world.uploads[CHANNEL] = uploads(("premiere000", "Kohli: the documentary", ""), ("shortclip00", "Kohli in 30 seconds", ""))
     world.videos["premiere000"] = video("premiere000", duration="P0D", live="upcoming")
     world.videos["shortclip00"] = video("shortclip00", duration="PT30S")
     candidates.poll(NOW)
@@ -227,7 +227,7 @@ def test_a_row_no_check_could_read_for_a_month_goes(world, monkeypatch):
     from tests.test_feed_fetch import youtube
 
     player("Virat Kohli")
-    world.feeds[CHANNEL] = feed(("kohli000001", "Kohli: the chase", ""))
+    world.uploads[CHANNEL] = uploads(("kohli000001", "Kohli: the chase", ""))
     world.videos["kohli000001"] = video("kohli000001")
     candidates.poll(NOW)
     monkeypatch.setattr(youtube, "key", lambda: None)  # the key taken away: nothing can read it again
@@ -241,10 +241,10 @@ def test_every_stream_keeps_a_video_only_from_a_channel_the_players_sport_lists(
     player's sport doesn't list is dropped there, before YouTube is asked about it (BHA-349)."""
     kohli = player("Virat Kohli")
     off = "UC" + "z" * 22  # a small channel no sport lists
-    uploads = [Upload("listedvid01", CHANNEL, "Made-up Cricket", "Kohli's hundred", "", "https://www.youtube.com/watch?v=listedvid01"),
+    ups = [Upload("listedvid01", CHANNEL, "Made-up Cricket", "Kohli's hundred", "", "https://www.youtube.com/watch?v=listedvid01"),
                Upload("offlistvid1", off, "Sports Yaari", "KOHLI'S HUNDRED 🔥", "", "https://www.youtube.com/watch?v=offlistvid1")]  # fmt: skip
     world.videos.update({v["id"]: v for v in (video("listedvid01"), video("offlistvid1"))})
-    got = candidates.keep(SOURCE, [candidates.Found(kohli, "cricket", u, "kohli", "title") for u in uploads], NOW, stream=stream)
+    got = candidates.keep(SOURCE, [candidates.Found(kohli, "cricket", u, "kohli", "title") for u in ups], NOW, stream=stream)
     assert got == {"kept": 1, "refused": 0, "off_list": 1}
     assert rows() == [(kohli, "listedvid01")]
     [asked] = [r for r in world.asked if r.url.path == "/youtube/v3/videos"]
@@ -292,13 +292,13 @@ def test_reading_a_stored_video_again_learns_its_shape_and_the_feed_serves_an_up
 
 def test_a_video_a_fans_app_said_wont_play_inside_it_stays_unserved_when_found_for_another_player(world):
     kohli = player("Virat Kohli")
-    world.feeds[CHANNEL] = feed_xml = feed(("kohlibumrah", "Kohli and Bumrah on the tour", ""))
+    world.uploads[CHANNEL] = listed = uploads(("kohlibumrah", "Kohli and Bumrah on the tour", ""))
     world.videos["kohlibumrah"] = video("kohlibumrah")
     candidates.poll(NOW)
     with db_module.session() as s:
         assert feed_module.unplayable(s, kohli, feed_module.item_id("https://www.youtube.com/watch?v=kohlibumrah"), NOW)
     bumrah = player("Jasprit Bumrah")
-    world.feeds[CHANNEL] = feed_xml
+    world.uploads[CHANNEL] = listed
     assert candidates.poll(NOW + timedelta(minutes=30))["kept"] == 1
     with db_module.session() as s:
         marks = dict(s.execute(select(FeedCandidate.player_id, FeedCandidate.unplayable_at)).all())
@@ -310,14 +310,14 @@ def test_a_video_an_admin_hid_stays_hidden_when_found_for_another_player(world):
     from sports_follow import rank
 
     kohli = player("Virat Kohli")
-    world.feeds[CHANNEL] = feed_xml = feed(("kohlibumrah", "Kohli and Bumrah on the tour", ""))
+    world.uploads[CHANNEL] = listed = uploads(("kohlibumrah", "Kohli and Bumrah on the tour", ""))
     world.videos["kohlibumrah"] = video("kohlibumrah")
     candidates.poll(NOW)
     with db_module.session() as s:
         row = s.scalar(select(FeedCandidate.id).where(FeedCandidate.player_id == kohli))
         assert row is not None and rank.review(s, row, "hidden")
     bumrah = player("Jasprit Bumrah")
-    world.feeds[CHANNEL] = feed_xml
+    world.uploads[CHANNEL] = listed
     assert candidates.poll(NOW + timedelta(minutes=30))["kept"] == 1
     with db_module.session() as s:
         said = dict(s.execute(select(FeedCandidate.player_id, FeedCandidate.review)).all())
@@ -337,7 +337,7 @@ def test_a_poll_keeps_pool_players_videos_and_a_teams_video_for_its_players_as_t
     mandhana = player("Smriti Mandhana", followed=False)
     player("Rohit Sharma", followed=False)  # neither followed nor in the pool: never looked for
     world.redis.data[feedpool.POOL_KEY] = json.dumps({"players": {"cricket": [mandhana]}})
-    world.feeds[CHANNEL] = feed(
+    world.uploads[CHANNEL] = uploads(
         ("indaus00001", "India vs Australia, 2nd ODI | Highlights", ""),
         ("mandhana001", "Smriti Mandhana's 117 at Brisbane", ""),
         ("rohit000001", "Rohit Sharma's pull", ""),
@@ -351,3 +351,30 @@ def test_a_poll_keeps_pool_players_videos_and_a_teams_video_for_its_players_as_t
         mine = s.scalar(select(FeedCandidate).where(FeedCandidate.external_id == "mandhana001"))
         assert team is not None and (team.candidate["about"], team.candidate["team"], team.candidate["named"]) == ("team", "India", "india")
         assert mine is not None and "about" not in mine.candidate and mine.candidate["named"] == "smriti mandhana"
+
+
+def test_a_served_video_brings_its_sources_icon_and_one_made_for_kids_goes_at_its_next_read(world):
+    """Each video item carries its source's icon for its card, linked there to the video where it plays (YouTube's
+    III.F.2); a stored video made for kids isn't served, and is dropped the next time it's read (III.E.4.j)."""
+    from sports_follow import feed
+
+    kohli = player("Virat Kohli")
+    with db_module.session() as s:
+        s.add(FeedCandidate(player_id=kohli, source="youtube", external_id="kidsrow0001", url="https://www.youtube.com/watch?v=kidsrow0001",
+                            candidate={"title": "Kohli for kids", "channel_id": CHANNEL, "sport": "cricket", "details": {"status": {"embeddable": True}}},
+                            features={"views": 10}, verdict={"about_player": "subject"}, score=0.5, fetched_at=NOW, checked_at=NOW))  # fmt: skip
+    with db_module.session() as s:
+        [served] = feed.judged(s, [kohli], NOW)[kohli]
+    assert served.item.video is not None and served.item.video.mark is not None and SOURCE.mark is not None
+    mark = served.item.video.mark
+    assert (mark.name, mark.min_height, [(p.fill, p.d) for p in mark.paths]) == (SOURCE.mark.name, SOURCE.mark.min_height, list(SOURCE.mark.paths))
+    # Kept before the filter, with the status it was read with: not served even before its next read drops it.
+    with db_module.session() as s:
+        s.execute(update(FeedCandidate).values(candidate=FeedCandidate.candidate.op("||")(
+            text("""'{"details": {"status": {"embeddable": true, "madeForKids": true}}}'::jsonb"""))))
+    with db_module.session() as s:
+        assert feed.judged(s, [kohli], NOW).get(kohli, []) == []
+    world.videos["kidsrow0001"] = video("kidsrow0001")
+    world.videos["kidsrow0001"]["status"]["madeForKids"] = True
+    assert candidates._again(SOURCE, ["kidsrow0001"], NOW) == {"read": 0, "dropped": 1}  # pyright: ignore[reportPrivateUsage]
+    assert rows() == []

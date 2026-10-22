@@ -26,69 +26,23 @@ SPORTS_YAARI = "UCjFw-0Vdfy2KW78NClGECXw"  # a small channel the list left out
 # ---------------------------------------------------------------- titles
 
 
-@pytest.mark.parametrize(("title", "channel", "keep", "shown"), [
-    # The board's own example (FeedRules): emoji, the channel's name and the shouting off; the words stay.
-    ('🔴PRESS CONFERENCE: "BHUVI HAS WON THE IPL TWICE..!" SHREYAS IYER READY | Sports Yaari', "Sports Yaari", ("Shreyas Iyer",),
-     'Press conference: "Bhuvi has won the IPL twice!" Shreyas Iyer ready'),
-    ("VIRAT KOHLI'S 100 VS AUS 🔥🔥 #viratkohli #cricket #shorts", "Cricket Fan", ("Virat Kohli",), "Virat Kohli's 100 vs AUS"),
-    ("KOHLI'S FIRST TEST HUNDRED IN ENGLAND, EDGBASTON 2018 | England & Wales Cricket Board", "England & Wales Cricket Board", ("Virat Kohli",),
-     "Kohli's first Test hundred in England, Edgbaston 2018"),
-    ("SMRITI MANDHANA SMASHES 117 IN THE 1ST ODI vs AUSTRALIA - Highlights", "ICC", ("Smriti Mandhana",),
-     "Smriti Mandhana smashes 117 in the 1st ODI vs Australia - highlights"),
-    ("WHAT I LEARNED FROM MAGNUS CARLSEN - GothamChess", "GothamChess", ("Magnus Carlsen",), "What I learned from Magnus Carlsen"),
-    # Partly in capitals: those are names, left as they are.
-    ("IND vs AUS 2nd ODI Highlights | India vs Australia | Star Sports", "Star Sports", (), "IND vs AUS 2nd ODI Highlights · India vs Australia"),
-    # Each part between the bars is read alone, and the bars become the app's dots.
-    ("FODEN HAT-TRICK FOR CITY! | Man City 5-1 AEK Athens | Champions League", "Man City", ("Phil Foden", "City", "Man City"),
-     "Foden hat-trick for City! · Man City 5-1 AEK Athens · Champions League"),
-    ("Kohli hits a brilliant century, Windies v India 2nd ODI 2019", "Windies Cricket", (), "Kohli hits a brilliant century, Windies v India 2nd ODI 2019"),
-    # A hashtag in the middle keeps its word; a part with someone else's name stays.
-    ("Watch #Gukesh beat Ding | FIDE World Championship", "ChessBase India", (), "Watch Gukesh beat Ding · FIDE World Championship"),
-    ("Gukesh 🇮🇳 beats Magnus!!! ⭐⭐ #chess #shorts", "FIDE", (), "Gukesh beats Magnus!"),
-    ("  Haaland   and Anderson on City's 3-0 win  ", "Sky Sports Premier League", (), "Haaland and Anderson on City's 3-0 win"),
-    ("🔥🔥🔥", "Someone", (), "🔥🔥🔥"),  # nothing left: as it came
-    # The channel's name comes off the end, never a part that holds more, nor one word of it alone.
-    ("Liverpool 1 - 2 Man City", "Man City", (), "Liverpool 1 - 2 Man City"),
-    ("Arsenal 2 - 1 Chelsea", "Chelsea", (), "Arsenal 2 - 1 Chelsea"),
-    ("Highlights: Arsenal - Chelsea", "Chelsea FC", (), "Highlights: Arsenal - Chelsea"),
-    ("The final over - ICC Men's T20 World Cup 2024", "ICC", (), "The final over - ICC Men's T20 World Cup 2024"),
-    ("Djokovic vs Alcaraz | Final | Wimbledon 2024", "Wimbledon", (), "Djokovic vs Alcaraz · Final · Wimbledon 2024"),
-    ("Kohli's 50 | Sky Sports", "Sky Sports Cricket", (), "Kohli's 50"),  # the start of its name
-    ("Sinner returns to world #1", "Tennis TV", (), "Sinner returns to world #1"),  # a number, not a hashtag
-    ("Wow?! What a finish", "ICC", (), "Wow? What a finish"),  # a question stays one
-    # A kept phrase only whole: "Test" is cricket's, "New" alone isn't a name.
-    ("MI VS CSK: ROHIT SHARMA ON THE NEW BALL IN THE TEST", "Star Sports", ("Rohit Sharma",), "MI vs CSK: Rohit Sharma on the new ball in the Test"),
-    # A search's title stored as it came, HTML-escaped (before BHA-358): read as written.
-    ("Kylian Mbappe &amp; Bijan Robinson SWAP sports!", "NFL", (), "Kylian Mbappe & Bijan Robinson SWAP sports!"),
-    ("Gukesh&#39;s win &quot;for India&quot;", "FIDE", (), "Gukesh's win \"for India\""),
-])  # fmt: skip
-def test_a_title_is_tidied_as_its_served(title, channel, keep, shown):
-    assert titles.tidy(title, channel, CRICKET.title_words, keep) == shown
-
-
 @pytest.mark.parametrize(("title", "shown"), [
-    # BUG-254: a shouted title's other side was put in lower case ("Gukesh vs ding", "Ind vs aus", "5-1 aek"), and
-    # HTML escaped twice over was left escaped once ("<b>Kohli</b> out").
-    ("GUKESH VS DING: GAME 14 | WORLD CHESS CHAMPIONSHIP", "Gukesh vs Ding: game 14 · World chess championship"),
-    ("IND vs AUS", "IND vs AUS"),
-    ("IND VS AUS 3RD ODI HIGHLIGHTS", "IND vs AUS 3rd odi highlights"),
-    ("MAN CITY 5-1 AEK", "Man city 5-1 AEK"),
-    ("SALAH'S STUNNER V MAN UTD", "Salah's stunner v Man utd"),
-    ("INDIA BEAT AUS BY 6 WICKETS", "India beat aus by 6 wickets"),  # no "vs" or score beside it: words, as before
-    ("ROHIT AND GILL WIN IT 2-0 AT HOME", "Rohit and gill win it 2-0 at home"),  # small words beside a score stay small
-    ("&lt;b&gt;Kohli&lt;/b&gt; out", "Kohli out"),
+    # As YouTube gives it (BHA-652: its API policies want a title unmodified): emoji, hashtags, the channel's name,
+    # bars and capitals all stay.
+    ("Gukesh 🇮🇳 beats Magnus!!! ⭐⭐ #chess #shorts", "Gukesh 🇮🇳 beats Magnus!!! ⭐⭐ #chess #shorts"),
+    ("FODEN HAT-TRICK FOR CITY! | Man City 5-1 AEK Athens | Champions League", "FODEN HAT-TRICK FOR CITY! | Man City 5-1 AEK Athens | Champions League"),
+    ("Kohli's 50 | Sky Sports", "Kohli's 50 | Sky Sports"),
+    ("  Haaland and Anderson on City's 3-0 win  ", "Haaland and Anderson on City's 3-0 win"),  # but the spaces round it
+    # HTML's escapes are how a search's titles were sent (stored so before BHA-358), not the title: read, however
+    # many times over.
+    ("Kylian Mbappe &amp; Bijan Robinson SWAP sports!", "Kylian Mbappe & Bijan Robinson SWAP sports!"),
+    ("Gukesh&#39;s win &quot;for India&quot;", "Gukesh's win \"for India\""),
     ("Mbappé &amp;amp; Vinícius star", "Mbappé & Vinícius star"),
+    ("&lt;b&gt;Kohli&lt;/b&gt; out", "<b>Kohli</b> out"),  # the title's own words, which the apps show as text
+    ("", ""),
 ])  # fmt: skip
-def test_a_shouted_titles_sides_keep_their_capitals_and_html_escaped_twice_is_read_as_written(title, shown):
-    assert titles.tidy(title) == shown
-
-
-def test_only_a_title_mostly_in_capitals_is_shouting():
-    assert titles.shouted("PRESS CONFERENCE: SHREYAS IYER READY")
-    assert not titles.shouted("IND vs AUS 2nd ODI Highlights")  # three of six
-    assert not titles.shouted("IND v AUS")  # too few words to tell
-    assert titles.sentence_case("TENZ REACTS TO VCT MASTERS", ("TenZ", "VCT", "Masters")) == "TenZ reacts to VCT Masters"
-    assert titles.sentence_case("I THINK I'M READY. BUT ARE YOU?") == "I think I'm ready. But are you?"
+def test_a_title_is_shown_as_youtube_gives_it(title, shown):
+    assert titles.shown(title) == shown
 
 
 # ---------------------------------------------------------------- the channels' list
@@ -110,7 +64,6 @@ def test_every_sport_lists_official_channels_and_a_few_top_creators():
         assert len(sports.BY_KEY[key].video_channels) >= least, key
     gone = {"UCVXCo0W9pk2dDkEBNLhTt7A", SPORTS_YAARI, "UCjGC9zWjHHF6CG1j8YfJK9g", "UC5oTaFLOFlLNeAJt_dt5rBw"}  # Sports Tak, Sports Yaari, RevSportz, CricTracker
     assert not gone & set(CRICKET.video_channels)
-    assert {"IPL", "ODI", "ICC", "T20I"} <= set(CRICKET.title_words)
 
 
 # ---------------------------------------------------------------- For you's mix
@@ -263,21 +216,21 @@ def test_the_route_takes_the_tab_and_refuses_one_that_isnt(db, monkeypatch):  # 
 
 
 @needs_db
-def test_a_served_videos_title_is_tidied_and_its_picture_the_biggest_there_is(db):  # noqa: F811
+def test_a_served_videos_title_is_youtubes_and_its_picture_the_biggest_there_is(db):  # noqa: F811
     from sqlalchemy import text
 
     db.execute(text("TRUNCATE feed_candidates RESTART IDENTITY CASCADE"))
     pid = made_player(db, "Shreyas Iyer", served=False)
     db.add(FeedCandidate(player_id=pid, source="youtube", external_id="iyerpress01", url="https://www.youtube.com/watch?v=iyerpress01",
                          candidate={"sport": "cricket", "channel": "Sony Sports Network", "channel_id": "UC_WKb6N9iTGc77hxwXLDrbA", "published": NOW.isoformat(),
-                                    "title": "🔴SHREYAS IYER ON THE IPL AUCTION | Sony Sports Network", "details": {"snippet": {"thumbnails": ["high", "maxres"]}}},
+                                    "title": "🔴SHREYAS IYER &amp; THE IPL AUCTION | Sony Sports Network", "details": {"snippet": {"thumbnails": ["high", "maxres"]}}},
                          features={"seconds": 300}, verdict={"kind": "interview_or_analysis"}, score=0.5, fetched_at=NOW, checked_at=NOW))  # fmt: skip
     db.commit()
     [c] = feed.judged(db, [pid], datetime.now(timezone.utc))[pid]
-    assert c.item.title == "Shreyas Iyer on the IPL auction" and c.item.source == "Sony Sports Network"
+    assert c.item.title == "🔴SHREYAS IYER & THE IPL AUCTION | Sony Sports Network" and c.item.source == "Sony Sports Network"
     assert c.item.picture == "https://i.ytimg.com/vi/iyerpress01/maxresdefault.jpg"
     stored = db.scalar(text("SELECT candidate->>'title' FROM feed_candidates"))
-    assert stored == "🔴SHREYAS IYER ON THE IPL AUCTION | Sony Sports Network"  # tidied as it's served, never as it's stored
+    assert stored == "🔴SHREYAS IYER &amp; THE IPL AUCTION | Sony Sports Network"  # its escapes read as it's served, never as it's stored
 
 
 @needs_db

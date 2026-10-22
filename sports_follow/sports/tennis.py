@@ -154,9 +154,6 @@ tournament and tour channels' highlights are official."""
         "UCXbboag48Qlr78zzz6SkzkQ",  # US Open
         "UCDitdIjOjS9Myza9I21IqzQ",  # Tennis Channel
     )
-    title_words = (  # kept as written in a title put in sentence case (titles.py)
-        "ATP", "WTA", "ITF", "US Open", "Australian Open", "Roland Garros", "Roland-Garros",
-        "French Open", "Wimbledon", "Davis Cup", "Laver Cup", "Masters", "Grand Slam")
     # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
     news_feeds = {
         "https://www.theguardian.com/sport/tennis/rss": "The Guardian",

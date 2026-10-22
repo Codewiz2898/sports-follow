@@ -11,6 +11,7 @@ import { EdgePost, EdgeSheetExtras } from './FeedLayouts'
 import { FeedPlayer } from './FeedPlayer'
 import { setSound } from '../sound'
 import { FeedPost } from './FeedPost'
+import { SourceMark } from './SourceMark'
 
 /**
  * A player's Feed (sports_follow/feed.py): what fans, creators and the player share about them, judged first.
@@ -73,7 +74,8 @@ function More({ onClick }: { onClick: () => void }) {
   return <button type="button" className="feed-more" aria-label="Why this is here, and feedback" onClick={onClick}>{dots}</button>
 }
 
-/** A video: YouTube's thumbnail and a play button; a tap swaps in YouTube's no-cookie player, playing (FeedPlayer). */
+/** A video: YouTube's thumbnail and a play button; a tap swaps in YouTube's no-cookie player, playing (FeedPlayer).
+ * Its source's icon (SourceMark) beside the words, linked to it there. */
 export function VideoCard({ item, playerId, now, onMore }: { item: FeedItem; playerId: number; now: number; onMore?: () => void }) {
   const [playing, setPlaying] = useState(false)
   const id = item.video?.youtube_id
@@ -98,6 +100,7 @@ export function VideoCard({ item, playerId, now, onMore }: { item: FeedItem; pla
           <span className="title clamp2" style={{ fontSize: 16 }}>{item.title}</span>
           <span className="tiny muted" style={{ fontWeight: 700 }}>{[item.source, views(item.video?.views), ago(item.published_at, now)].filter(Boolean).join(' · ')}</span>
         </div>
+        <SourceMark item={item} />
         {onMore && <More onClick={onMore} />}
       </div>
     </article>
@@ -269,6 +272,7 @@ function Evergreen({ item, onMore }: { item: FeedItem; onMore: () => void }) {
           <span className="tiny muted" style={{ fontWeight: 700 }}>{[item.source, views(item.video?.views)].filter(Boolean).join(' · ')}</span>
         </span>
       </a>
+      <SourceMark item={item} />
       <More onClick={onMore} />
     </div>
   )

@@ -97,7 +97,10 @@ export default function CreditsScreen() {
           </Section>
         </>
       ) : null}
-      <Text onPress={() => router.push('/privacy')} style={[t.tiny, t.muted, t.link]}>Privacy: what we keep, and why</Text>
+      <View style={{ flexDirection: 'row', gap: 12 }}>
+        <Text onPress={() => router.push('/privacy')} style={[t.tiny, t.muted, t.link]}>Privacy: what we keep, and why</Text>
+        <Text onPress={() => router.push('/terms')} style={[t.tiny, t.muted, t.link]}>Terms</Text>
+      </View>
     </Page>
   )
 }

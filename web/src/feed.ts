@@ -3,8 +3,8 @@
 // lead "From the fans" and Today's rail. Shared by the web app (components/Feed.tsx) and the Android app
 // (mobile/src/feed.tsx), so it touches nothing of a browser's.
 
-import { dateOnly, day, parseDate } from './format'
-import type { Feed, FeedCircle, FeedEntry, FeedItem } from './types'
+import { dateOnly, day, parseDate, safeHref } from './format'
+import type { Feed, FeedCircle, FeedEntry, FeedItem, VideoMark } from './types'
 
 export type FeedKind = FeedItem['kind']
 export const FEED_KINDS: [FeedKind, string][] = [['video', 'Videos'], ['post', 'Posts'], ['news', 'News']]
@@ -194,6 +194,18 @@ export const refusedHere = (code: unknown): boolean => code === 100 || code === 
 
 /** Whether an item is a Short as the Feed plays one (BHA-384): a video YouTube can play here, taller than it's wide. */
 export const isShort = (item?: FeedItem | null): boolean => Boolean(item && item.kind === 'video' && item.video?.youtube_id && upright(item))
+
+/** The icon of the source a video is from, as its card shows it (the server's VideoMark: YouTube's, for one of
+ * YouTube's, whose API policies want every card showing its content to say so with its icon, unaltered and linked to
+ * the video there: III.F.2): drawn `height` high but never under the source's min_height, linking to the video where
+ * it plays, with what a screen reader says of the link. None for a post, a story, or a video its source sends no icon for. */
+export function sourceMark(item: FeedItem, height = 0): { mark: VideoMark; href: string; width: number; height: number; label: string } | null {
+  const mark = item.kind === 'video' ? item.video?.mark : null
+  const href = safeHref(item.url)
+  if (!mark || !href || !(mark.width > 0) || !(mark.height > 0) || !mark.paths?.length) return null
+  const h = Math.max(height, mark.min_height)
+  return { mark, href, height: h, width: (h * mark.width) / mark.height, label: `Watch on ${mark.name}` }
+}
 
 /** Whether a video is taller than it's wide (a Short): framed and played upright. */
 export const upright = (item: FeedItem): boolean => item.kind === 'video' && item.video?.upright === true

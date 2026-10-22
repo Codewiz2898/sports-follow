@@ -28,6 +28,7 @@ export function NotificationsPage() {
       <span className="row tiny muted" style={{ justifyContent: 'flex-start' }}>
         <Link to="/credits" className="link">Credits and sources</Link>
         <Link to="/privacy" className="link">Privacy</Link>
+        <Link to="/terms" className="link">Terms</Link>
       </span>
     </>
   )

@@ -49,7 +49,10 @@ export function CreditsPage() {
           </section>
         </>
       )}
-      <Link to="/privacy" className="tiny muted link" style={{ alignSelf: 'flex-start' }}>Privacy: what we keep, and why</Link>
+      <span className="row tiny muted" style={{ justifyContent: 'flex-start' }}>
+        <Link to="/privacy" className="link">Privacy: what we keep, and why</Link>
+        <Link to="/terms" className="link">Terms</Link>
+      </span>
     </>
   )
 }

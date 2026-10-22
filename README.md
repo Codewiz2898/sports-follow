@@ -463,9 +463,17 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   only once the page has been tapped: before that one starts muted with its sound held back, and the fan's next tap
   on the page lets it out. It's
   `SPORTS_FOLLOW_FEED_LAYOUT` until the admin panel's Feed tab sets it, live in every process within seconds.
-  Titles are tidied as they're served (`sports_follow/titles.py`): HTML's escapes read (a search's titles came
-  escaped before BHA-358 read them as written), emoji, hashtags and the channel's name off,
-  bars as dots, a shouted part in sentence case keeping names (the players', `Sport.title_words`) as written.
+  Every video's card shows its source's icon, linked to the video there (`VideoSource.mark`, YouTube's red play
+  button as YouTube draws it, sent with each video as `video.mark` and drawn by `SourceMark` in both apps, 20 high
+  at least, in clear space the size of its triangle): YouTube's API policies want every card showing its content to
+  say so with its brand (III.F.2, BHA-652). It's by the "…" edge to edge, before the channel's name full screen
+  (not down the side, whose buttons would grow toward the player), in a Short's row, and beside the words on a
+  player's Feed. Privacy says the Feed uses the YouTube API Services, that YouTube's player may set cookies, and
+  links Google's Privacy Policy; Terms (`/terms`, linked wherever Privacy is) says using the app means agreeing to
+  YouTube's Terms of Service (III.A.1–2; the links are `web/src/legal.ts`).
+  Titles are shown as YouTube gives them, since its API policies want them unmodified (BHA-652): emoji, hashtags,
+  the channel's name and capitals stay; only HTML's escapes are read as they're served (`sports_follow/titles.py`: a
+  search's titles came escaped before BHA-358 read them as written).
   A video's picture is the biggest YouTube has for it (maxres, then sd, then hq; the sizes come with each read). In the dev server, `?feed-sample` on a player's page
   shows made-up videos and posts (`web/src/dev/feedSample.ts`, never in a build). The Android app has
   it all too: the Feed tab with its dot and circles (`mobile/src/app/feed.tsx`, its own address `/feed`, since
@@ -639,8 +647,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   serve a sport. A source of videos for the feed (`adapters/youtube.py`) is a `VideoSource` instead
   (`adapters/base.py`): it describes itself the same way, plus the shape of its channel ids
   (`channel_pattern`), lists a channel's latest `uploads` and what it says of up to 50 videos at once
-  (`facts`), how its player plays one (`embed`), a still of it (`picture`) and whether it's upright (`upright`),
-  and its one line is its place in `adapters.VIDEOS`. A source of news for the feed (`adapters/publisher_rss.py`)
+  (`facts`), how its player plays one (`embed`), a still of it (`picture`), whether it's upright (`upright`) and
+  whether its terms let it be served (`allowed`: not YouTube's made for kids), and its icon (`mark`), which every
+  card of its videos shows linked to the video there; one with API terms of its own adds its part to Privacy and
+  Terms (both apps' pages name it in their words, and `web/src/legal.ts` holds the links). Its one line is its
+  place in `adapters.VIDEOS`. A source of news for the feed (`adapters/publisher_rss.py`)
   is a `NewsSource`: the shape of the feed addresses it reads (`feed_pattern`) and a feed's latest `articles`, one
   line in `adapters.NEWS`. Parsing that two sources of a sport share lives in `sports_follow/sports/`, so removing a
   source never breaks another. `tests/test_sources.py` fails if shared code names a source: its system,
@@ -674,9 +685,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   the `feed` lane. Every half hour (`sports_follow/candidates.py`) it reads the latest uploads of every
   channel a running sport lists (`Sport.video_channels`: official channels, meaning leagues, federations, clubs,
   broadcasters and tournaments, and a few top creators; the only channels any stream keeps a video from,
-  BHA-349) from each channel's public feed, which costs no
-  quota (when a feed doesn't answer, as YouTube's often don't for a while, the channel's uploads playlist
-  costs 1 unit); keeps those whose title or description's opening (up to its first blank line or link, 300
+  BHA-349) from each channel's uploads playlist, through the Data API (`playlistItems.list`, 1 unit: never
+  youtube.com's public channel feeds, since YouTube's Developer Policies allow no other way to get its data,
+  III.I.14, BHA-652); keeps those whose title or description's opening (up to its first blank line or link, 300
   characters at most: not the related-video or podcast links under it) names a followed player of that sport, or one
   of its pool (below) (their full name or a hashtag of it, a nickname fans typed, or their surname when no other
   such player of the sport has it: the last word of their name, or of an alias that shares a word with it, and the
@@ -686,10 +697,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   players and 3 of its pool players, marked `about: team`, which the judge reads as a share about the team
   (`team`, served for them at 0.8 of one about them; it reads one such video once for all of them); asks YouTube about the new ones, 1 unit for every 50, which also says whether the
   maker declared paid promotion in it; and keeps those that pass the hard
-  filters (embeddable, public, playing in India (`SPORTS_FOLLOW_FEED_COUNTRY`), not live, 1 to 20 minutes)
+  filters (embeddable, public, not age-restricted, not made for kids (`status.madeForKids`: YouTube's III.E.4.j),
+  playing in India (`SPORTS_FOLLOW_FEED_COUNTRY`), not live, 1 to 20 minutes)
   in `feed_candidates`, one row per player and video, which goes with the player. A day later each is read
   again for its pace, and every stored video is read again weekly and dropped once removed, private, no
-  longer embeddable or blocked in India; while one is under two days old it's read again every six hours.
+  longer embeddable, age-restricted, made for kids or blocked in India; while one is under two days old it's read again every six hours.
   Some still won't play inside the app: a Content ID owner (LaLiga's, say) keeps them off other sites, which
   the Data API doesn't say (embeddable, no region rule). Only the player knows: YouTube's IFrame Player API
   says so (error 101 or 150, or 100 for one gone), and the apps then show "This one plays only on YouTube"
@@ -714,7 +726,11 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   lists the candidates newest first with the verdict, score and reason, to approve, hide or pin each, and
   sets each channel's trust. The feed only reads the table and never waits on the curator. YouTube's
   free quota is 10,000 units a day (reset at midnight Pacific), counted as the `youtube-data` budget with 1,000
-  never spent: a few hundred a day in use, about 4,850 at most if every channel's feed failed all day (101 channels). Searches
+  never spent: the channel poll is 48 units a channel a day (its uploads playlist every half hour: 4,848 for the
+  101 channels the sports list now, and 101 more for a curator restarted mid-day), and reading what's new and what's
+  stored again a few hundred more, so about 5,450 of the 9,000 spendable with the searches' reads. Each channel a
+  sport adds costs 48 a day: about 70 more fit before the poll needs a slower cadence or more quota
+  (`tests/test_moment_search.py` holds all of it to that). Searches
   have a quota of their own (BHA-342; YouTube moved `search.list` to it on 1 June 2026): 100 a day, 1 unit each,
   none of the 10,000, counted as the `youtube-search` budget with 5 never spent. Both are counted from midnight
   Pacific, as YouTube counts them; the Google Cloud console's quota page for the YouTube Data API v3 (APIs &
@@ -861,9 +877,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   promo, a rumour or a re-upload looks like to its fans; `restream_after`: how long a video from a channel nobody
   vouches for may run before it's taken for a whole game re-uploaded, or `None` where long videos are normal, as in
   chess), the only channels the feed's videos about its players come from (`video_channels`, official ones and a
-  few top creators, in one block at the end of its class, with `title_words` after it, the names a tidied title
-  keeps in capitals: real channel ids only, each checked to answer at
-  `https://www.youtube.com/feeds/videos.xml?channel_id=<id>`, which often takes a few tries; a sport that's off has
+  few top creators, in one block at the end of its class: real channel ids only, each checked to have an uploads playlist the Data API lists
+  (`playlistItems.list` with `playlistId` `UU` and the id after its `UC`); a sport that's off has
   none read; esports' are the `Esports` class's, for every game, and each game's own, its leagues' and teams', given
   with its `Game(..., channels=...)`), the words its videos' titles leave off a team's name (`team_affixes`: "FC",
   "Team") for matching a video to a player's team, the publishers' feeds it reads for news about its
@@ -1202,7 +1217,7 @@ the app takes the sports, their names and their colours from `GET /api/sports`:
 
 Every page is there: Today (with the welcome for a new fan), Live now, Search and an athlete's preview, a
 player's page with its tabs, a game's match page (with Follow for the game itself), Following, Alerts,
-Account (sign-in by email code), Credits, Privacy and a campaign's page (stann.in/gukesh, without the web's
+Account (sign-in by email code), Credits, Privacy, Terms and a campaign's page (stann.in/gukesh, without the web's
 "install the app" part). Where the web listens to the fan stream, the app reads again every 30 s for now
 (BHA-231). A match page's Watch live plays Twitch, Kick and YouTube in a WebView (`react-native-webview`), in the
 page or, expanded, turned sideways (`expo-screen-orientation`), so a build from before those two (BHA-345) has to be rebuilt. A server

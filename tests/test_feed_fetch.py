@@ -1,6 +1,6 @@
-"""The feed's fetch (candidates.py, adapters/youtube.py) without a database: a channel's feed read, a followed
+"""The feed's fetch (candidates.py, adapters/youtube.py) without a database: a channel's uploads read, a followed
 player's names found in a video's title or description, the hard filters, and what each request costs of
-YouTube's daily quota. Every feed and API answer here is made up, in the shape YouTube sends."""
+YouTube's daily quota. Every API answer here is made up, in the shape YouTube sends."""
 
 from __future__ import annotations
 
@@ -25,31 +25,17 @@ def listing(monkeypatch, *channels: str) -> None:
 NOW = datetime(2026, 10, 20, 6, 0, tzinfo=timezone.utc)
 
 
-def feed(*entries: tuple[str, str, str]) -> str:
-    """A channel's public feed (Atom) with these (video id, title, description) entries, newest first."""
-    items = "".join(f"""
- <entry>
-  <id>yt:video:{vid}</id>
-  <yt:videoId>{vid}</yt:videoId>
-  <yt:channelId>{CHANNEL}</yt:channelId>
-  <title>{title}</title>
-  <link rel="alternate" href="https://www.youtube.com/watch?v={vid}"/>
-  <author><name>Made-up Cricket</name><uri>https://www.youtube.com/channel/{CHANNEL}</uri></author>
-  <published>2026-10-19T12:00:00+00:00</published>
-  <updated>2026-10-19T13:00:00+00:00</updated>
-  <media:group>
-   <media:title>{title}</media:title>
-   <media:thumbnail url="https://i4.ytimg.com/vi/{vid}/hqdefault.jpg" width="480" height="360"/>
-   <media:description>{description}</media:description>
-   <media:community><media:statistics views="1200"/></media:community>
-  </media:group>
- </entry>""" for vid, title, description in entries)
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
- <id>yt:channel:{CHANNEL[2:]}</id>
- <yt:channelId>{CHANNEL[2:]}</yt:channelId>
- <title>Made-up Cricket</title>{items}
-</feed>"""
+def uploads(*entries: tuple[str, str, str]) -> list[dict]:
+    """A channel's uploads playlist as playlistItems.list lists it (parts snippet and contentDetails), with these
+    (video id, title, description) entries, newest first: each uploaded an hour before it was published."""
+    return [{
+        "kind": "youtube#playlistItem", "id": f"item-{vid}",
+        "snippet": {"publishedAt": "2026-10-19T11:00:00Z", "channelId": CHANNEL, "title": title, "description": description,
+                    "thumbnails": {"high": {"url": f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg", "width": 480, "height": 360}},
+                    "channelTitle": "Made-up Cricket", "playlistId": "UU" + CHANNEL[2:], "position": n,
+                    "resourceId": {"kind": "youtube#video", "videoId": vid}, "videoOwnerChannelTitle": "Made-up Cricket", "videoOwnerChannelId": CHANNEL},
+        "contentDetails": {"videoId": vid, "videoPublishedAt": "2026-10-19T12:00:00Z"},
+    } for n, (vid, title, description) in enumerate(entries)]  # fmt: skip
 
 
 def video(vid: str, duration: str = "PT8M30S", views: int = 5000, likes: int = 300, embeddable: bool = True, privacy: str = "public",
@@ -74,20 +60,18 @@ def video(vid: str, duration: str = "PT8M30S", views: int = 5000, likes: int = 3
 
 
 class Fake:
-    """YouTube, made up: its public feeds and its Data API, counting what each was asked."""
+    """YouTube's Data API, made up, counting what it was asked. Nothing else of YouTube's is ever asked (its Developer
+    Policies, III.I.14: no other way to get its data than its API)."""
 
     def __init__(self):
-        self.feeds: dict[str, str | int] = {}  # channel id -> the feed, or the HTTP status it answers with
+        self.uploads: dict[str, list[dict] | int] = {}  # channel id -> its uploads playlist's items, or the HTTP status it answers with
         self.videos: dict[str, dict] = {}
-        self.playlists: dict[str, list[dict]] = {}
         self.error: tuple[int, str] | None = None  # (status, reason) every API call answers with
         self.asked: list[httpx.Request] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.asked.append(request)
-        if request.url.path == "/feeds/videos.xml":
-            body = self.feeds.get(request.url.params["channel_id"], 404)
-            return httpx.Response(body, text="<html>not found</html>") if isinstance(body, int) else httpx.Response(200, text=body)
+        assert request.url.host == "www.googleapis.com", f"asked YouTube outside its API: {request.url}"
         assert request.headers.get("x-goog-api-key") == "test-key" and "key" not in request.url.params
         if self.error:
             status, reason = self.error
@@ -97,7 +81,10 @@ class Fake:
             assert len(ids) <= 50
             return httpx.Response(200, json={"kind": "youtube#videoListResponse", "items": [self.videos[v] for v in ids if v in self.videos]})
         if request.url.path == "/youtube/v3/playlistItems":
-            return httpx.Response(200, json={"items": self.playlists.get(request.url.params["playlistId"], [])})
+            listed = self.uploads.get("UC" + request.url.params["playlistId"][2:], 404)
+            if isinstance(listed, int):
+                return httpx.Response(listed, json={"error": {"code": listed, "message": "not found", "errors": [{"reason": "playlistNotFound", "domain": "youtube.playlistItem"}]}})
+            return httpx.Response(200, json={"kind": "youtube#playlistItemListResponse", "items": listed})
         return httpx.Response(404, json={})
 
     def api_calls(self, path: str = "") -> int:
@@ -147,33 +134,38 @@ def test_a_sport_thats_off_has_no_channel_read(monkeypatch):
 # ---------------------------------------------------------------- reading a channel
 
 
-def test_a_channels_feed_is_read_as_its_uploads(fake):
-    fake.feeds[CHANNEL] = feed(("dQw4w9WgXcQ", "Kohli &amp; Rohit: the chase", "Full analysis #viratkohli"), ("bad", "not an id", ""))
-    [up] = SOURCE.uploads(CHANNEL)
-    assert (up.video_id, up.title, up.description, up.channel) == ("dQw4w9WgXcQ", "Kohli & Rohit: the chase", "Full analysis #viratkohli", "Made-up Cricket")
-    assert up.url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ" and up.thumbnail and up.published == datetime(2026, 10, 19, 12, tzinfo=timezone.utc)
-    assert fake.api_calls() == 0  # the feed costs no quota
-    SOURCE.uploads(CHANNEL)
-    assert len(fake.asked) == 1  # read again only after FEED_TTL
-
-
-def test_a_feed_that_doesnt_answer_falls_back_to_the_uploads_playlist_for_a_unit(fake, source_budgets):
-    fake.feeds[CHANNEL] = 404  # YouTube's feeds often answer 404 for a while
-    fake.playlists["UU" + CHANNEL[2:]] = [{"snippet": {"title": "Bumrah's yorkers", "description": "", "publishedAt": "2026-10-19T10:00:00Z",
-                                                       "videoOwnerChannelId": CHANNEL, "videoOwnerChannelTitle": "Made-up Cricket",
-                                                       "resourceId": {"kind": "youtube#video", "videoId": "abcdefghijk"}}}]
+def test_a_channels_uploads_are_read_from_its_uploads_playlist_for_a_unit(fake, source_budgets):
+    fake.uploads[CHANNEL] = uploads(("dQw4w9WgXcQ", "Kohli & Rohit: the chase", "Full analysis #viratkohli"), ("bad", "not an id", ""))
     with budget.in_lane("feed"):
         [up] = SOURCE.uploads(CHANNEL)
-    assert up.video_id == "abcdefghijk" and up.title == "Bumrah's yorkers" and fake.api_calls("/playlistItems") == 1
+    assert (up.video_id, up.title, up.description, up.channel, up.channel_id) == ("dQw4w9WgXcQ", "Kohli & Rohit: the chase", "Full analysis #viratkohli", "Made-up Cricket", CHANNEL)
+    assert up.url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ" and up.thumbnail
+    assert up.published == datetime(2026, 10, 19, 12, tzinfo=timezone.utc)  # when it was published, not uploaded
+    [asked] = fake.asked
+    assert asked.url.path == "/youtube/v3/playlistItems" and asked.url.params["playlistId"] == "UU" + CHANNEL[2:]
+    assert asked.url.params["part"] == "snippet,contentDetails" and asked.url.params["maxResults"] == str(youtube.UPLOADS)
     assert budget.standing(youtube.BUDGET)["windows"][0]["used"] == 1
-
-
-def test_without_a_key_a_feed_that_doesnt_answer_is_an_error(fake, monkeypatch):
-    monkeypatch.setattr(youtube, "key", lambda: None)
-    fake.feeds[CHANNEL] = 500
-    with pytest.raises(AdapterError):
+    with budget.in_lane("feed"):
         SOURCE.uploads(CHANNEL)
-    assert fake.api_calls() == 0
+    assert len(fake.asked) == 1  # read again only after UPLOADS_TTL
+
+
+def test_a_playlist_item_without_its_videos_time_has_its_upload_time():
+    [item] = uploads(("abcdefghijk", "Bumrah's yorkers", ""))
+    del item["contentDetails"]
+    [up] = youtube.parse_playlist({"items": [item]})
+    assert up.video_id == "abcdefghijk" and up.published == datetime(2026, 10, 19, 11, tzinfo=timezone.utc)
+
+
+def test_a_channel_youtube_cant_list_is_an_error_and_none_is_read_without_a_key(fake, monkeypatch):
+    with pytest.raises(AdapterError):
+        SOURCE.uploads(CHANNEL)  # no uploads playlist: YouTube answers 404
+    monkeypatch.setattr(youtube, "key", lambda: None)
+    fake.asked.clear()
+    fake.uploads[CHANNEL] = uploads(("abcdefghijk", "Kohli", ""))
+    with pytest.raises(AdapterError):
+        SOURCE.uploads("UC" + "b" * 22)
+    assert fake.asked == []
     with pytest.raises(AdapterError):
         SOURCE.uploads("UCnot-a-channel")
 
@@ -301,6 +293,7 @@ def facts(**kw) -> VideoFacts:
     ({"allowed": ("GB", "US")}, "blocked in IN"),
     ({"allowed": ("IN",)}, None),
     ({"age_restricted": True}, "age restricted"),
+    ({"made_for_kids": True}, "made for kids"),
 ])
 def test_the_hard_filters(kw, why):
     assert candidates.refused(facts(**kw), "IN") == why
@@ -330,6 +323,30 @@ def test_an_age_restricted_video_isnt_kept_and_one_kept_before_is_gone(fake):
     assert got["agelimit000"].age_restricted and not got["rated000000"].age_restricted
     assert candidates.refused(got["agelimit000"], "IN") == candidates.gone(got["agelimit000"], "IN") == "age restricted"
     assert candidates.refused(got["rated000000"], "IN") is None
+
+
+def test_a_video_made_for_kids_isnt_kept_and_one_kept_before_is_gone(fake):
+    """YouTube's Developer Policies (III.E.4.j): every embedded video's Made for Kids status is looked up, and tracking
+    turned off for those made for kids. The feed keeps none: refused when found, dropped at its next read."""
+    kids, other = video("forkids0000"), video("notforkids0")
+    kids["status"]["madeForKids"], other["status"]["madeForKids"] = True, False
+    fake.videos.update({"forkids0000": kids, "notforkids0": other})
+    got = SOURCE.facts(list(fake.videos))
+    assert got["forkids0000"].made_for_kids and not got["notforkids0"].made_for_kids
+    assert candidates.refused(got["forkids0000"], "IN") == candidates.gone(got["forkids0000"], "IN") == "made for kids"
+    assert candidates.refused(got["notforkids0"], "IN") is None
+    assert "status" in fake.asked[0].url.params["part"].split(",")
+    # What a stored row keeps of it says so too, so the Feed doesn't serve one kept before (feed.judged).
+    assert not SOURCE.allowed(got["forkids0000"].raw) and SOURCE.allowed(got["notforkids0"].raw) and SOURCE.allowed(None)
+
+
+def test_a_video_source_brings_its_icon_for_its_cards():
+    """Each card of a YouTube video shows YouTube's icon, linked to the video on YouTube (III.F.2), drawn as YouTube
+    draws it: red with the white triangle, at least 20 high."""
+    mark = SOURCE.mark
+    assert mark is not None and mark.name == SOURCE.provider.name and mark.min_height >= 20
+    assert [fill for fill, _ in mark.paths] == ["#FF0000", "#FFFFFF"] and all(d.startswith("M") and d.endswith("Z") for _, d in mark.paths)
+    assert 1.4 < mark.width / mark.height < 1.45
 
 
 # ---------------------------------------------------------------- names

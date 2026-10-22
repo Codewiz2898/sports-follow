@@ -162,9 +162,6 @@ announces it is rumour. Full-game uploads are restreams."""
         "UCqQo7ewe87aYAe7ub5UqXMw",  # House of Highlights
         "UC3L9XPe0_FGfRG-CMGtBvFg",  # JxmyHighroller: analysis (2.6M subscribers)
     )
-    title_words = (  # kept as written in a title put in sentence case (titles.py)
-        "NBA", "WNBA", "MVP", "NBA Finals", "All-Star", "Lakers", "Warriors", "Celtics", "Knicks",
-        "Bucks", "Nuggets", "Mavericks", "Spurs", "76ers", "Sixers", "Suns", "Bulls", "LeBron")
     # Not BBC Sport or The Times of India: their terms need consent first (BHA-329).
     news_feeds = {
         "https://www.cbssports.com/rss/headlines/nba/": "CBS Sports",

@@ -306,9 +306,14 @@ export interface FeedItem {
   // feed. None: a story's headline on the sport's colour; a post is words only.
   picture?: string | null
   // upright: taller than it's wide (a Short), framed and played upright; missing from a server before BHA-358: wide.
-  video?: { youtube_id: string; duration: number | null; views: number | null; upright?: boolean } | null
+  // mark: its source's icon, which the card shows linked to the video where it plays (feed.ts sourceMark).
+  video?: { youtube_id: string; duration: number | null; views: number | null; upright?: boolean; mark?: VideoMark | null } | null
   post?: { platform: string; own: boolean } | null  // platform as fans call it: "Open on X"
 }
+
+/** The icon of the source a video is from, as the server sends it (sports_follow/feed.py Mark): its name, and its
+ * drawing as the source draws it, paths painted in order in a width x height box, never drawn under min_height. */
+export interface VideoMark { name: string; width: number; height: number; min_height: number; paths: { fill: string; d: string }[] }
 
 /** Items around one of the player's moments (`match` its game's page), or "This week", "This month" and "Earlier". */
 export interface FeedGroup { head: string; moment: boolean; when: string | null; match: string | null; items: FeedItem[] }
