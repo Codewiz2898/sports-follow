@@ -197,6 +197,14 @@ def test_a_full_pool_gives_up_in_seconds():
     assert engine.pool.timeout() == 5
 
 
+def test_every_sync_route_gives_its_connection_back_as_it_returns():
+    """server.Route has each sync route commit get_db's session on its own thread (db.released); a route added
+    some other way (a router of its own) would hold its connection until its answer was sent (BUG-264)."""
+    sync = [r for r in server.app.routes if isinstance(r, APIRoute) and not inspect.iscoroutinefunction(r.endpoint)]
+    assert {"/api/me/matches", "/api/me/week", "/api/me/activity"} <= {r.path for r in sync}
+    assert [r.path for r in sync if getattr(r.endpoint, "__wrapped__", None) is None] == []
+
+
 @pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
 def test_a_hundred_requests_at_once_all_get_answers_and_health_stays_quick(monkeypatch):
     """One API process with its own pool (15 connections) and anyio's 40 threads, 100 requests at once to a sync
