@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from . import engine, sports, wiki
-from .adapters import ALL, KNOWN, pick, providers
+from .adapters import ALL, KNOWN, NEWS, VIDEOS, Provider, pick, providers
 from .agent import MODEL
 from .config import APP_NAME, SOURCES
 
@@ -60,11 +60,15 @@ NOTICES = [
 ]
 
 
+def _joined(words: list[str]) -> str:
+    """["The Guardian", "Sky Sports", "HLTV"] -> "The Guardian, Sky Sports and HLTV"."""
+    return words[0] if len(words) == 1 else f"{', '.join(words[:-1])} and {words[-1]}"
+
+
 def _listed(sports: list[str]) -> str:
     """["Football", "Cricket (ESPNcricinfo)", "Tennis"] -> "Football, cricket (ESPNcricinfo) and tennis"."""
     words = list(dict.fromkeys(sports))
-    words = [words[0], *(w[0].lower() + w[1:] for w in words[1:])]
-    return words[0] if len(words) == 1 else f"{', '.join(words[:-1])} and {words[-1]}"
+    return _joined([words[0], *(w[0].lower() + w[1:] for w in words[1:])])
 
 
 def _model() -> str:
@@ -82,18 +86,41 @@ PHOTO_NOTICES = [
 
 def buildable() -> dict[str, Any]:
     """The sources this build can run, by system: those it has the keys for and SPORTS_FOLLOW_SOURCES lists (or lists
-    none), of the sports it may run (SPORTS_FOLLOW_SPORTS). Whether or not the admin panel has them, or their sports,
-    on now: turning one off stops it being read, but its players' pages, their results and their games' boards stay
-    up, and so does the credit their data's licence asks for."""
-    return dict(pick(ALL, SOURCES, sports.ALLOWED))
+    none), of the sports it may run (SPORTS_FOLLOW_SPORTS), and the Feed's video and news sources likewise. Whether or
+    not the admin panel has them, or their sports, on now: turning one off stops it being read, but its players'
+    pages, their results, their games' boards and the Feed's videos and stories stay up, and so does the credit their
+    data's licence asks for."""
+    feeds = {s.system: s for s in (*VIDEOS.values(), *NEWS.values()) if s.available() and (not SOURCES or s.system in SOURCES)}
+    return {**pick(ALL, SOURCES, sports.ALLOWED), **feeds}
+
+
+def _feeds(sources: Mapping[str, Any], on: Sequence[sports.Sport]) -> list[dict[str, Any]]:
+    """The Feed's sources among these that read one of these sports (a channel it lists, Sport.video_channels; a
+    publisher's feed, Sport.news_feeds), each credited for what it gives; a news source with the publishers whose
+    feeds it reads, as each story in the Feed links its own."""
+    read: dict[Provider, list[str]] = {}
+    for video in VIDEOS.values():
+        if video.system in sources and any(video.channel_pattern.fullmatch(c) for s in on for c in s.video_channels):
+            read.setdefault(video.provider, [])
+    for news in NEWS.values():
+        publishers = [outlet for s in on for feed, outlet in s.news_feeds.items() if news.feed_pattern.fullmatch(feed)]
+        if news.system in sources and publishers:
+            read.setdefault(news.provider, []).extend(publishers)
+    out = []
+    for provider, publishers in read.items():
+        named = f" From {_joined(list(dict.fromkeys(publishers)))}." if publishers else ""
+        entry = {"name": provider.name, "url": provider.url, "what": f"The Feed: {provider.what}{named}"}
+        out.append(entry | {k: v for k in ("licence", "licence_url", "note") if (v := getattr(provider, k))})
+    return out
 
 
 def credits(sources: Mapping[str, Any] | None = None, stockfish: bool | None = None, agent: bool | None = None, photos: list[dict[str, Any]] | None = None, on: Sequence[sports.Sport] | None = None) -> dict[str, Any]:
     """The Credits page for this build: the data providers of its sources (`sources`, by default buildable()), the
     rest it relies on, the software, and every player photo shown (photos.used). Each source describes its provider
     and what it covers (adapters.base.Provider); licensed ones come first; each sport it may run (`on`, by default
-    sports.ALLOWED, those turned off for now too) adds whose work its own pages run (Sport.credits_also). The AI
-    model and the news it summarises only when the research agent runs (config.AGENT)."""
+    sports.ALLOWED, those turned off for now too) adds whose work its own pages run (Sport.credits_also), and each of
+    the Feed's sources that reads one of them what it gives (_feeds). The AI model and the news it summarises only
+    when the research agent runs (config.AGENT)."""
     from .config import AGENT, RESEARCH
 
     sources = buildable() if sources is None else sources
@@ -134,8 +161,10 @@ def credits(sources: Mapping[str, Any] | None = None, stockfish: bool | None = N
             "licence": "GPL-3.0",
             "licence_url": "https://www.gnu.org/licenses/gpl-3.0.html",
         })
-    for sport in sports.ALLOWED if on is None else on:
+    on = sports.ALLOWED if on is None else on
+    for sport in on:
         also += sport.credits_also()
+    also += _feeds(sources, on)
     if agent:
         also += [
             {

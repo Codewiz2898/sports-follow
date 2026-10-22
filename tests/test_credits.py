@@ -8,7 +8,7 @@ from importlib.metadata import metadata
 from pathlib import Path
 
 from sports_follow import controls, credits
-from sports_follow.adapters import ALL, KNOWN
+from sports_follow.adapters import ALL, KNOWN, NEWS, VIDEOS
 from sports_follow.sports import chess, football
 
 
@@ -94,6 +94,25 @@ def test_a_sport_or_source_turned_off_keeps_its_credit():
         turn(True)
     can = {a.provider.name for a in ALL}
     assert set(_names(credits.credits(stockfish=False, agent=False)["data"])) <= can
+
+
+def test_the_feeds_sources_are_credited():
+    # The Feed shows videos and publishers' headlines with or without the research agent: each of its sources is
+    # credited for what it gives, a news source with the publishers whose feeds the sports read.
+    feeds = [*VIDEOS.values(), *NEWS.values()]
+    page = credits.credits({s.system: s for s in feeds}, stockfish=False, agent=False, on=(football.SPORT, chess.SPORT))
+    also = {c["name"]: c for c in page["also"]}
+    for source in feeds:
+        entry = also.get(source.provider.name)
+        assert entry and entry["url"] == source.provider.url and source.provider.what in entry["what"], source.system
+    for source in NEWS.values():
+        read = [outlet for s in (football.SPORT, chess.SPORT) for feed, outlet in s.news_feeds.items() if source.feed_pattern.fullmatch(feed)]
+        assert read and all(outlet in also[source.provider.name]["what"] for outlet in read)
+    # By default, those this build can run (a video source with no key isn't), whether the admin panel has them on now.
+    for source in feeds:
+        controls.turn_source(source.system, False)
+    named = _names(credits.credits(stockfish=False, agent=False)["also"])
+    assert [s.provider.name in named for s in feeds] == [s.available() for s in feeds]
 
 
 ROOT_WEB = ROOT / "web"
