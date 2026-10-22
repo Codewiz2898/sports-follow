@@ -9,6 +9,7 @@ from __future__ import annotations
 import gzip
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -562,6 +563,79 @@ def test_a_refused_fide_page_gives_what_it_last_listed_and_search_still_finds_ev
     answers["https://lichess.org/api/broadcast/search?q=carlsen"] = httpx.Response(200, json={"currentPageResults": []})
     answers["https://lichess.org/api/broadcast/top"] = httpx.Response(200, json={"active": [], "upcoming": []})
     assert chess.fixtures(ref) == []
+
+
+def test_a_player_fide_names_without_a_comma_is_found_by_their_name_not_its_initial(monkeypatch):
+    # FIDE writes Gukesh "Gukesh D" and Praggnanandhaa "Praggnanandhaa R", with no comma (BUG-209): their events are
+    # searched by "gukesh" and "praggnanandhaa", never "d" or "r" (every "Group D" and "Open R" on Lichess), and an
+    # event's players line names them so ("Carlsen, Gukesh, Praggnanandhaa"). Their FIDE pages refused, as the limit
+    # every datacenter shares does: search and what's on now find the event. Carlsen's "Carlsen, Magnus" as before.
+    now = datetime.now(timezone.utc)
+    ms = lambda d: int(d.timestamp() * 1000)  # noqa: E731
+    gukesh, pragg, carlsen, sindarov = (
+        {"name": name, "fideId": fide, "rating": rating, "title": "GM"}
+        for name, fide, rating in (("Gukesh D", 46616543, 2767), ("Praggnanandhaa R", 25059530, 2758), ("Carlsen, Magnus", 1503014, 2837), ("Sindarov, Javokhir", 14205483, 2726)))
+    tour = {"id": "TataStel", "name": "Tata Steel Masters 2027", "info": {"players": "Carlsen, Gukesh, Praggnanandhaa, Sindarov"},
+            "dates": [ms(now + timedelta(hours=3)), ms(now + timedelta(days=12))]}
+    r1 = {"id": "Round001", "name": "Round 1", "ongoing": False, "finished": False, "startsAt": ms(now + timedelta(hours=3))}
+    r2 = {"id": "Round002", "name": "Round 2", "ongoing": False, "finished": False, "startsAt": ms(now + timedelta(days=1, hours=3))}
+    start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    round1 = {"round": r1, "tour": tour, "games": [{"id": "gameaaaa", "players": [gukesh, sindarov], "fen": start, "status": "*"},
+                                                    {"id": "gamebbbb", "players": [carlsen, pragg], "fen": start, "status": "*"}]}
+    group_d = {"id": "GroupDxx", "name": "Club Championship 2027 | Group D", "info": {"players": "Someone, Else"}, "dates": [ms(now - timedelta(days=1)), ms(now + timedelta(days=2))]}
+    asked: list[str] = []
+
+    def get_json(url, ttl, text=False):
+        asked.append(url.removeprefix("https://lichess.org"))
+        if url.startswith("https://lichess.org/fide/"):
+            raise lichess_chess.RateLimited("Lichess rate limit (429) on /fide/…")
+        if "/broadcast/search?q=" in url:
+            q = url.split("q=")[1]
+            # Lichess's search finds the event by Gukesh's and Carlsen's names, not yet by Praggnanandhaa's: the
+            # broadcasts on now and to come (top) list it.
+            return {"currentPageResults": [{"tour": tour}] if q in ("gukesh", "carlsen") else [{"tour": group_d}] if len(q) == 1 else []}
+        if url.endswith("/broadcast/top"):
+            return {"active": [], "upcoming": [{"tour": tour, "round": r1}]}
+        if url.endswith(f"/broadcast/{tour['id']}"):
+            return {"tour": tour, "rounds": [r1, r2]}
+        if url.endswith(f"/broadcast/-/-/{r1['id']}"):
+            return round1
+        raise AdapterError(f"not faked: {url}")
+
+    monkeypatch.setattr(lichess_chess, "get_json", get_json)
+    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: Kept())  # the FIDE page never read before
+    chess = lichess_chess.LichessChess()
+    for player, query, opponent in ((gukesh, "gukesh", "Javokhir Sindarov"), (pragg, "praggnanandhaa", "Magnus Carlsen"), (carlsen, "carlsen", "Praggnanandhaa R")):
+        asked.clear()
+        ref = lichess_chess.ref_for({"id": player["fideId"], "name": player["name"]})
+        fixtures = chess.fixtures(ref)
+        assert [a for a in asked if "/search?" in a] == [f"/api/broadcast/search?q={query}"], ref.name
+        assert not any(t["id"] in a for a in asked for t in (group_d,)), ref.name  # no "Group D" event read
+        # Their game in round 1 (paired), and round 2, not paired yet, as theirs: the event lists them.
+        assert [(f.source_id, f.status) for f in fixtures] == [(f"Round001-{player['fideId']}", "scheduled"), (f"Round002-{player['fideId']}", "scheduled")], ref.name
+        assert opponent in fixtures[0].title and fixtures[1].detail == "Pairings not published yet"
+    # The words each is known by: FIDE's surname for "Surname, Given"; for a name with no comma, each part but an initial.
+    names = ("Gukesh D", "Praggnanandhaa R", "Carlsen, Magnus", "Nihal Sarin", "Van Foreest, Jorden", "So, Wesley")
+    assert [lichess_chess.known_as(lichess_chess.ref_for({"id": 1, "name": n})) for n in names] == [
+        ["gukesh"], ["praggnanandhaa"], ["carlsen"], ["nihal", "sarin"], ["foreest"], ["so"]]
+
+    # Events that only mention him (newer, more of them than MAX_TOURS) don't push out the one his FIDE page lists.
+    own = {"id": "OwnEvent", "name": "Gukesh's event", "dates": [ms(now - timedelta(days=12)), ms(now - timedelta(days=3))]}
+    others = [{"id": f"Mention{i}", "name": f"Open {i}", "info": {"players": "Someone, Else"}, "dates": [ms(now - timedelta(days=1)), ms(now + timedelta(days=2))]}
+              for i in range(lichess_chess.MAX_TOURS)]
+
+    def page_and_search(url, ttl, text=False):
+        if url.startswith("https://lichess.org/fide/"):
+            return '<a href="/broadcast/x/round-9/AAAAAAAA">'
+        if url.endswith("/broadcast/-/-/AAAAAAAA"):
+            return {"tour": own}
+        if "/broadcast/search?q=" in url:
+            return {"currentPageResults": [{"tour": t} for t in others]}
+        return {"active": [], "upcoming": []}
+
+    monkeypatch.setattr(lichess_chess, "get_json", page_and_search)
+    tours = chess._tours(lichess_chess.ref_for({"id": gukesh["fideId"], "name": "Gukesh D"}), now)
+    assert len(tours) == lichess_chess.MAX_TOURS and tours[0]["id"] == "OwnEvent"
 
 
 def test_tournament_pgn_gives_every_round_in_one_read():

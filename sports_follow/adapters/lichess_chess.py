@@ -24,7 +24,7 @@ from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import httpx
 
@@ -197,6 +197,30 @@ def name_score(wanted: str, fide_name: str) -> int:
         if any(h == w or (len(h) == 1 and w.startswith(h)) or (len(w) == 1 and h.startswith(w)) for h in have):
             score += 1
     return score
+
+
+def known_as(ref: PlayerRef) -> list[str]:
+    """The words a player's events name them by, folded, each one searched for (LichessChess._tours). FIDE writes most
+    names "Surname, Given", which the display name turns around (display_name: "Carlsen, Magnus" is "Magnus Carlsen"),
+    so it ends with the surname, the one word to go by: a given name is anyone's. A name FIDE writes with no comma
+    ("Gukesh D", "Praggnanandhaa R", "Nihal Sarin") is shown as it is, and an event's players line may give either part
+    ("Gukesh", "Nihal"): each of them, longest first, but never an initial ("D", "R", "Vr"), which would find every
+    "Group D". Which it is, the profile address says: it keeps FIDE's order (ref_for)."""
+    words = naming.fold(ref.name).split()
+    if not words:
+        return []
+    fide = naming.fold(unquote((ref.profile_url or "").rstrip("/").rpartition("/")[2]).replace("_", " ")).split()
+    if fide != words and len(words[-1]) > 1:
+        return [words[-1]]
+    parts = sorted(dict.fromkeys(w for w in words if len(w) > 2), key=len, reverse=True)
+    return parts or [max(words, key=len)]
+
+
+def names_them(tour: dict[str, Any], names: list[str]) -> bool:
+    """Whether an event's name or players line ("Carlsen, Gukesh, Praggnanandhaa") has one of the words a player is
+    known by (known_as)."""
+    text = naming.fold(f"{tour.get('name', '')} {(tour.get('info') or {}).get('players', '')}").replace(",", " ").split()
+    return any(name in text for name in names)
 
 
 def pick_player(results: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
@@ -720,13 +744,15 @@ class LichessChess(Adapter):
 
     def _tours(self, ref: PlayerRef, now: datetime) -> list[dict[str, Any]]:
         """Broadcast tournaments the player is likely in: the "Recent tournaments" on their Lichess
-        FIDE page, broadcast search on their surname, and what's running now that names them.
+        FIDE page, broadcast search on each word they're known by (known_as), and what's running now
+        that names them. Those on their page or naming them come first, then the newest: search's
+        other hits (an event that only mentions them) don't push their own out.
 
         The FIDE page is the only place Lichess lists a player's events; the API has no endpoint
         for it, and search misses events whose player list doesn't name them (Carlsen's Global
         Chess League final).
         """
-        surname = naming.fold(ref.name).split()[-1]
+        names = known_as(ref)
         found: dict[str, dict[str, Any]] = {}
         for round_id in self._page_rounds(ref):
             try:
@@ -737,14 +763,15 @@ class LichessChess(Adapter):
                 continue  # search below still finds the well-known events
             if tour.get("id"):
                 found.setdefault(tour["id"], tour)
-        search = get_json(f"{API}broadcast/search?q={quote(surname)}", ttl=3600)
-        for entry in search.get("currentPageResults") or []:
-            found.setdefault(entry["tour"]["id"], entry["tour"])
+        theirs = set(found)
+        for name in names:
+            hits = get_json(f"{API}broadcast/search?q={quote(name)}", ttl=3600)
+            for entry in hits.get("currentPageResults") or []:
+                found.setdefault(entry["tour"]["id"], entry["tour"])
         top = get_json(f"{API}broadcast/top", ttl=600)
         for entry in [*(top.get("active") or []), *(top.get("upcoming") or [])]:
             tour = entry["tour"]
-            text = naming.fold(f"{tour.get('name', '')} {(tour.get('info') or {}).get('players', '')}")
-            if surname in text.split() or surname in text.replace(",", " ").split():
+            if names_them(tour, names):
                 found.setdefault(tour["id"], tour)
         lo, hi = now - timedelta(days=DAYS_BACK), now + timedelta(days=DAYS_AHEAD)
 
@@ -752,12 +779,12 @@ class LichessChess(Adapter):
             dates = [d for d in (_dt(x) for x in tour.get("dates") or []) if d]
             return bool(dates) and dates[-1] >= lo and dates[0] <= hi
 
-        tours = sorted((t for t in found.values() if in_window(t)), key=lambda t: (t.get("dates") or [0])[0], reverse=True)
+        tours = sorted((t for t in found.values() if in_window(t)), key=lambda t: (t["id"] in theirs or names_them(t, names), (t.get("dates") or [0])[0]), reverse=True)
         return tours[:MAX_TOURS]
 
     def fixtures(self, ref: PlayerRef) -> list[Fixture]:
         now = datetime.now(timezone.utc)
-        surname = naming.fold(ref.name).split()[-1]
+        names = known_as(ref)
         out: list[Fixture] = []
         for tour in self._tours(ref, now):
             try:
@@ -797,9 +824,8 @@ class LichessChess(Adapter):
                 elif not data.get("games") and not rnd.get("finished"):
                     unpaired.append(rnd)  # starting soon, pairings not out
                 # else: paired without them (a bye, or not in this section)
-            # Rounds not yet paired count as the player's only if they've played in this event or it lists them.
-            listed = surname in naming.fold((tour.get("info") or {}).get("players", "")).replace(",", " ").split()
-            if games or listed:
+            # Rounds not yet paired count as the player's only if they've played in this event or it names them.
+            if games or names_them(tour, names):
                 out += games + [fixture_for(tour, rnd, [], ref.athlete_id, now) for rnd in unpaired[:3]]
         return sorted(out, key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
 
