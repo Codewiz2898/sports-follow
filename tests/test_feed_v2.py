@@ -66,6 +66,23 @@ def test_a_title_is_tidied_as_its_served(title, channel, keep, shown):
     assert titles.tidy(title, channel, CRICKET.title_words, keep) == shown
 
 
+@pytest.mark.parametrize(("title", "shown"), [
+    # BUG-254: a shouted title's other side was put in lower case ("Gukesh vs ding", "Ind vs aus", "5-1 aek"), and
+    # HTML escaped twice over was left escaped once ("<b>Kohli</b> out").
+    ("GUKESH VS DING: GAME 14 | WORLD CHESS CHAMPIONSHIP", "Gukesh vs Ding: game 14 · World chess championship"),
+    ("IND vs AUS", "IND vs AUS"),
+    ("IND VS AUS 3RD ODI HIGHLIGHTS", "IND vs AUS 3rd odi highlights"),
+    ("MAN CITY 5-1 AEK", "Man city 5-1 AEK"),
+    ("SALAH'S STUNNER V MAN UTD", "Salah's stunner v Man utd"),
+    ("INDIA BEAT AUS BY 6 WICKETS", "India beat aus by 6 wickets"),  # no "vs" or score beside it: words, as before
+    ("ROHIT AND GILL WIN IT 2-0 AT HOME", "Rohit and gill win it 2-0 at home"),  # small words beside a score stay small
+    ("&lt;b&gt;Kohli&lt;/b&gt; out", "Kohli out"),
+    ("Mbappé &amp;amp; Vinícius star", "Mbappé & Vinícius star"),
+])  # fmt: skip
+def test_a_shouted_titles_sides_keep_their_capitals_and_html_escaped_twice_is_read_as_written(title, shown):
+    assert titles.tidy(title) == shown
+
+
 def test_only_a_title_mostly_in_capitals_is_shouting():
     assert titles.shouted("PRESS CONFERENCE: SHREYAS IYER READY")
     assert not titles.shouted("IND vs AUS 2nd ODI Highlights")  # three of six
