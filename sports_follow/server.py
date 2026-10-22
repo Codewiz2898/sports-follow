@@ -2272,7 +2272,9 @@ def register_fcm(body: dict = Body(...), fan: str = Depends(fan_id), signed: acc
 
     The token is the device's alone (no other app, page or person is shown it, and this server never logs
     it), so presenting it is the proof a Web Push subscription's keys are: the app sends it again under
-    whoever it is now, after a sign-in or a lost cookie, and the device moves with it."""
+    whoever it is now, after a lost cookie, and the device moves with it. Not a device signed in to an account,
+    though, which moves into it as it signs in (accounts.adopt) and goes with its session: no other fan takes it,
+    nor does an account take an anonymous fan's device, which then couldn't take it back (BUG-103)."""
     if not fcm.enabled():
         raise HTTPException(503, "Notifications aren't set up on this server yet.")
     token = body.get("token")
@@ -2299,10 +2301,12 @@ def register_fcm(body: dict = Body(...), fan: str = Depends(fan_id), signed: acc
     stmt = stmt.on_conflict_do_update(
         index_elements=["endpoint"],
         set_={"fan_id": fan, "timezone": tz, "quiet_start": start, "quiet_end": end, "failures": 0, "session_id": session_id, **({} if live is None else {"live_cards": live})},
-        where=PushSubscription.transport == "fcm",
+        where=(PushSubscription.transport == "fcm")
+        & ((PushSubscription.fan_id == fan) | (PushSubscription.session_id.is_(None) & stmt.excluded.session_id.is_(None))),
     )
     if db.execute(stmt.returning(PushSubscription.id)).first() is None:
-        raise HTTPException(409, "That device's notifications belong to someone else.")  # a Web Push endpoint by that name: never a token
+        # Another fan's signed-in device, an anonymous fan's for an account, or a Web Push endpoint by that name.
+        raise HTTPException(409, "That device's notifications belong to someone else.")
     notify.trim_devices(db, fan, PushSubscription.endpoint == token, notify.MAX_DEVICES - 1)
     db.commit()
     return {"ok": True, "timezone": tz, "quiet_start": start, "quiet_end": end}
