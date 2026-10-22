@@ -43,6 +43,7 @@ MAX_TOURS = 6  # the most recent tournaments a player is followed through
 PAGE_TTL = 6 * 3600  # a player's Lichess FIDE page: their tournaments change a few times a month
 STALE_PAGE = 7 * 24 * 3600  # what the last copy read listed, kept in Redis while Lichess refuses a new one
 LIVE_MOVES_KEEP = 6 * 3600  # a live board's moves so far, kept in Redis this long after the last move added
+ANALYSED = 10 * 60  # a finished game's PGN without Lichess's analysis yet is read again once it's this old
 # A player's games over in a round, where their pairing's next game may follow (may_follow): the next game's chapter
 # shows only as it starts, a break of ten or twenty minutes in a tiebreak or before an armageddon, so the board waits
 # this long after the last one ended for it before it's over, whatever Lichess says of the round: it calls a round
@@ -323,6 +324,12 @@ def parse_pgn_rounds(pgn: str) -> dict[str, list[dict[str, Any]]]:
 _NUMBER = re.compile(r"(\d+)(\.+)(.*)")  # a move number, "12." (White's) or "12..." (Black's), maybe with the move on it
 _RESULTS = {"1-0", "0-1", "1/2-1/2", "½-½", "*"}
 _ENDINGS = {"normal", "unterminated", ""}  # Termination tags that say nothing more than the result
+# Lichess's analysis of a finished game, in its PGN: each move's evaluation from White's side, in pawns or as a
+# mate ("[%eval 0.31]", "[%eval #-4]": Black mates in 4), a move it judged an inaccuracy, a mistake or a blunder
+# marked with a glyph ("Bxf4?!") or its NAG ($6, $2, $4), and its word on that move ("Inaccuracy. Rb8 was best.").
+_EVAL = re.compile(r"\[%eval\s+(#)?(-?\d+(?:\.\d+)?)")
+_BEST = re.compile(r"(\S+) was best\.")
+_MARKS = {"?!": "?!", "?": "?", "??": "??", "$6": "?!", "$2": "?", "$4": "??"}
 
 
 def parse_pgn_game(pgn: str) -> dict[str, Any]:
@@ -330,24 +337,67 @@ def parse_pgn_game(pgn: str) -> dict[str, Any]:
     not played: Black's first in a game set up with Black to move), placed by the PGN's own move numbers, so a
     move written some other way ("e8Q", a null move "--") can't put the rest on the wrong side; castling written
     with zeros ("0-0") as O-O. Its opening ("Queen's Gambit Declined: Ragozin Defense") and how it ended where
-    that says more than the result ("resigned", "Time forfeit"). Comments, side lines, annotation glyphs ($1)
+    that says more than the result ("resigned", "Time forfeit").
+
+    Where Lichess has analysed the game (a broadcast game, a minute or so after it ends; never while it's on), what
+    its analysis says of each move ("evals", by the ply it made as a string, "1" White's first): its evaluation
+    from White's side ({"cp": 31}, or {"mate": -4}: Black mates in 4), and of a move it judged badly, how badly
+    ("mark": "?!" an inaccuracy, "?" a mistake, "??" a blunder) and the move it says was best there ("best", in
+    SAN); {} where it hasn't (marks without evaluations are an annotator's, not its). Other comments, side lines
     and the result are left out."""
     tags = {name: re.sub(r"\\(.)", r"\1", value) for name, value in re.findall(_TAG, pgn)}
-    body = re.sub(r"\{[^}]*\}|;[^\n]*", " ", re.sub(_TAG, " ", pgn))
-    while (bare := re.sub(r"\([^()]*\)", " ", body)) != body:  # side lines nest: the innermost go first
+    notes: list[str] = []
+
+    def aside(c: re.Match[str]) -> str:
+        """A comment, kept aside by its number for the move it follows ({3}); a ";" one, gone."""
+        if c[1] is None:
+            return " "
+        notes.append(c[1])
+        return f" {{{len(notes) - 1}}} "
+
+    body = re.sub(r"\{([^}]*)\}|;[^\n]*", aside, re.sub(_TAG, " ", pgn))
+    while (bare := re.sub(r"\([^()]*\)", " ", body)) != body:  # side lines nest, their comments in them: the innermost go first
         body = bare
     moves: dict[int, list[str | None]] = {}
+    said: dict[str, dict[str, Any]] = {}
     n, black = 1, False
+    ply: str | None = None  # the last move's
     for token in body.split():
+        if token.startswith("{"):
+            if ply is not None:
+                _analysed(said.setdefault(ply, {}), notes[int(token[1:-1])])
+            continue
         if number := _NUMBER.fullmatch(token):
             n, black, token = int(number[1]), len(number[2]) > 1, number[3]
-        if not token or token in _RESULTS or token.startswith("$"):
+        if not token or token in _RESULTS:
+            continue
+        if token.startswith("$"):
+            if ply is not None and token in _MARKS:
+                said.setdefault(ply, {})["mark"] = _MARKS[token]
             continue
         moves.setdefault(n, [None, None])[black] = re.sub(r"^0-0(-0)?", lambda c: c[0].replace("0", "O"), token)
+        ply = str((n - 1) * 2 + (2 if black else 1))
+        if (glyph := re.search(r"[?!]+$", token)) and glyph[0] in _MARKS:
+            said.setdefault(ply, {})["mark"] = _MARKS[glyph[0]]
         n, black = (n + 1, False) if black else (n, True)
     ending = tags.get("Termination") or ""
+    analysed = any("cp" in v or "mate" in v for v in said.values())
     return {"moves": [[k, *pair] for k, pair in sorted(moves.items())], "opening": tags.get("Opening") or None,
-            "ending": None if ending.lower() in _ENDINGS else ending}
+            "ending": None if ending.lower() in _ENDINGS else ending, "evals": {k: v for k, v in said.items() if v} if analysed else {}}
+
+
+def _analysed(said: dict[str, Any], note: str) -> None:
+    """What a comment on a move says of it, if Lichess's analysis wrote it: its evaluation, and the move that was
+    best instead."""
+    if value := _EVAL.search(note):
+        said.pop("cp", None)
+        said.pop("mate", None)
+        if value[1]:
+            said["mate"] = int(float(value[2]))
+        else:
+            said["cp"] = round(float(value[2]) * 100)
+    if best := _BEST.search(note):
+        said["best"] = best[1]
 
 
 def fen_ply(fen: str | None) -> int | None:
@@ -911,10 +961,10 @@ def recognise(query: str, adapters: list[Adapter]) -> tuple[Adapter, PlayerRef] 
 PROVIDER = Provider(
     name="Lichess",
     url="https://lichess.org",
-    what="broadcasts of over-the-board events (games, moves and clocks), shown with each organiser's delay.",
+    what="broadcasts of over-the-board events (games, moves and clocks), shown with each organiser's delay, and its analysis of each finished game, move by move.",
     licence="Broadcast games: CC BY-SA 4.0",
     licence_url="https://creativecommons.org/licenses/by-sa/4.0/",
-    note="The games are shown unchanged; the evaluations beside them are ours.",
+    note="The games are shown unchanged; a live game's evaluations are ours, a finished game's Lichess's.",
     search=LiveSearch(find=search, unfiltered=False, min_length=3),
     recognise=recognise,
     research=lambda adapters: f"{API}broadcast/top",  # the broadcasts on now
@@ -1213,7 +1263,14 @@ class LichessChess(Adapter):
             game.partial = not (data.get("round") or {}).get("finished")
             try:
                 if state.get("game_id"):
-                    state.update(parse_pgn_game(get_json(f"{API}study/{round_id}/{state['game_id']}.pgn", ttl=24 * 3600, text=True)))
+                    url = f"{API}study/{round_id}/{state['game_id']}.pgn"
+                    pgn = parse_pgn_game(get_json(url, ttl=24 * 3600, text=True))
+                    if pgn["moves"] and not pgn["evals"]:
+                        # Lichess analyses a game a minute or so after it ends: a copy from before then is read
+                        # again once it's ANALYSED old, and the game is partial (read again later) till it's there.
+                        pgn = parse_pgn_game(get_json(url, ttl=ANALYSED, text=True))
+                        game.partial = game.partial or not pgn["evals"]
+                    state.update(pgn, evals_from=PROVIDER.name if pgn["evals"] else None)
             except RateLimited:
                 raise  # the read fails, and is asked for again
             except AdapterError as exc:

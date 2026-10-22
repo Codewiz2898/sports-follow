@@ -1087,12 +1087,13 @@ def lane_round(adapter: Adapter, moved: dict[int, float], missing: set[int]) -> 
     return adapter.live_cadence if busy else max(60, adapter.live_cadence)
 
 
-def _evaluate(rules: sports.Sport, db: Session, event_id: int, snap: Snapshot, latest: EventState | None, player_ids: list[int]) -> None:
-    """A sport our engine evaluates (chess): ask the engine for the game's position while it's on and a
-    follower wants to hear about swings, and put the game's latest evaluation (engine.py) into the state,
-    settled by the sport once for the board (each followed player's event of it takes the same). A game
-    with its result is evaluated no more: the engine lets go of it, and its last evaluation stays as it
-    was, so nothing turns after the result (a mini-match stays live after its game is decided)."""
+def _evaluate(rules: sports.Sport, event_id: int, snap: Snapshot, latest: EventState | None) -> None:
+    """A sport our engine evaluates (chess): ask the engine for the game's position while it's on, whatever
+    its fans want to hear (each move's evaluation is kept for its match page: engine.plies), and put the
+    game's latest evaluation (engine.py) into the state, settled by the sport once for the board (each
+    followed player's event of it takes the same). A game with its result is evaluated no more: the engine
+    lets go of it, and its last evaluation stays as it was, so nothing turns after the result (a mini-match
+    stays live after its game is decided)."""
     state = snap.state
     game, fen = state.get("game_id"), state.get("fen")
     if not (game and fen and engine.enabled()):
@@ -1104,12 +1105,7 @@ def _evaluate(rules: sports.Sport, db: Session, event_id: int, snap: Snapshot, l
         if before:
             state["eval"] = before
         return
-    # Its followed players' fans, and the game's own (a game followed by itself).
-    wanted = [*db.scalars(select(Follow.alert_rules).where(Follow.player_id.in_(player_ids))).all(), *matches.rules(db, event_id)]
-    if any(moments.wanted((r or {}).get("level", moments.DEFAULT_LEVEL), "key", "swing") for r in wanted):
-        engine.request(game, fen, by=event_id, deepen=engine.deepens(event_id))  # past its first look while someone has it open
-    else:
-        engine.drop(game, by=event_id)  # nobody here wants its swings; the other player's event may
+    engine.request(game, fen, by=event_id, deepen=engine.deepens(event_id))  # past its first look while someone has it open
     ev = engine.latest(game)
     if ev and (settled := engine.settled(game, ev, rules.settle, before)):
         state["eval"] = settled
@@ -1259,7 +1255,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
         reopens = reopened(adapter, latest, snap)
         old_news = long_over(rules, event, snap, now)  # a first look at it tells nothing
         if rules.engine:
-            _evaluate(rules, db, event_id, snap, latest, [w[0] for w in watchers])
+            _evaluate(rules, event_id, snap, latest)
         if snap.squad:
             snap.state["team_sheet"] = True  # so the poll that first sees line-ups counts as a change
         changed = latest is None or (latest.status, latest.score_label, latest.clock_label, latest.state) != (snap.status, snap.score_label, snap.clock_label, snap.state)

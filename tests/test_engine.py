@@ -72,6 +72,10 @@ class FakeRedis:
         items = sorted((s, m) for m, s in self.zsets.get(name, {}).items() if s <= high)
         return [m for _, m in items][start:start + num if num else None]
 
+    def zrange(self, name, start, end):
+        items = [m for _, m in sorted((s, m) for m, s in self.zsets.get(name, {}).items())]
+        return items[start:None if end == -1 else end + 1]
+
     def zrem(self, name, member):
         self.zsets.get(name, {}).pop(member, None)
 
@@ -88,6 +92,7 @@ def took(r: FakeRedis, now: float) -> tuple[str, str] | None:
 START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 E4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
 E4E5 = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
+D4 = "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1"
 
 
 def evaluated(r: FakeRedis, game: str, fen: str, at: float) -> None:
@@ -172,15 +177,47 @@ def test_a_position_dropped_after_a_gap_in_polling_is_deepened_again():
 
 def test_the_cache_keeps_the_deepest_look_and_counts_all_the_work():
     r = FakeRedis()
-    look = {"cp": 30, "mate": None, "depth": 20}
+    look = {"cp": 30, "mate": None, "depth": 20, "best": "e7e5"}
     assert engine.keep(r, E4, {**look, "nodes": 500_000}, look=True) == {**look, "nodes": 500_000, "look": look}
-    assert engine.keep(r, E4, {"cp": 90, "mate": None, "depth": 18, "nodes": 500_000}) == {**look, "nodes": 1_000_000, "look": look}  # a cold hash table
-    deeper = {"cp": 40, "mate": None, "depth": 24}
+    assert engine.keep(r, E4, {"cp": 90, "mate": None, "depth": 18, "best": "c7c5", "nodes": 500_000}) == {**look, "nodes": 1_000_000, "look": look}  # a cold hash table
+    deeper = {"cp": 40, "mate": None, "depth": 24, "best": "c7c5"}
     assert engine.keep(r, E4, {**deeper, "nodes": 500_000}) == {**deeper, "nodes": 1_500_000, "look": look}
     assert engine.cached(r, E4.replace(" 0 1", " 2 5")) == {**deeper, "nodes": 1_500_000, "look": look}  # the same position
-    assert engine.keep(r, E4, {"cp": 99, "mate": None, "depth": 22, "nodes": 1}, look=True)["look"] == look  # a position's first look stays its own
+    assert engine.keep(r, E4, {"cp": 99, "mate": None, "depth": 22, "best": "d7d5", "nodes": 1}, look=True)["look"] == look  # a position's first look stays its own
     assert not engine.deep_enough({"depth": 24, "nodes": 1_500_000})
     assert engine.deep_enough({"depth": engine.DEPTH, "nodes": 1}) and engine.deep_enough({"depth": 12, "nodes": engine.POSITION_NODES})
+
+
+def test_positions_a_game_moved_on_from_are_put_by_and_taken_in_turns():
+    r = FakeRedis()
+    engine.request("A", START, r, now=100)
+    engine.request("A", E4, r, now=101)  # A moved before the engine got to its first position
+    engine.request("B", START, r, now=102)
+    engine.request("B", E4, r, now=103)
+    engine.request("A", E4E5, r, now=104)
+    assert took(r, now=105) == ("A", E4E5)  # the newest go first, as ever
+    # Then those put by: the earliest move of the game that has waited longest, which then waits behind the others.
+    assert [engine.take_put_by(r, now=110 + n) for n in range(4)] == [("A", START), ("B", START), ("A", E4), None]
+    engine.request("C", START, r, now=120)
+    engine.request("C", E4, r, now=121)
+    engine.drop("C", r)  # over: Lichess's analysis has its moves
+    assert engine.take_put_by(r, now=122) is None
+
+
+def test_each_move_keeps_the_deepest_reading_of_its_position():
+    r = FakeRedis()
+    engine._record(r, "A", START, {"cp": 15, "mate": None, "depth": 18, "best": "e2e4"})
+    engine._record(r, "A", E4, {"cp": 20, "mate": None, "depth": 18, "best": "e7e5"})
+    engine._record(r, "A", E4, {"cp": 31, "mate": None, "depth": 26, "best": "c7c5"})  # deepened while the game's on it
+    engine._record(r, "A", D4, {"cp": 25, "mate": None, "depth": 18}, on=False)  # put by, of another line: kept out
+    assert engine.plies("A", r) == {0: {"cp": 15, "mate": None, "depth": 18, "best": "e2e4", "fen": START},
+                                     1: {"cp": 31, "mate": None, "depth": 26, "best": "c7c5", "fen": E4}}
+    engine._record(r, "A", E4E5, {"cp": 25, "mate": None, "depth": 18})
+    engine._put_by(r, "A", E4E5, now=100)
+    engine._record(r, "A", D4, {"cp": 30, "mate": None, "depth": 18})  # the relay corrects White's first move
+    assert sorted(engine.plies("A", r)) == [0, 1] and engine.plies("A", r)[1]["fen"] == D4  # and the move after it goes
+    assert engine.take_put_by(r, now=101) is None
+    assert engine.ply(E4) == 1 and engine.ply(E4E5) == 2 and engine.ply("8/8/8/8/8/8/8/8 b - - 4 25") == 49 and engine.ply("x") is None
 
 
 def test_the_lane_is_needed_while_a_position_is_being_deepened(monkeypatch):
@@ -190,6 +227,9 @@ def test_the_lane_is_needed_while_a_position_is_being_deepened(monkeypatch):
     monkeypatch.setattr(bus, "is_locked", lambda name: False)
     assert not engine.needs_lane()
     r.zadd(engine.DEEPEN, {"A": 100})
+    assert engine.needs_lane()
+    r.zrem(engine.DEEPEN, "A")
+    r.zadd(engine.PUT_BY, {"A": 100})  # and while a position is put by
     assert engine.needs_lane()
 
 
@@ -324,6 +364,25 @@ def test_an_unwatched_game_gets_its_first_look_and_no_more(monkeypatch, stopping
     assert ((engine.latest("A", r) or {})["depth"], r.zcard(engine.DEEPEN)) == (18, 0)
 
 
+def test_each_move_the_polls_saw_is_looked_at_in_the_lanes_spare_time(monkeypatch, stopping):
+    r = FakeRedis()
+    engine.request("A", START, r, now=time.time() - 5)
+    engine.request("A", E4, r)  # START put by
+    # The newest first, then the one put by between every PUT_BY_EVERY slices of the position the game's on.
+    looked, started = run_lane(monkeypatch, stopping, r, [18, 20, 21, 22, 16])
+    assert (looked, started) == ([E4, E4, E4, E4, START], [E4])
+    assert {ply: (k["fen"], k["depth"]) for ply, k in engine.plies("A", r).items()} == {0: (START, 16), 1: (E4, 22)}
+    assert engine.latest("A", r)["fen"] == E4  # type: ignore[index]  # a position put by goes to its move alone
+
+
+def test_an_unwatched_games_positions_put_by_are_looked_at_straight_after(monkeypatch, stopping):
+    r = FakeRedis()
+    engine.request("A", START, r, now=time.time() - 5, deepen=False)
+    engine.request("A", E4, r, deepen=False)
+    assert run_lane(monkeypatch, stopping, r, [18, 16]) == ([E4, START], [])
+    assert sorted(engine.plies("A", r)) == [0, 1]
+
+
 def test_deepening_stops_when_the_last_viewer_leaves(monkeypatch, stopping):
     r = FakeRedis()
     engine.request("A", E4, r, by=1)
@@ -441,20 +500,12 @@ def board(monkeypatch):
     r = FakeRedis()
     monkeypatch.setattr(bus, "sync_redis", lambda: r)
     monkeypatch.setattr(engine, "enabled", lambda: True)
-    monkeypatch.setattr(structured.matches, "rules", lambda db, event_id: [])
     last: dict[int, dict] = {}
 
-    class Db:
-        def __init__(self, levels):
-            self.levels = levels
-
-        def scalars(self, query):
-            return type("Rows", (), {"all": lambda _: [{"level": level} for level in self.levels]})()
-
-    def poll(event: int, fen: str, result: str | None = None, levels: tuple[str, ...] = ("key",)) -> dict:
+    def poll(event: int, fen: str, result: str | None = None) -> dict:
         snap = Snapshot("live", "", "", {"kind": "chess", "game_id": "g1", "fen": fen, "result": result})
         prev = last.get(event)
-        structured._evaluate(sports.get("chess"), Db(levels), event, snap, type("State", (), {"state": prev})() if prev else None, [event])
+        structured._evaluate(sports.get("chess"), event, snap, type("State", (), {"state": prev})() if prev else None)
         last[event] = snap.state
         return snap.state
 
@@ -476,15 +527,11 @@ def test_a_decided_game_is_let_go_and_its_last_evaluation_stays(board):
     assert not engine.deepened(board.r, "g1") and board.r.zcard(engine.DEEPEN) == 0 and not engine.on_it(board.r, "g1", F31)
 
 
-def test_one_event_with_nobody_wanting_swings_doesnt_stop_the_other(board):
-    for event in (1, 2):
-        board.r.set(bus.watching_key(event), "1")
+def test_every_live_game_is_evaluated_whatever_its_fans_hear(board):
+    # Its fans may hear results only: each of its moves still gets its evaluation, for its match page.
     board.reading(F31, 20, 1)
-    board.poll(1, F31)
-    board.poll(2, F31, levels=("results",))  # the other player's fans hear results only
-    assert engine.deepened(board.r, "g1")
-    board.poll(1, F31, levels=("results",))
-    assert not engine.deepened(board.r, "g1")
+    board.poll(1, F32)
+    assert json.loads(board.r.hget(engine.WANT, "g1"))["fen"] == F32
 
 
 def test_a_game_is_deepened_only_while_someone_has_it_open(board, monkeypatch):
@@ -622,6 +669,18 @@ def test_scores_turn_to_whites_side():
     assert engine.parse_score("info depth 30 score mate 3 nodes 1") == (None, 3, 30)
     assert engine.from_white(E4, 30, None) == (-30, None)  # Black to move and +0.3 for Black
     assert engine.from_white(E4E5, 30, None) == (30, None)
+
+
+def test_a_look_keeps_the_engines_best_move(tmp_path):
+    lines = script(tmp_path, "line-engine", """    elif word == "go":
+        print("info depth 12 seldepth 16 multipv 1 score cp 31 nodes 900 pv g1f3 b8c6 f1b5", flush=True)
+        print("bestmove g1f3 ponder b8c6", flush=True)
+""")
+    e = engine.Engine(lines)
+    try:
+        assert e.evaluate(E4E5, nodes=1000)["best"] == "g1f3"
+    finally:
+        e.close()
 
 
 def test_a_mate_is_told_from_whites_side_whoever_is_to_move(tmp_path):
