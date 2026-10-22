@@ -2,16 +2,17 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { api, type Account, type Me, type ServerConfig } from './api'
 import { CloseIcon } from './components/Icons'
 import { WEB_KEPT, welcome } from './fanChange'
-import { changedHands } from './resync'
+import { changedHands, whoAsker, type WhoAsker } from './resync'
 
 /**
  * Who this device is signed in as (sports_follow/accounts.py), asked at start, which also renews the session,
- * and again when the app wakes or its stream connects again (`recheck`). Signing in, out or deleting the
- * account starts the app over: every list, stream and cached answer belonged to the fan this device was a
- * moment ago. So does finding the device signed out elsewhere, or in to another account in another tab.
+ * and again when the app wakes or its stream connects again (`recheck`): till the server answers, a failed ask
+ * asked again (resync.whoAsker). Signing in, out or deleting the account starts the app over: every list, stream
+ * and cached answer belonged to the fan this device was a moment ago. So does finding the device signed out
+ * elsewhere, or in to another account in another tab.
  */
 interface AccountState {
-  me: Me | null  // null until the server answers
+  me: Me | null  // null until the server answers: unknown, not signed out (BUG-306)
   config: ServerConfig | null
   /** What just happened to this device's sign-in, said once at the top of the page. */
   notice: string | null
@@ -86,6 +87,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   const meRef = useRef(me)
   meRef.current = me
   const asked = useRef(Date.now())  // the last time who this device is was asked
+  const who = useRef<WhoAsker | null>(null)
   const [config, setConfig] = useState<ServerConfig | null>(null)
   const [notice, setNotice] = useState<string | null>(() => {
     try {
@@ -117,27 +119,35 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     }
     // Turned back at Google's (/account?error=…): no page to come back to after a later sign-in.
     if (new URLSearchParams(window.location.search).has('error')) takeAfterSignIn()
-    api.account().then((answer) => {
-      setMe(answer)
-      if (answer.signed_in === false && answer.reason === 'signed_out') {
+    // Signed out elsewhere (everywhere from another device, the account deleted or blocked), the app kept showing the
+    // account, its players and its alerts (BUG-162): asked again as it wakes and as its stream connects again, a
+    // device that's someone else now starts over as who it is, here. A first answer is who it is: signed out while
+    // the app was closed, it says so.
+    const asker = whoAsker(() => api.account(), (now) => {
+      const shown = meRef.current
+      if (changedHands(shown, now)) {
+        const out = !now.signed_in
+        startOver(window.location.pathname + window.location.search, out ? SIGNED_OUT : null, out)
+        return
+      }
+      meRef.current = now
+      setMe(now)
+      if (shown === null && now.signed_in === false && now.reason === 'signed_out') {
         forgetCachedAnswers()
         setNotice((said) => said ?? SIGNED_OUT)
       }
-    }).catch(() => setMe({ signed_in: false }))
+    })
+    who.current = asker
+    asker.ask()
     api.config().then(setConfig).catch(() => {})
+    return () => asker.stop()
   }, [])
 
-  // Signed out elsewhere (everywhere from another device, the account deleted or blocked), the app kept showing the
-  // account, its players and its alerts (BUG-162): asked again as it wakes and as its stream connects again, a
-  // device that's someone else now starts over as who it is, here.
   const recheck = useCallback(() => {
-    if (meRef.current === null || Date.now() - asked.current < RECHECK_MS) return
+    // Not known yet: asked at once (a stream connecting again says the server is back).
+    if (meRef.current !== null && Date.now() - asked.current < RECHECK_MS) return
     asked.current = Date.now()
-    api.account().then((now) => {
-      if (!changedHands(meRef.current, now)) return setMe(now)
-      const out = !now.signed_in
-      startOver(window.location.pathname + window.location.search, out ? SIGNED_OUT : null, out)
-    }, () => { /* offline: asked again on the next wake */ })
+    who.current?.ask()
   }, [])
 
   useEffect(() => {
