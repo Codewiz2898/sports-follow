@@ -97,11 +97,14 @@ def test_a_channels_trust_is_the_admins_word_else_whether_a_sport_lists_it_and_f
     assert rank.trust("UC" + "z" * 22, listed, {}) == rank.UNLISTED
     assert rank.trust(CHANNEL, listed, {CHANNEL: 0.4}) == 0.4
     assert rank.trust(CHANNEL, listed, {CHANNEL: 0.0}) == 0.0
-    weight = rank.feedback_weight([("i1", "report"), ("i2", "report"), ("i1", "not_about_player"), ("i3", "not_interested"), ("other", "report")],
-                                  {"i1": CHANNEL, "i2": CHANNEL, "i3": CHANNEL})  # fmt: skip
+    weight = rank.feedback_weight([("a", "i1", "report"), ("b", "i2", "report"), ("c", "i1", "not_about_player"), ("d", "i3", "not_interested"),
+                                   ("e", "other", "report")], {"i1": CHANNEL, "i2": CHANNEL, "i3": CHANNEL})  # fmt: skip
     assert weight == {CHANNEL: pytest.approx(2.5)}  # "not interested" is taste: it doesn't count against the channel
     assert rank.trust(CHANNEL, listed, {}, weight[CHANNEL]) == pytest.approx(1 / (1 + 2.5 / rank.FEEDBACK_SCALE))
-    assert rank.trust(CHANNEL, listed, {}, 4 * rank.FEEDBACK["report"]) == pytest.approx(0.5)  # four reports halve it
+    # One fan counts once a channel, by the strongest word they said of any of its items (BUG-120).
+    assert rank.feedback_weight([("a", "i1", "not_about_player"), ("a", "i2", "report"), ("a", "i3", "report")], {"i1": CHANNEL, "i2": CHANNEL, "i3": CHANNEL}) == {CHANNEL: 1.0}
+    assert rank.feedback_weight([("a", "i1", "not_about_player"), ("a", "i3", "not_interested")], {"i1": CHANNEL, "i3": CHANNEL}) == {CHANNEL: 0.5}
+    assert rank.trust(CHANNEL, listed, {}, 4 * rank.FEEDBACK["report"]) == pytest.approx(0.5)  # four fans' reports halve it
     assert rank.trust(CHANNEL, listed, {}, 400.0) == pytest.approx(rank.LISTED * rank.FEEDBACK_FLOOR)  # and no number of them sinks it
     assert rank.trust(CHANNEL, listed, {CHANNEL: 1.0}, 400.0) == 1.0  # the admin's word stands as it is
 
