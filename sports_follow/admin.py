@@ -57,7 +57,7 @@ CODE_STEP = 30  # seconds each authenticator code lasts
 CODE_DIGITS = 6
 CODE_DRIFT = 1  # steps either side a code still works, for a phone whose clock is a little off
 PAGE = 50  # accounts a page, and feed candidates
-FEED_SHOWS = ("all", "unjudged", "served", "held", "reviewed")  # which candidates the Feed tab lists
+FEED_SHOWS = ("all", "unjudged", "served", "held", "reviewed", "unplayable")  # which candidates the Feed tab lists
 TRUST_STEPS = (1.0, 0.7, 0.4, 0.0)  # what the Feed tab offers for a channel: high, some, low, hidden
 CHANNEL = re.compile(r"[A-Za-z0-9_-]{1,64}|https?://\S{1,500}")  # a video channel's id, or a news feed's address
 
@@ -468,24 +468,30 @@ def sign_out(db: Session, account_id: int) -> list[str] | None:
 
 def feed_page(db: Session, show: str = "all", offset: int = 0) -> dict[str, Any]:
     """A page of the Feed's candidates, newest found first, with the judge's verdict, the score and an admin's
-    word on each. show: all, unjudged, served (scored, not hidden), held (judged, not served) or reviewed."""
+    word on each. show: all, unjudged, served (scored, not hidden), held (judged, not served), reviewed, or
+    unplayable: those fans' apps took from every Feed (feed.unplayable) and no admin hid, newest taken first, for an
+    admin to put back (approving one does) any that does play."""
     if show not in FEED_SHOWS:
         raise ValueError(f"show one of {', '.join(FEED_SHOWS)}")
     query = select(FeedCandidate, Player.name, Player.sport).join(Player, Player.id == FeedCandidate.player_id)
+    taken_out = FeedCandidate.unplayable_at.is_not(None) & FeedCandidate.review.is_distinct_from("hidden")
     where = {
         "unjudged": FeedCandidate.verdict.is_(None),
         "served": FeedCandidate.served(),
         "held": FeedCandidate.verdict.is_not(None) & rank.unserved(),
         "reviewed": FeedCandidate.review.is_not(None),
+        "unplayable": taken_out,
     }.get(show)
     if where is not None:
         query = query.where(where)
-    rows = db.execute(query.order_by(FeedCandidate.fetched_at.desc(), FeedCandidate.id.desc()).offset(offset).limit(PAGE + 1)).all()
+    newest = FeedCandidate.unplayable_at if show == "unplayable" else FeedCandidate.fetched_at
+    rows = db.execute(query.order_by(newest.desc(), FeedCandidate.id.desc()).offset(offset).limit(PAGE + 1)).all()
     counts = dict(db.execute(select(FeedCandidate.review, func.count()).where(FeedCandidate.review.is_not(None)).group_by(FeedCandidate.review)).all())
     totals = {
         "all": db.scalar(select(func.count()).select_from(FeedCandidate)) or 0,
         "unjudged": db.scalar(select(func.count()).select_from(FeedCandidate).where(FeedCandidate.verdict.is_(None))) or 0,
         "served": db.scalar(select(func.count()).select_from(FeedCandidate).where(FeedCandidate.served())) or 0,
+        "unplayable": db.scalar(select(func.count()).select_from(FeedCandidate).where(taken_out)) or 0,
         **{f"review_{k}": v for k, v in counts.items()},
     }
     return {"candidates": [_candidate_row(c, name, sport) for c, name, sport in rows[:PAGE]], "next": offset + PAGE if len(rows) > PAGE else None,

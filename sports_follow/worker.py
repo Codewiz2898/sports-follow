@@ -333,15 +333,6 @@ async def prediction_pushes(ctx) -> None:
     await asyncio.get_running_loop().run_in_executor(_pushes_pool, logs.carried(functools.partial(_counted, predictions_push.run)))
 
 
-async def check_unplayable(ctx, video: str) -> None:
-    """A video ("source:id") enough networks' apps said won't play inside them, asked about at its source
-    (feed.check_unplayable): queued by the API once for the reports that came together. In the feed lane, as the
-    curator's weekly check of every video is: it stops short of the allowance kept for live games and fans."""
-    from . import feed
-
-    await in_lane('feed', feed.check_unplayable, video)
-
-
 async def read_league(ctx, system: str) -> None:
     """A source's competitions' games, three days back and a fortnight on, for Today's big results and big games
     coming up (league.read): queued by the API when a fan looks and the last read is a few hours old. In the
@@ -547,7 +538,6 @@ class WorkerSettings:
     functions: list[Any] = [_logged(f) for f in (build_card, reread_profile, refresh_live, refresh_structured, refresh_team, poll_event, poll_lane, send_moments, send_held, engine_lane, history_lane, adopt_stragglers, read_live, read_match, read_league)]
     functions.append(func(_logged(refresh_starters), timeout=2400))  # also queued by a worker starting without a recent refresh
     functions.append(func(_logged(import_teams), timeout=1800))  # and the team import, likewise
-    functions.append(func(_logged(check_unplayable), timeout=120))  # one request: a video fans' apps said won't play, queued by the API
     # Nor the every-minute jobs ON_THE_CLOCK: a cron run waits for a free job slot.
     cron_jobs = [
         cron(_logged(purge_sessions), hour=4, minute=10, second=0),
