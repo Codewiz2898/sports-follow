@@ -29,13 +29,14 @@ function Line({ row, now }: { row: WireRow; now: number }) {
 /**
  * The Wire on Today: a white card of who's out and who's back, line-ups and news, the fan's players' first, then
  * a few of the best-known players they don't follow; each a tag, one line, where it's from and a time. Nothing
- * here says "breaking". Nothing at all when there's none.
+ * here says "breaking". Nothing at all when there's none. Its title on every screen: on a phone, under This week's
+ * posters, the card would otherwise read as part of This week.
  */
 export function Wire({ rows, now }: { rows: WireRow[]; now: number }) {
   if (!rows.length) return null
   return (
     <section className="section" aria-label="The wire">
-      <div className="desktop-only"><SectionHead title="The wire" /></div>
+      <SectionHead title="The wire" />
       <ul className="wire">
         {rows.map((r) => <li key={r.id}><Line row={r} now={now} /></li>)}
       </ul>
