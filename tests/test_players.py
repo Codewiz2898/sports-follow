@@ -524,6 +524,9 @@ def test_a_turned_off_sports_page_isnt_followed_or_previewed_by_registry_id_or_b
     monkeypatch.setattr(sports, "ENABLED", sports.ALL)
     assert asyncio.run(server.registry_preview(request, "Q2", None, "fan")) == {"player_id": 1}  # pyright: ignore[reportArgumentType]
     assert [asyncio.run(server.follow(request, body, "fan"))["player_id"] for body in ({"qid": "Q2"}, {"query": "Yuzvendra Chahal"})] == [1, 1]  # pyright: ignore[reportArgumentType]
+    # BUG-328: a fan with all the players they may follow was refused even one they follow already (a page's Retry).
+    monkeypatch.setattr("sports_follow.follows.MAX", 1)
+    assert asyncio.run(server.follow(request, {"qid": "Q2", "sport": "cricket"}, "fan"))["player_id"] == 1  # pyright: ignore[reportArgumentType]
 
 
 def test_removing_a_starter_or_the_athlete_takes_the_starter_out(db, capsys):

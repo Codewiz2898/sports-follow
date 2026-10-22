@@ -23,9 +23,9 @@ from sqlalchemy import ColumnElement, SQLColumnExpression, case, delete, func, n
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import clips, fansports, matches, notify, predictions, teams
+from . import clips, fansports, follows, matches, notify, predictions, sports, teams
 from .db import session
-from .models import Account, AccountSession, ClipReport, Event, FanSource, FanSport, FeedFeedback, Follow, LeagueMember, MatchFollow, Notification, NotificationMute, Pick, PushSubscription, TeamFollow
+from .models import Account, AccountSession, ClipReport, Event, FanSource, FanSport, FeedFeedback, Follow, LeagueMember, MatchFollow, Notification, NotificationMute, Pick, Player, PushSubscription, TeamFollow
 
 FAN_PREFIX = "acct-"  # an account's fan id: never taken from a fan cookie (server._unsigned_fan)
 # The rows kept under a fan id here; predictions.py keeps its own (picks, places in leagues: predictions.forget).
@@ -162,6 +162,8 @@ class SignedIn:
     fan_id: str
     players: int  # how many players this device's anonymous fan brought
     teams_dropped: int = 0  # how many of its teams didn't fit in the account (teams.MAX), for the fan to be told
+    players_dropped: int = 0  # and of its players (follows.MAX)
+    games_dropped: int = 0  # and of the games it followed (matches.MAX)
 
 
 def sign_in(db: Session, account_id: int, anon: str | None, ending: int | None = None) -> SignedIn:
@@ -176,7 +178,8 @@ def sign_in(db: Session, account_id: int, anon: str | None, ending: int | None =
     session_id = db.scalar(insert(AccountSession).values(account_id=account_id, token_hash=token_hash(token), expires_at=now + SESSION_LIFE).returning(AccountSession.id))
     fan = db.scalar(update(Account).where(Account.id == account_id).values(last_sign_in_at=now).returning(Account.fan_id))
     moved = adopt(db, anon, account_id, session_id) if anon else Moved(0, 0)
-    return SignedIn(token=token, session_id=session_id, fan_id=fan, players=moved.players, teams_dropped=moved.teams_dropped)
+    return SignedIn(token=token, session_id=session_id, fan_id=fan, players=moved.players, teams_dropped=moved.teams_dropped,
+                    players_dropped=moved.players_dropped, games_dropped=moved.games_dropped)
 
 
 def end_sessions(db: Session, account_id: int, session_id: int | None = None) -> list[str]:
@@ -221,6 +224,8 @@ def _lock(db: Session, anon: str, account_id: int) -> str | None:
 class Moved:
     players: int  # how many players came over
     teams_dropped: int  # how many of the device's teams didn't fit (teams.merge)
+    players_dropped: int = 0  # and of its players (follows.MAX)
+    games_dropped: int = 0  # and of its games (matches.MAX)
 
 
 def adopt(db: Session, anon: str, account_id: int, session_id: int | None) -> Moved:
@@ -237,18 +242,37 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int | None) -> Mo
     # Each kind of row is taken off `anon` in one statement (_take) and then put under the account: a row a request
     # under way writes to `anon` as this runs is left there for the next move (adopt_later), never deleted unmoved.
     # A player both follow keeps the account's alert level, and the earlier follow date: the activity
-    # list shows moments since then.
-    followed = _take(db, Follow, anon, fan, Follow.player_id, Follow.alert_rules, Follow.created_at)
-    players = len(followed)
-    if followed:
-        moved = insert(Follow).values(followed)
+    # list shows moments since then. The account follows at most follows.MAX players: of this device's others, the
+    # earliest followed that fit come over, and a turned-off sport's, which take no room (follows.counted). One at a
+    # time with the account's own follows (server._room_to_follow's lock), so one on another device can't pass it.
+    _lock_follows(db, "follow", fan)
+    have = set(db.scalars(select(Follow.player_id).where(Follow.fan_id == fan)))
+    room, players_dropped = follows.MAX - follows.counted(db, fan), 0
+    followed = _take(db, Follow, anon, fan, Follow.id, Follow.player_id, Follow.alert_rules, Follow.created_at)
+    sport_of = dict(db.execute(select(Player.id, Player.sport).where(Player.id.in_([f["player_id"] for f in followed]))).all()) if followed else {}
+    moving = []
+    for row in sorted(followed, key=lambda f: (f["created_at"], f["id"])):
+        del row["id"]
+        if row["player_id"] not in sport_of:
+            continue  # the player was removed as this ran
+        counts = row["player_id"] not in have and sports.on(sport_of[row["player_id"]])  # one it doesn't follow yet, in sight
+        if not counts or room > 0:
+            moving.append(row)
+            room -= 1 if counts else 0
+        else:
+            players_dropped += 1
+    players = len(moving)
+    if moving:
+        moved = insert(Follow).values(moving)
         db.execute(moved.on_conflict_do_update(index_elements=["fan_id", "player_id"], set_={"created_at": func.least(Follow.created_at, moved.excluded.created_at)}))
     # The games followed by themselves (matches.py), as players are: a game both follow keeps the account's
     # level and the earlier date, and stays followed if either still did. The account follows at most
     # matches.MAX games at once: of this device's others, the soonest that fit come over, and every lapsed one. A
-    # game the account let lapse but the device still follows is on again, so it needs room too (BUG-099).
+    # game the account let lapse but the device still follows is on again, so it needs room too (BUG-099). Those that
+    # don't fit are counted for the fan, and the account's own follows wait (matches.follow's lock), as with players.
+    _lock_follows(db, "match-follow", fan)
     have = set(db.scalars(select(MatchFollow.event_id).where(MatchFollow.fan_id == fan, MatchFollow.until.is_(None))))
-    room = matches.MAX - len(have)
+    room, games_dropped = matches.MAX - len(have), 0
     games = _take(db, MatchFollow, anon, fan, MatchFollow.id, MatchFollow.event_id, MatchFollow.alert_rules, MatchFollow.keys, MatchFollow.created_at, MatchFollow.until)
     starts = dict(db.execute(select(Event.id, Event.start_utc).where(Event.id.in_([g["event_id"] for g in games]))).all()) if games else {}
     unknown = datetime.max.replace(tzinfo=timezone.utc)  # a game with no start time yet: after every other
@@ -259,6 +283,8 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int | None) -> Mo
         if not counts or room > 0:
             moving.append(game)
             room -= 1 if counts else 0
+        else:
+            games_dropped += 1
     if moving:
         moved = insert(MatchFollow).values(moving)
         db.execute(moved.on_conflict_do_update(index_elements=["fan_id", "event_id"], set_={
@@ -285,11 +311,17 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int | None) -> Mo
     # This device's alerts: now the account's, and this session's. The account's oldest devices make room.
     if session_id is None:
         db.execute(delete(PushSubscription).where(PushSubscription.fan_id == anon))
-        return Moved(players, teams_dropped)
+        return Moved(players, teams_dropped, players_dropped, games_dropped)
     devices = list(db.scalars(update(PushSubscription).where(PushSubscription.fan_id == anon).values(fan_id=fan, session_id=session_id).returning(PushSubscription.id)))
     if devices:
         notify.trim_devices(db, fan, PushSubscription.id.in_(devices), notify.MAX_DEVICES - len(devices))
-    return Moved(players, teams_dropped)
+    return Moved(players, teams_dropped, players_dropped, games_dropped)
+
+
+def _lock_follows(db: Session, kind: str, fan: str) -> None:
+    """The lock the fan's own follows of this kind take ("follow": server._room_to_follow, "match-follow":
+    matches.follow), held till this commits: their count and the move's can't both pass the cap."""
+    db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"{kind}:{fan}", 0))))
 
 
 def _take(db: Session, model: Any, anon: str, fan: str, *columns: Any) -> list[dict[str, Any]]:

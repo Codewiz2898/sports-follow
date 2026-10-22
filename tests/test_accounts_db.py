@@ -20,7 +20,7 @@ from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import accounts, controls, fansports, matches, notify, teams
+from sports_follow import accounts, controls, fansports, matches, notify, sports, teams
 from sports_follow.models import (Account, AccountSession, Clip, ClipReport, Event, FanSource, FanSport, FeedFeedback, Follow, League, LeagueMember, MatchFollow, Notification,
                                   NotificationMute, Pick, Player, PushSubscription, Question, Team, TeamFollow)
 
@@ -216,6 +216,60 @@ def test_bringing_a_devices_teams_waits_for_a_team_follow_under_way_on_the_accou
     done = accounts.sign_in(db, account_id, "anon")  # once it's done
     db.commit()
     assert db.scalars(select(TeamFollow.fan_id)).all() == [fan] and done.teams_dropped == 0
+
+
+def test_the_devices_players_and_games_that_dont_fit_in_the_account_are_counted_for_the_fan(db, monkeypatch):
+    """BUG-328: signing in brought every player the device followed, past follows.MAX, and then the account couldn't
+    follow anyone; and the games that didn't fit (matches.MAX) went without a word."""
+    account_id, fan = account(db)
+    db.add_all([Player(id=4, slug="p4", name="Player 4"), Player(id=5, slug="p5", name="Player 5", sport="Chess")])
+    db.add_all([Event(id=i, key=f"e{i}", sport="football", title=f"Game {i}") for i in range(10, 10 + matches.MAX - 1)])
+    db.add(Event(id=3, key="e3", sport="football", title="Game 3"))
+    db.flush()
+    for event_id, days in ((1, 3), (2, 1), (3, 2)):
+        db.get(Event, event_id).start_utc = NOW + timedelta(days=days)
+    db.add_all([MatchFollow(fan_id=fan, event_id=i) for i in range(10, 10 + matches.MAX - 1)])  # room for one more game
+    db.add_all([MatchFollow(fan_id="anon", event_id=i) for i in (1, 2, 3)])
+    follow(db, fan, 1, days_ago=5)
+    follow(db, fan, 2, days_ago=5)
+    follow(db, "anon", 2, days_ago=9)  # both follow them
+    follow(db, "anon", 5, days_ago=8)  # a turned-off sport's: out of sight, it takes no room
+    follow(db, "anon", 3, days_ago=7)  # the earliest followed of those that fit
+    follow(db, "anon", 4, days_ago=1)
+    db.commit()
+    monkeypatch.setattr("sports_follow.follows.MAX", 3)
+    monkeypatch.setattr(sports, "ENABLED", [s for s in sports.ALL if s.key != "chess"])
+    done = accounts.sign_in(db, account_id, "anon")
+    db.commit()
+    assert set(follows(db, fan)) == {1, 2, 3, 5} and follows(db, "anon") == {}
+    assert (done.players, done.players_dropped, done.games_dropped) == (3, 1, 2)
+    assert follows(db, fan)[2][1] == NOW - timedelta(days=9)  # the earlier follow
+    assert sorted(db.scalars(select(MatchFollow.event_id).where(MatchFollow.fan_id == fan, MatchFollow.event_id < 10))) == [2]  # the soonest
+    assert db.scalars(select(MatchFollow.event_id).where(MatchFollow.fan_id == "anon")).all() == []
+
+
+def test_bringing_a_devices_players_and_games_waits_for_a_follow_under_way_on_the_account(db):
+    """BUG-328: the move counted the account's players and games without the locks a follow takes (server._room_to_follow,
+    matches.follow), so a follow on another device at that moment could take the account past either cap."""
+    account_id, fan = account(db)
+    follow(db, "anon", 1)
+    db.add(MatchFollow(fan_id="anon", event_id=1))
+    db.commit()
+    for name in ("follow", "match-follow"):
+        other = db.get_bind().connect()
+        under_way = other.begin()
+        other.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"{name}:{fan}", 0))))
+        try:
+            db.execute(text("SET lock_timeout = '300ms'"))
+            with pytest.raises(OperationalError, match="lock timeout"):
+                accounts.sign_in(db, account_id, "anon")
+            db.rollback()
+        finally:
+            under_way.rollback()
+            other.close()
+    done = accounts.sign_in(db, account_id, "anon")  # once they're done
+    db.commit()
+    assert done.players == 1 and set(follows(db, fan)) == {1}
 
 
 def test_the_devices_teams_that_dont_fit_in_the_account_are_counted_for_the_fan(db):

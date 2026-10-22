@@ -527,6 +527,11 @@ def test_a_fan_follows_at_most_so_many_players(api, a_source, monkeypatch):
     assert api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"player_id": 1}).status_code == 200  # one followed already: no new follow
     assert api.call("POST", "/api/follows", fan="another", address=PUBLIC, body={"player_id": 1}).status_code == 200
     assert not [s for s in api.statements if isinstance(s, Insert) and s.table.name == "follow" and _param(s, "fan_id") == "fan" and _param(s, "player_id") != 1]
+    # BUG-328: one picked in search that the fan follows already is no new follow, so it isn't refused (a page's Retry).
+    monkeypatch.setattr(server, "_holder", lambda db, system, external_id: 1 if (system, external_id) == ("espn_soccer", "231388") else None)
+    monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: (1, False))
+    again = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"system": "espn_soccer", "athlete_id": "231388"})
+    assert (again.status_code, again.json().get("player_id")) == (200, 1)
 
 
 def test_follows_are_limited_per_fan_and_per_address_and_a_refused_one_isnt_counted(api, monkeypatch):

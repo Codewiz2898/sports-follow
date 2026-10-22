@@ -1511,13 +1511,15 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
     person = await in_db(_registry_athlete, body) if body.get("qid") else None
     if body.get("qid") and person is None:
         raise HTTPException(404, "That athlete isn't in the player registry.")
-    await in_db(_room_to_follow, fan)
+    # Past the cap, a follow is refused before a source is asked; one of a player the fan follows already (a page's
+    # Retry) is no new follow, so it isn't (BUG-328). The follow's own transaction counts again (save).
     taken: list[str] = []
     if person and not body.get("system"):
         holder = await in_db(_registry_holder, person, bool(body.get("sport")))
         if holder is not None:
             player_id, created, ref = holder, False, None
         else:
+            await in_db(_room_to_follow, fan)
             await _source_lookup(fan, address)
             found = await _resolve(person)
             if found is None and not RESEARCH:
@@ -1549,6 +1551,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
             raise HTTPException(400, "Pick an athlete from the search results.")
         if (system, athlete_id) in await in_db(registry.blocked):
             raise HTTPException(404, f"That athlete isn't on {APP_NAME}.")  # removed by an operator (players.py)
+        await in_db(_room_to_follow, fan, await in_db(_holder, system, athlete_id))
         await _source_lookup(fan, address)
         try:
             ref = await asyncio.to_thread(adapter.player, athlete_id, league)
@@ -1760,7 +1763,8 @@ async def _tell_signed_out(fan: str | None) -> None:
 async def _sign_in(request: Request, response: Response, account_id: int, signed: accounts.Signed | None) -> dict[str, Any]:
     """Sign this device in to the account, bringing what its anonymous fan had (accounts.adopt). A
     session this device already had (signing in again, or as someone else) ends. The answer says how many
-    players came, and how many of the device's teams didn't fit in the account (teams.MAX), so the fan is told."""
+    players came, and how many of the device's teams, players and games didn't fit in the account (teams.MAX,
+    follows.MAX, matches.MAX), so the fan is told."""
     anon = await asyncio.to_thread(_cookie_fan, request)
     done = await in_db(accounts.sign_in, account_id, anon, signed.session_id if signed else None)
     if signed:
@@ -1777,7 +1781,8 @@ async def _sign_in(request: Request, response: Response, account_id: int, signed
         await enqueue("adopt_stragglers", anon, account_id, done.session_id, _defer_by=60)
     _set_session(request, response, done.token)
     response.delete_cookie(FAN_COOKIE, httponly=True, samesite="lax", secure=_secure(request))
-    return {**(await in_db(accounts.describe, account_id) or {}), "players_added": done.players, "teams_dropped": done.teams_dropped}
+    return {**(await in_db(accounts.describe, account_id) or {}), "players_added": done.players, "teams_dropped": done.teams_dropped,
+            "players_dropped": done.players_dropped, "games_dropped": done.games_dropped}
 
 
 @app.get("/api/me/account")
@@ -1948,7 +1953,7 @@ async def google_callback(request: Request, state: str = "", code: str = "", err
         return back("/account?error=blocked")
     response = back("/account")
     done = await _sign_in(request, response, account_id, signed)
-    dropped = f"&teams_dropped={done['teams_dropped']}" if done["teams_dropped"] else ""
+    dropped = "".join(f"&{kind}={done[kind]}" for kind in ("teams_dropped", "players_dropped", "games_dropped") if done[kind])
     response.headers["location"] = f"/account?welcome={done['players_added']}{dropped}"
     return response
 
