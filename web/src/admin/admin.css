@@ -51,6 +51,7 @@
 .feed-admin { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .feed-admin-row { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 14px; padding: 14px; box-shadow: inset 0 0 0 2px var(--line); }
 .feed-admin-row[data-served] { box-shadow: inset 0 0 0 2px var(--text); }
+.feed-admin-row[data-bare] { grid-template-columns: minmax(0, 1fr); }
 .feed-admin-thumb img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 10px; background: var(--raised); }
 .feed-admin-row .title { overflow-wrap: anywhere; }
 @media (max-width: 560px) { .feed-admin-row { grid-template-columns: minmax(0, 1fr); } }

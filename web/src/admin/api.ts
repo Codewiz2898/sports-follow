@@ -1,7 +1,7 @@
 // The admin panel's API (sports_follow/admin.py, the /api/admin routes in server.py). Its session is a cookie
 // of its own, sent only to /api/admin.
 
-import { json, request } from '../api'
+import { ApiError, json, request } from '../api'
 
 /** A sport: whether the server's settings let it run (SPORTS_FOLLOW_SPORTS), whether the panel has it on, its running
  * sources, and the group it's one of ("Esports" for each game; "" for none). */
@@ -157,7 +157,44 @@ export interface FeedPage {
 export type AdminFeedLayout = 'edge' | 'full'
 export interface FeedLayoutView { layout: AdminFeedLayout; default: string; set: AdminFeedLayout | null; choices: AdminFeedLayout[] }
 
+/** A clip published from the Mac app (sports_follow/clips.py for_admin), whatever its status, with its reports. Its video and
+ * poster are at their public address while it's live (a hidden one's are moved off it); without the bucket set up, only
+ * its id and line. */
+export interface AdminClip {
+  id: string
+  status: 'uploading' | 'live' | 'hidden' | 'failed' | 'removed'
+  reports: number
+  source: string
+  by: string | null // the publishing key's name
+  created: string
+  line: string
+  caption?: string
+  game_title?: string
+  competition?: string | null
+  sport?: string | null
+  match?: string | null
+  poster?: string
+  video?: string
+  published?: string | null
+}
+/** A publishing key (its secret is shown once, when made, and kept nowhere). */
+export interface ClipKey { id: number; name: string; created: string; last_used: string | null; revoked: string | null }
+export type ClipShow = 'reported' | 'all' | 'live' | 'hidden'
+export interface ClipsView { clips: AdminClip[]; keys: ClipKey[]; set_up: boolean }
+
 const at = (path: string) => `/api/admin/${path}`
+
+/** A call answered with no body (204), which request() would try to read as JSON. */
+async function answered(path: string, init: RequestInit): Promise<void> {
+  const res = await fetch(path, { credentials: 'same-origin', ...init })
+  if (res.ok) return
+  let message = `Request failed (${res.status})`
+  try {
+    const body = await res.json()
+    if (typeof body.detail === 'string') message = body.detail
+  } catch { /* not JSON */ }
+  throw new ApiError(message, res.status)
+}
 
 export const admin = {
   /** Signed in; and whether sign-in asks for an authenticator code. */
@@ -179,6 +216,11 @@ export const admin = {
   channelTrust: (channel: string, trust: number | null) =>
     request<{ channels: FeedChannel[] }>(at('feed/channels'), json('PUT', { channel, trust })),
   feedLayout: (layout: AdminFeedLayout | null) => request<{ layout: FeedLayoutView }>(at('feed/layout'), json('PUT', { layout })),
+  clips: (show: ClipShow) => request<ClipsView>(at(`clips${show === 'all' ? '' : `?status=${show}`}`)),
+  hideClip: (id: string, hidden: boolean) => request<{ id: string; status: string }>(at(`clips/${encodeURIComponent(id)}`), json('POST', { hidden })),
+  removeClip: (id: string) => answered(at(`clips/${encodeURIComponent(id)}`), { method: 'DELETE' }),
+  /** hide: its live clips are hidden too (a key that leaked). */
+  revokeKey: (id: number, hide: boolean) => answered(at(`clip-keys/${id}${hide ? '?hide=true' : ''}`), { method: 'DELETE' }),
   users: (q: string, offset = 0) =>
     request<{ overview: Overview; predictions?: PredictionNumbers; accounts: AccountRow[]; next: number | null }>(at(`users?q=${encodeURIComponent(q)}&offset=${offset}`)),
   user: (id: number) => request<AccountDetail>(at(`users/${id}`)),

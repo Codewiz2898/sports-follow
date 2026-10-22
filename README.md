@@ -911,8 +911,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   no restart: it turns sports (each esports game on its own) and sources off and on, sets what each source may spend (its allowance a
   minute, an hour or a day, as a new plan gives; the margin; the reserve for live games and fans; the
   fans' share; the pause after a 429) next to what was spent, by lane, and looks after accounts (find
-  one by address, see who they follow and their devices, sign them out everywhere, block them from
-  signing in, delete them). What it changes is rows in `control` (`sports_follow/controls.py`), which
+  one by address, see the players, teams and games they follow, their calls and devices, sign them out everywhere,
+  block them from signing in, delete them) and clips (those fans reported first: hide one, put it back or take it
+  down; revoke a publishing key, hiding its clips too if it leaked). A change of a source's allowance made from a
+  view that's since gone stale (another tab saved one) is refused, and the panel shows the newer one. What it changes is rows in `control` (`sports_follow/controls.py`), which
   every process reads again every 10 seconds; `sports.ENABLED`, `adapters.ADAPTERS` and the source
   budgets follow them. A sport turned off while its games are on is safe: the next tick puts them off
   (`structured.put_off`: no longer polled, nor LIVE on cards or phones), and once it's on again its

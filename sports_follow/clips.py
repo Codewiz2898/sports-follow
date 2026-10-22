@@ -27,7 +27,7 @@ import json
 import secrets
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import delete, func, literal, or_, select, update
@@ -44,6 +44,8 @@ MAX_BYTES = 80 * 1024 * 1024
 MAX_POSTER = 2 * 1024 * 1024
 MAX_PLAYERS = 20
 PAGE = 30
+SWEEP = 500  # clips a sweep (retention.py) looks at, of each kind
+LINGER = timedelta(days=3)  # how far back a sweep looks for clips failed or taken down while a link could still put a file
 # What may be published, by what it was recorded from (BHA-369). A stream is its broadcaster's production:
 # while the app's own admins post clips, those stay on the device.
 RIGHTS = {"game_client": True, "file": True, "browser": False}
@@ -100,6 +102,8 @@ def key_from(db: Session, token: str, now: datetime | None = None) -> ClipKey | 
 
 
 def revoke(db: Session, key_id: int, now: datetime | None = None) -> bool:
+    """Revoke a key: it stops at once (its uploads under way can't be finished: sweep clears them). Its clips stay up
+    unless hidden too (hide_from)."""
     row = db.get(ClipKey, key_id)
     if row is None or row.revoked_at is not None:
         return False
@@ -255,6 +259,47 @@ def set_hidden(db: Session, slug: str, hidden: bool) -> Clip | None:
         clip.reports = 0
         db.execute(delete(ClipReport).where(ClipReport.clip_id == clip.id))
     return clip
+
+
+def hide_from(db: Session, key_id: int) -> int:
+    """Hide every live clip put up with a key (one revoked because it leaked): how many. Refused (502) when the bucket
+    fails, the ones hidden before it staying hidden."""
+    hidden = 0
+    for slug in list(db.scalars(select(Clip.slug).where(Clip.key_id == key_id, Clip.status == "live").order_by(Clip.id))):
+        set_hidden(db, slug, True)
+        db.flush()
+        hidden += 1
+    return hidden
+
+
+def sweep(db: Session, now: datetime | None = None, count: bool = False) -> int:
+    """Clips' files nothing will read (retention.py, daily): an upload that never reached done (the app gave up, or its
+    key was revoked), once its upload links have run out (clipstore.SIGNED_FOR), its files deleted and the clip kept as
+    failed; and a file a link still running put back after its clip failed or was taken down. How many clips had any;
+    with count, nothing is changed. Without a bucket, none."""
+    bucket = clipstore.STORE
+    if bucket is None:
+        return 0
+    now = now or datetime.now(timezone.utc)
+    ran_out = now - timedelta(seconds=clipstore.SIGNED_FOR + 60)
+    found = 0
+    for clip in db.scalars(select(Clip).where(Clip.status == "uploading", Clip.created_at < ran_out).order_by(Clip.id).limit(SWEEP)):
+        found += 1
+        if not count:
+            bucket.delete(video_key(clip.slug))
+            bucket.delete(poster_key(clip.slug))
+            clip.status = "failed"
+    if not count:
+        db.flush()
+    lately = select(Clip.slug).where(Clip.status.in_(("failed", "removed")), Clip.created_at < ran_out, Clip.created_at >= now - LINGER)
+    for slug in list(db.scalars(lately.order_by(Clip.id).limit(SWEEP))):
+        there = [f for f in (video_key(slug), poster_key(slug)) if bucket.size(f) is not None]
+        if there:
+            found += 1
+            if not count:
+                for f in there:
+                    bucket.delete(f)
+    return found
 
 
 def report(db: Session, slug: str, fan: str, reason: str = "") -> bool | None:

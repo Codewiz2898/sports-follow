@@ -264,6 +264,40 @@ def test_revoked_key_stops_at_once(db):
         assert clips.keys(s)[0]["revoked"] is not None
 
 
+def test_revoking_a_key_can_hide_its_clips_and_unfinished_uploads_are_cleared(db, bucket, page):
+    """BUG-260: revoking a key (a lost laptop, a leaked key) left the clips put up with it live, and an upload under
+    way with it kept its files in the bucket for good: nothing finished or cleared it. Revoking can hide its clips too;
+    an upload that never reached done is cleared once its links have run out, and so is a file a link still running
+    put back after its clip failed or was taken down."""
+    key_id, _ = _key(db)
+    other_key, _ = _key(db, "another Mac")
+    live, _ = _publish(db, bucket, key_id)
+    theirs, _ = _publish(db, bucket, other_key)
+    body = {"source": "file", "seconds": 10.0, "bytes": 1000, "width": 640, "height": 360}
+    with db() as s:
+        stuck = clips.create(s, s.get(clips.ClipKey, key_id), body, now=NOW - timedelta(minutes=5)).clip.slug
+        gone = clips.create(s, s.get(clips.ClipKey, other_key), body, now=NOW - timedelta(minutes=5)).clip.slug
+    bucket.put(clips.video_key(stuck), b"x" * 1000)  # the app's PUT, never followed by done
+    with db() as s:
+        assert clips.remove(s, gone, s.get(clips.ClipKey, other_key))
+    bucket.put(clips.poster_key(gone), b"y" * 10)  # put by its link after it was taken down
+    with db() as s:
+        assert clips.revoke(s, key_id) and clips.hide_from(s, key_id) == 1
+    with db() as s:
+        assert [c["id"] for c in clips.listed(s)] == [theirs]
+        assert bucket.size(clips.video_key(live)) is None  # off its public address too
+        assert clips.sweep(s, NOW) == 0  # their links still work: a file could come yet
+    later = NOW + timedelta(seconds=clipstore.SIGNED_FOR)
+    with db() as s:
+        assert clips.sweep(s, later, count=True) == 2 and bucket.size(clips.video_key(stuck)) == 1000  # counted, nothing changed
+        assert clips.sweep(s, later) == 2
+    with db() as s:
+        assert s.query(Clip).filter_by(slug=stuck).one().status == "failed"
+        assert clips.sweep(s, later) == 0
+    assert bucket.size(clips.video_key(stuck)) is None and bucket.size(clips.poster_key(gone)) is None
+    assert sorted(bucket.objects) == sorted([clips.video_key(theirs), clips.poster_key(theirs), bucket.hidden(clips.video_key(live)), bucket.hidden(clips.poster_key(live))])
+
+
 # ---------------------------------------------------------------- the routes, on the same rows
 
 
@@ -322,6 +356,15 @@ def test_the_routes_publish_list_report_and_moderate(api, db, bucket):
 
     assert api.delete(f"/api/admin/clip-keys/{made['id']}").status_code == 204
     assert api.post("/api/clips", json=body, headers=auth).status_code == 401  # revoked: at once
+    # Revoked with its clips hidden (a leaked key's): its live clips go off the app.
+    second = api.post("/api/admin/clip-keys", json={"name": "a leaked key"}).json()
+    up = api.post("/api/clips", json=body, headers={"Authorization": f"Bearer {second['key']}"}).json()
+    bucket.put(clips.video_key(up["id"]), b"v" * 1000)
+    bucket.put(clips.poster_key(up["id"]), b"p" * 10)
+    assert api.post(f"/api/clips/{up['id']}/done", headers={"Authorization": f"Bearer {second['key']}"}).status_code == 200
+    assert api.delete(f"/api/admin/clip-keys/{second['id']}", params={"hide": "true"}).status_code == 204
+    assert api.get(f"/api/clips/{up['id']}").status_code == 404
+    assert [c["status"] for c in api.get("/api/admin/clips", params={"status": "hidden"}).json()["clips"]] == ["hidden"]
 
 
 def test_a_failed_upload_is_kept_failed_and_only_its_key_takes_it_down(api, db, bucket):

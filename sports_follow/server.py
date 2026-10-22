@@ -1825,11 +1825,20 @@ def admin_new_clip_key(body: dict[str, Any] = Body(...), db: Session = Depends(g
 
 
 @app.delete("/api/admin/clip-keys/{key_id}", status_code=204, dependencies=AdminOnly)
-def admin_revoke_clip_key(key_id: RowId, db: Session = Depends(get_db)) -> None:
+def admin_revoke_clip_key(key_id: RowId, hide: bool = False, db: Session = Depends(get_db)) -> None:
+    """Revoke a publishing key: it stops at once. ?hide=true hides its live clips too (a key that leaked)."""
     if not clips.revoke(db, key_id):
         raise HTTPException(404, "No such key, or revoked already.")
     db.commit()
     admin_log.info("admin: publishing key %s revoked", key_id)
+    if hide:
+        try:
+            hidden = clips.hide_from(db, key_id)
+        except clips.Refused as refused:
+            db.commit()  # the clips hidden before the bucket failed stay hidden
+            raise HTTPException(refused.status, f"Revoked, but not all its clips are hidden: {refused.message}") from None
+        db.commit()
+        admin_log.info("admin: publishing key %s's %d clips hidden", key_id, hidden)
 
 
 def _switch(body: dict, field: str) -> bool:

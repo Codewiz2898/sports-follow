@@ -3,6 +3,7 @@ import { Navigate, NavLink, Route, Routes } from 'react-router-dom'
 import { ApiError } from '../api'
 import { APP_NAME } from '../app'
 import { admin } from './api'
+import { ClipsTab } from './ClipsTab'
 import { FeedTab } from './FeedTab'
 import { Failure } from './shared'
 import { SourcesTab } from './SourcesTab'
@@ -58,6 +59,7 @@ export default function AdminApp() {
           <NavLink to="/admin/sources">Sources and limits</NavLink>
           <NavLink to="/admin/users">Users</NavLink>
           <NavLink to="/admin/feed">Feed</NavLink>
+          <NavLink to="/admin/clips">Clips</NavLink>
         </nav>
         <Routes>
           <Route index element={<SportsTab />} />
@@ -65,6 +67,7 @@ export default function AdminApp() {
           <Route path="users" element={<UsersTab />} />
           <Route path="users/:id" element={<UserPage />} />
           <Route path="feed" element={<FeedTab />} />
+          <Route path="clips" element={<ClipsTab />} />
           <Route path="*" element={<Navigate to="/admin" replace />} />
         </Routes>
       </div>
