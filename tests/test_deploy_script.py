@@ -33,7 +33,9 @@ case "$name" in
       shift 3  # compose -f deploy/compose.yaml
       case "$1" in
         build) [ -n "${FAKE_BUILD_FAILS:-}" ] && exit 1; echo "$SPORTS_FOLLOW_COMMIT" >"$FAKE/latest" ;;
-        config) printf '%s\n' ${FAKE_SERVICES:-caddy api worker curator gateway backup migrate postgres redis} ;;
+        # Long, so a reader that stops at its match (grep -q) closes the pipe while this still writes, as it can
+        # under a real docker: under pipefail that failed the curator check, now every time rather than by chance.
+        config) printf '%s\n' ${FAKE_SERVICES:-caddy api worker curator gateway backup migrate postgres redis} $(seq 100000) ;;
         ps) [ "$2" = -aq ] && echo "id-$3" ;;
         exec) [ "$3" = backup ] && cat deploy/backup.sh ;;
       esac
