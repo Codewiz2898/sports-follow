@@ -208,6 +208,21 @@ def test_chess_fixture_and_result_label_from_each_side():
     assert lichess_chess.fmt_points(2.5) == "2½" and lichess_chess.fmt_points(0.5) == "½" and lichess_chess.fmt_points(0) == "0"
 
 
+def test_a_chess_games_result_is_the_boards_own_white_first():
+    # BUG-144: a game's result was put from the player's side, so Lazavik's loss with Black read "Lost 0–1", which in
+    # chess (White's points first) says Black won. A game's result is the board's own, from either side; a match's
+    # stays the player's, as colours change through it.
+    data = load("lichess/round-final")
+    now = datetime(2026, 9, 29, tzinfo=timezone.utc)
+    first, second = data["games"][0], data["games"][1]  # Carlsen won game 1 with White; game 2 was drawn
+    labels = lambda games: [lichess_chess.result_label(lichess_chess.fixture_for(data["tour"], data["round"], lichess_chess.games_of({"games": games}, fide), fide, now), [fide])  # noqa: E731
+                            for fide in (CARLSEN, LAZAVIK)]
+    assert labels([first]) == ["Won 1–0", "Lost 1–0"]
+    assert labels([{**first, "players": first["players"][::-1], "status": "0-1"}]) == ["Won 0–1", "Lost 0–1"]  # Carlsen's win with Black
+    assert labels([second]) == ["Drew ½–½", "Drew ½–½"]
+    assert labels([first, second]) == ["Won 1½–½", "Lost ½–1½"]  # a mini-match: the player's points first
+
+
 def test_chess_match_page_is_one_players_board_with_both_players():
     data = load("lichess/round-final")
     rnd = data["round"]["id"]

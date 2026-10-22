@@ -667,14 +667,16 @@ def fixture_for(tour: dict[str, Any], rnd: dict[str, Any], games: list[dict[str,
 
 
 def result_label(fixture: Fixture, team_ids: list[str]) -> str:
-    """ "Won 1–0" for a game, "Won 6–2" for a match; always from the followed player's side (a chess
-    fixture belongs to one player)."""
+    """ "Won 6–2" for a match, from the followed player's side (a chess fixture belongs to one player), its colours
+    changing game to game; a game's result as chess writes it, White's points first, from either side ("Lost 1–0":
+    a loss with Black), so the score alone (the app's results drop the word) never says the other side won."""
     r = fixture.result
     if not r or not r.get("games"):
         return ""
     pts, other = r["points"], r["games"] - r["points"]
     word = "Won" if pts > other else "Lost" if pts < other else "Drew"
-    return f"{word} {fmt_points(pts)}–{fmt_points(other)}" + (" on armageddon" if r.get("armageddon") else "")
+    white, black = (other, pts) if r.get("games") == 1 and r.get("colour") == "Black" else (pts, other)
+    return f"{word} {fmt_points(white)}–{fmt_points(black)}" + (" on armageddon" if r.get("armageddon") else "")
 
 
 # ---------------------------------------------------------------- search and recognising a name

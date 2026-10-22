@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from .base import DRAW, Ask, Fired, Found, Glance, Line, Played, Poster, Seen, Sport, stat, words
+from .base import DRAW, Ask, Fired, Found, Glance, Line, Played, Poster, Seen, Sport, outcome, stat, words
 
 if TYPE_CHECKING:
     from ..models import Athlete
@@ -110,12 +110,18 @@ def _score(ev: dict[str, Any], side: int) -> str:
 
 
 def _points(result: str) -> tuple[float, float] | None:
-    """ "Won 3½–2½" -> (3.5, 2.5)."""
+    """ "Won 3½–2½" -> (3.5, 2.5): the player's points and their opponent's. A match's result is put from the player's
+    side, but one game's is the board's, White's first ("Won 0–1", a win with Black: lichess_chess.result_label), so
+    a game's point is its word's."""
     match = re.search(r"(\d*½?)–(\d*½?)", result or "")
     if not match:
         return None
     value = lambda s: (int(s.rstrip("½")) if s.rstrip("½") else 0) + (0.5 if s.endswith("½") else 0)  # noqa: E731
-    return value(match.group(1)), value(match.group(2))
+    mine, theirs = value(match.group(1)), value(match.group(2))
+    if mine + theirs == 1:
+        mine = {"W": 1.0, "D": 0.5, "L": 0.0}.get(outcome(result) or "", mine)
+        theirs = 1 - mine
+    return mine, theirs
 
 
 def _sides(now: Seen) -> tuple[str, str, str]:

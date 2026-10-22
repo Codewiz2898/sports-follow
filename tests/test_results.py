@@ -134,6 +134,14 @@ def test_tennis_and_chess_form():
     assert {s["label"]: s["value"] for s in chess} == {"W–D–L": "2–1–0", "Score": "5/8", "Score %": "62%"}
 
 
+def test_chess_form_scores_a_game_by_its_word_whichever_way_its_result_reads():
+    # BUG-144: a game's result is now the board's, White's points first ("Won 0–1": a win with Black), where it was the
+    # player's ("Lost 0–1" for a loss with Black, still stored so): a game's point is the word's, a match's the label's.
+    said = ["Won 0–1", "Won 0–1", "Lost 1–0", "Lost 0–1", "Won 1–0 on armageddon", "Lost ½–1½ on armageddon"]
+    chess, _ = form.summarize("Chess", [(result(r), None) for r in said], [])
+    assert {s["label"]: s["value"] for s in chess} == {"W–D–L": "3–0–3", "Score": "3½/7", "Score %": "50%"}
+
+
 def test_a_walkover_isnt_form():
     # BUG-040's follow-up: "Won (w/o)" wasn't played, as the season Win–loss already says.
     tennis, _ = form.summarize("Tennis", [(result("Won (w/o)"), line("Won by walkover")), (result("Won 6-4 6-3"), line("Won in 2 sets", Sets="2–0"))], [])
