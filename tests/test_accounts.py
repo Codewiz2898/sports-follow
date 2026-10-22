@@ -37,6 +37,7 @@ class Accounts:
         self.made = 0
         self.bumped = False
         self.blocked_ids: set[int] = set()  # blocked by an admin (admin.py)
+        self.dropped = 0  # the device's teams that don't fit in the account (teams.merge)
 
     def find_or_create(self, db, email):
         found = next((i for i, e in self.emails.items() if e == email), None)
@@ -53,7 +54,7 @@ class Accounts:
         self.sessions[accounts.token_hash(token)] = signed
         if anon:
             self.adopted.append((anon, account_id))
-        return accounts.SignedIn(token=token, session_id=signed.session_id, fan_id=signed.fan_id, players=2 if anon else 0)
+        return accounts.SignedIn(token=token, session_id=signed.session_id, fan_id=signed.fan_id, players=2 if anon else 0, teams_dropped=self.dropped if anon else 0)
 
     def session_for(self, db, token_hash):
         self.lookups += 1
@@ -599,6 +600,19 @@ def test_continue_with_google_signs_in_and_brings_the_device(api, store, google)
     jar = set_cookies(back)
     assert jar["sf_session"][0] and jar["sf_oauth"][1] and jar["sf_fan"][1]
     assert store.emails == {1: "fan@gmail.com"} and store.adopted == [("anon-g", 1)]
+
+
+def test_the_fan_is_told_how_many_of_the_devices_teams_didnt_fit_in_the_account(api, store, outbox, google):
+    """BUG-228: an account follows at most teams.MAX teams, and a sign-in that brought more dropped the rest without a
+    word. The answer says how many, and so does Google's way back to the app."""
+    store.dropped = 15
+    answer = sign_in(api, outbox, headers=cookies(fan="anon-1"))
+    assert (answer.json()["players_added"], answer.json()["teams_dropped"]) == (2, 15)
+    _, back = go_to_google(api, google)
+    assert back.headers["location"] == "/account?welcome=2&teams_dropped=15"
+    store.dropped = 0
+    _, back = go_to_google(api, google, fan="anon-h")
+    assert back.headers["location"] == "/account?welcome=2"
 
 
 @pytest.mark.parametrize("claims", [

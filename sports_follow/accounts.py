@@ -135,6 +135,7 @@ class SignedIn:
     session_id: int
     fan_id: str
     players: int  # how many players this device's anonymous fan brought
+    teams_dropped: int = 0  # how many of its teams didn't fit in the account (teams.MAX), for the fan to be told
 
 
 def sign_in(db: Session, account_id: int, anon: str | None, ending: int | None = None) -> SignedIn:
@@ -148,8 +149,8 @@ def sign_in(db: Session, account_id: int, anon: str | None, ending: int | None =
     now = datetime.now(timezone.utc)
     session_id = db.scalar(insert(AccountSession).values(account_id=account_id, token_hash=token_hash(token), expires_at=now + SESSION_LIFE).returning(AccountSession.id))
     fan = db.scalar(update(Account).where(Account.id == account_id).values(last_sign_in_at=now).returning(Account.fan_id))
-    players = adopt(db, anon, account_id, session_id) if anon else 0
-    return SignedIn(token=token, session_id=session_id, fan_id=fan, players=players)
+    moved = adopt(db, anon, account_id, session_id) if anon else Moved(0, 0)
+    return SignedIn(token=token, session_id=session_id, fan_id=fan, players=moved.players, teams_dropped=moved.teams_dropped)
 
 
 def end_sessions(db: Session, account_id: int, session_id: int | None = None) -> list[str]:
@@ -184,15 +185,21 @@ def _lock(db: Session, anon: str, account_id: int) -> str | None:
     return db.scalar(select(Account.fan_id).where(Account.id == account_id).with_for_update())
 
 
-def adopt(db: Session, anon: str, account_id: int, session_id: int | None) -> int:
+@dataclass(frozen=True)
+class Moved:
+    players: int  # how many players came over
+    teams_dropped: int  # how many of the device's teams didn't fit (teams.merge)
+
+
+def adopt(db: Session, anon: str, account_id: int, session_id: int | None) -> Moved:
     """Move everything kept under the anonymous fan id `anon` into the account, in this transaction.
-    Doing it again moves only what has appeared since. Returns how many players came over. Its devices become
-    the session's; with that session ended (or none), they go instead: their alerts stopped with it. With the
-    account gone, everything under `anon` goes, as the account's did: no device holds that fan id now (BUG-099)."""
+    Doing it again moves only what has appeared since. Its devices become the session's; with that session
+    ended (or none), they go instead: their alerts stopped with it. With the account gone, everything under
+    `anon` goes, as the account's did: no device holds that fan id now (BUG-099)."""
     fan = _lock(db, anon, account_id)
     if fan is None:
         forget(db, anon)
-        return 0
+        return Moved(0, 0)
     if session_id is not None and db.scalar(select(AccountSession.id).where(AccountSession.id == session_id).with_for_update(read=True)) is None:
         session_id = None  # signed out since: held until this commits, so a sign-out under way takes what moved with it
     players = db.scalar(select(func.count()).select_from(Follow).where(Follow.fan_id == anon)) or 0
@@ -226,7 +233,7 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int | None) -> in
         "until": case((or_(MatchFollow.until.is_(None), games.excluded.until.is_(None)), None), else_=func.greatest(MatchFollow.until, games.excluded.until)),
     }))
     db.execute(delete(MatchFollow).where(MatchFollow.fan_id == anon))
-    teams.merge(db, anon, fan)  # the teams followed (teams.py), as players are, at most teams.MAX
+    teams_dropped = teams.merge(db, anon, fan)  # the teams followed (teams.py), as players are, at most teams.MAX
     predictions.merge(db, anon, fan)  # the games called (predictions.py): a question both picked keeps the account's pick
     clips.merge(db, anon, fan)  # clips reported (clips.py): one each
     muted = insert(NotificationMute).from_select(
@@ -254,18 +261,18 @@ def adopt(db: Session, anon: str, account_id: int, session_id: int | None) -> in
     # This device's alerts: now the account's, and this session's. The account's oldest devices make room.
     if session_id is None:
         db.execute(delete(PushSubscription).where(PushSubscription.fan_id == anon))
-        return players
+        return Moved(players, teams_dropped)
     devices = list(db.scalars(update(PushSubscription).where(PushSubscription.fan_id == anon).values(fan_id=fan, session_id=session_id).returning(PushSubscription.id)))
     if devices:
         notify.trim_devices(db, fan, PushSubscription.id.in_(devices), notify.MAX_DEVICES - len(devices))
-    return players
+    return Moved(players, teams_dropped)
 
 
 def adopt_later(anon: str, account_id: int, session_id: int) -> int:
     """A minute after a sign-in: what a request already under way then wrote to the anonymous fan, which no device
     holds now. It comes into the account even if the device signed out since (BUG-099). Returns how many players."""
     with session() as db:
-        return adopt(db, anon, account_id, session_id)
+        return adopt(db, anon, account_id, session_id).players
 
 
 # ---------------------------------------------------------------- deleting an account

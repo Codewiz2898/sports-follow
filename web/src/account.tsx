@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, type Account, type Me, type ServerConfig } from './api'
 import { CloseIcon } from './components/Icons'
+import { welcome } from './fanChange'
 import { changedHands } from './resync'
 
 /**
@@ -73,11 +74,6 @@ async function forgetCachedAnswers() {
   } catch { /* no Cache Storage here */ }
 }
 
-function welcome(added: number): string {
-  if (!added) return 'Signed in.'
-  return `Signed in. ${added === 1 ? 'The player' : `The ${added} players`} you followed on this device ${added === 1 ? 'is' : 'are'} in your account now.`
-}
-
 export function AccountProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null)
   const meRef = useRef(me)
@@ -95,19 +91,22 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   })
 
   useEffect(() => {
-    // Back from Google (/account?welcome=N, server.google_callback): the server signed this device in.
-    const back = new URLSearchParams(window.location.search).get('welcome')
+    // Back from Google (/account?welcome=N, with &teams_dropped=M if some didn't fit: server.google_callback): the
+    // server signed this device in.
+    const query = new URLSearchParams(window.location.search)
+    const back = query.get('welcome')
     if (back !== null) {
       forgetCachedAnswers()
       try { localStorage.removeItem('sf-alerts-seen') } catch { /* storage blocked */ }
+      const said = welcome(Number(back) || 0, Number(query.get('teams_dropped')) || 0)
       // Signed in from a page that asked to be come back to (a league's invite): there, saying so.
       const after = takeAfterSignIn()
       if (after) {
-        try { sessionStorage.setItem(NOTICE, welcome(Number(back) || 0)) } catch { /* storage blocked */ }
+        try { sessionStorage.setItem(NOTICE, said) } catch { /* storage blocked */ }
         window.location.replace(after)
         return
       }
-      setNotice(welcome(Number(back) || 0))
+      setNotice(said)
     }
     // Turned back at Google's (/account?error=…): no page to come back to after a later sign-in.
     if (new URLSearchParams(window.location.search).has('error')) takeAfterSignIn()
@@ -142,7 +141,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
 
   const dismissNotice = useCallback(() => setNotice(null), [])
   const signedIn = useCallback((account: Account, back?: string) => {
-    startOver(ownPage(back) ?? '/account', welcome(account.players_added ?? 0), false)
+    startOver(ownPage(back) ?? '/account', welcome(account.players_added ?? 0, account.teams_dropped ?? 0), false)
   }, [])
   const signOut = useCallback(async (everywhere = false) => {
     await api.signOut(everywhere)

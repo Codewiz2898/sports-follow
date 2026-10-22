@@ -20,7 +20,7 @@ from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import accounts, matches, notify
+from sports_follow import accounts, matches, notify, teams
 from sports_follow.models import (Account, AccountSession, Clip, ClipReport, Event, FanSource, Follow, League, LeagueMember, MatchFollow, Notification, NotificationMute, Pick, Player,
                                   PushSubscription, Question, Team, TeamFollow)
 
@@ -190,9 +190,25 @@ def test_bringing_a_devices_teams_waits_for_a_team_follow_under_way_on_the_accou
     finally:
         under_way.rollback()
         other.close()
-    accounts.sign_in(db, account_id, "anon")  # once it's done
+    done = accounts.sign_in(db, account_id, "anon")  # once it's done
     db.commit()
-    assert db.scalars(select(TeamFollow.fan_id)).all() == [fan]
+    assert db.scalars(select(TeamFollow.fan_id)).all() == [fan] and done.teams_dropped == 0
+
+
+def test_the_devices_teams_that_dont_fit_in_the_account_are_counted_for_the_fan(db):
+    """BUG-228: the account follows at most teams.MAX teams, and the device's that didn't fit went without a word."""
+    account_id, fan = account(db)
+    db.add_all([TeamFollow(fan_id=fan, team_id=i) for i in range(1, teams.MAX + 1)])
+    db.add_all([TeamFollow(fan_id="anon", team_id=i) for i in range(16, 46)])  # 15 the account has, 15 it hasn't
+    db.commit()
+    done = accounts.sign_in(db, account_id, "anon")
+    db.commit()
+    assert done.teams_dropped == 15
+    assert sorted(db.scalars(select(TeamFollow.team_id).where(TeamFollow.fan_id == fan))) == list(range(1, teams.MAX + 1))
+    other_id, other = account(db, "other@example.com")
+    db.add_all([TeamFollow(fan_id="anon-2", team_id=i) for i in (1, 2)])
+    db.commit()
+    assert accounts.sign_in(db, other_id, "anon-2").teams_dropped == 0
 
 
 def test_the_device_signing_in_is_never_the_one_dropped_for_room(db):

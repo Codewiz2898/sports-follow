@@ -1498,7 +1498,8 @@ async def _forget_sessions(token_hashes: list[str]) -> None:
 
 async def _sign_in(request: Request, response: Response, account_id: int, signed: accounts.Signed | None) -> dict[str, Any]:
     """Sign this device in to the account, bringing what its anonymous fan had (accounts.adopt). A
-    session this device already had (signing in again, or as someone else) ends."""
+    session this device already had (signing in again, or as someone else) ends. The answer says how many
+    players came, and how many of the device's teams didn't fit in the account (teams.MAX), so the fan is told."""
     anon = await asyncio.to_thread(_cookie_fan, request)
     done = await in_db(accounts.sign_in, account_id, anon, signed.session_id if signed else None)
     if signed:
@@ -1515,7 +1516,7 @@ async def _sign_in(request: Request, response: Response, account_id: int, signed
         await enqueue("adopt_stragglers", anon, account_id, done.session_id, _defer_by=60)
     _set_session(request, response, done.token)
     response.delete_cookie(FAN_COOKIE, httponly=True, samesite="lax", secure=_secure(request))
-    return {**(await in_db(accounts.describe, account_id) or {}), "players_added": done.players}
+    return {**(await in_db(accounts.describe, account_id) or {}), "players_added": done.players, "teams_dropped": done.teams_dropped}
 
 
 @app.get("/api/me/account")
@@ -1682,7 +1683,8 @@ async def google_callback(request: Request, state: str = "", code: str = "", err
         return back("/account?error=blocked")
     response = back("/account")
     done = await _sign_in(request, response, account_id, signed)
-    response.headers["location"] = f"/account?welcome={done['players_added']}"
+    dropped = f"&teams_dropped={done['teams_dropped']}" if done["teams_dropped"] else ""
+    response.headers["location"] = f"/account?welcome={done['players_added']}{dropped}"
     return response
 
 
