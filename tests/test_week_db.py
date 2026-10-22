@@ -16,7 +16,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import notify, pipeline, server, week
-from sports_follow.models import AthleteOverride, Event, EventPlayer, Follow, Moment, Player, PlayerIdentity, PlayerLine, Sidelined
+from sports_follow.models import AthleteOverride, Event, EventPlayer, Follow, Moment, Player, PlayerIdentity, PlayerLine, Sidelined, Team, TeamFollow
 from sports_follow.moments import Found, Seen, detect
 
 from .test_moments import goal, line, scored
@@ -322,6 +322,26 @@ def test_a_fan_who_follows_nobody_gets_the_best_known_facts(facts, monkeypatch):
         ("Kai Havertz · hamstring injury", f"/athlete/{SM}/9001", False), ("Mohamed Salah · hamstring injury", "/player/1", False)]
     monkeypatch.setattr(week, "ADAPTERS", {})  # football turned off: no facts
     assert server.this_week("nobody", db)["wire"] == []
+
+
+def test_a_fan_who_follows_only_a_team_has_its_players_facts_on_the_wire_and_a_week_of_their_own(facts, monkeypatch):
+    # BUG-229: a fan who followed only their club heard nothing of its injuries, and was given the Wire of a fan who
+    # follows nobody.
+    db = facts
+    db.execute(text("TRUNCATE team RESTART IDENTITY CASCADE"))
+    club = Team(name="Arsenal", sport="football", system=SM, external_id="1")  # out() puts every spell on team 1's list
+    db.add(club)
+    db.flush()
+    db.add(TeamFollow(fan_id="team-fan", team_id=club.id, alert_rules={}))
+    db.flush()
+    out(db, "9001", "Kai Havertz", hours=1, fame=5)  # not well known: no fan who doesn't follow the club hears of it
+    out(db, "9002", "Someone Else", hours=2, fame=5, system="espn_soccer")  # a source that doesn't run
+    assert [(r["text"], r["url"], r["yours"]) for r in server.this_week("team-fan", db)["wire"]] == [("Kai Havertz · hamstring injury", f"/athlete/{SM}/9001", True)]
+    assert server.this_week("nobody", db)["wire"] == []
+    # Kept a minute, each team fan's their own: never the answer every fan who follows nobody shares.
+    monkeypatch.setattr(week, "KEPT_FOR", 60, raising=False)
+    assert server.this_week("nobody", db)["wire"] == []
+    assert len(server.this_week("team-fan", db)["wire"]) == 1 and server.this_week("nobody", db)["wire"] == []
 
 
 def test_a_fans_week_is_worked_out_once_a_minute_and_at_once_when_they_follow_someone(db, monkeypatch):

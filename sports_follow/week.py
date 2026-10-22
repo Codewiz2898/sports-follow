@@ -7,8 +7,9 @@ source took back (a goal VAR ruled out) makes none. Moments are found only while
 a game first seen after it ended has none: its poster is read off the line it left the player instead, the
 result stored for them (Sport.finished_poster: "112 (98)" is a hundred, "2 goals" a brace).
 
-The Wire is the news about them, put plainly. First the facts a source gave about the fan's players in the
-last FACT_HOURS: who's out injured or suspended, and who's back (sidelined.py), as their sport words them.
+The Wire is the news about them, put plainly. First the facts a source gave about the fan's players, and the
+players of the teams they follow, in the last FACT_HOURS: who's out injured or suspended, and who's back
+(sidelined.py), as their sport words them.
 Then line-ups for games still to finish, each player's best story of the last NEWS_DAYS from the publishers'
 feeds the curator read and served (news.py), and the injuries, transfers and retirements the research agent found
 in the news and marked as just happened (pipeline.news_moments), each by the story's own headline with the site
@@ -32,7 +33,7 @@ from sqlalchemy.orm import Session, aliased
 from . import news, rank, registry, sports
 from .adapters import ADAPTERS, NEWS, source_name
 from .moments import Found
-from .models import Event, EventPlayer, FeedCandidate, Follow, Moment, NewsItem, Player, PlayerIdentity, PlayerLine, Sidelined
+from .models import Event, EventPlayer, FeedCandidate, Follow, Moment, NewsItem, Player, PlayerIdentity, PlayerLine, Sidelined, Team, TeamFollow
 from .naming import team_key
 
 DAYS = 7
@@ -40,7 +41,7 @@ LIMIT = 12  # posters at most, the biggest first
 KEPT_FOR = 60  # seconds a fan's week is kept (mine), in each API process
 KEPT_MAX = 5000  # fans' weeks kept at once, in each API process
 
-_kept: dict[str, tuple[float, tuple[int, ...], dict[str, Any]]] = {}  # fan (or "" for nobody's): when, follows, answer
+_kept: dict[str, tuple[float, tuple[tuple[int, ...], tuple[int, ...]], dict[str, Any]]] = {}  # fan (or "" for nobody's): when, follows, answer
 _keeping = threading.Lock()
 
 # The two sides in a game's title: "India v Australia", "GenOne vs 6666", "Spurs at Jazz".
@@ -59,10 +60,11 @@ def versus(title: str | None, mine: list[str]) -> str:
 def mine(db: Session, fan: str) -> dict[str, Any]:
     """This week and the Wire, as GET /api/me/week answers them, kept a minute (KEPT_FOR) per fan: every open
     app asks again after a big moment, and Today each time it opens, so most asks are read from here. Following
-    someone or stopping is seen at once (the answer is kept with the players it was for); fans who follow nobody
-    all have the same one."""
-    follows = tuple(sorted(db.scalars(select(Follow.player_id).where(Follow.fan_id == fan))))
-    key, now = (fan if follows else ""), time.monotonic()
+    someone or stopping is seen at once (the answer is kept with the players and teams it was for); fans who
+    follow nobody and no team all have the same one."""
+    follows = (tuple(sorted(db.scalars(select(Follow.player_id).where(Follow.fan_id == fan)))),
+               tuple(sorted(db.scalars(select(TeamFollow.team_id).where(TeamFollow.fan_id == fan)))))
+    key, now = (fan if any(follows) else ""), time.monotonic()
     kept = _kept.get(key)
     if kept is not None and kept[1] == follows and now - kept[0] < KEPT_FOR:
         return kept[2]
@@ -295,8 +297,9 @@ def _stories(db: Session, fan: str, now: datetime) -> tuple[list[tuple[datetime,
 def _facts(db: Session, fan: str, now: datetime) -> tuple[list[Row], list[Row]]:
     """The facts of the last FACT_HOURS (sidelined.py) as their sports word them, a player's newest only: the
     fan's players', newest first, and those about players they don't follow who are at least KNOWN well
-    known, the best known first. A player is the fan's by the identity they're bound by, never by name, and
-    is named as their page names them. A fact opens their page here, or the source's athlete page if nobody
+    known, the best known first. A player is the fan's by the identity they're bound by, never by name, or by
+    the team whose list they're on being one the fan follows (by the source's id for it); and is named as their
+    page names them. A fact opens their page here, or the source's athlete page if nobody
     follows them yet. Only the running sources' facts, and none about a player an operator removed."""
     since = now - timedelta(hours=FACT_HOURS)
     spells = db.scalars(select(Sidelined).where(Sidelined.system.in_(list(ADAPTERS)), or_(Sidelined.out_at >= since, Sidelined.back_at >= since))).all()
@@ -309,6 +312,7 @@ def _facts(db: Session, fan: str, now: datetime) -> tuple[list[Row], list[Row]]:
         .outerjoin(Follow, and_(Follow.player_id == Player.id, Follow.fan_id == fan))
         .where(tuple_(PlayerIdentity.system, PlayerIdentity.external_id).in_(pairs))
     )}
+    teams = {(system, xid) for system, xid in db.execute(select(Team.system, Team.external_id).join(TeamFollow, TeamFollow.team_id == Team.id).where(TeamFollow.fan_id == fan))}
     blocked = registry.blocked(db)
     newest: dict[tuple[str, str], tuple[datetime, int, dict[str, Any]]] = {}
     for s in spells:
@@ -317,6 +321,7 @@ def _facts(db: Session, fan: str, now: datetime) -> tuple[list[Row], list[Row]]:
             continue
         sport = sports.of(s.sport)
         player, followed = held.get(key, (None, False))
+        followed = followed or (s.system, s.team_id) in teams
         who = (player.name if player else s.name).strip()  # a name stored before the source's padding was cut
         for at, back in ((s.out_at, False), (s.back_at, True)):
             if at is None or at < since or (key in newest and newest[key][0] >= at):
