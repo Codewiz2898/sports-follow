@@ -347,6 +347,37 @@ def test_an_admins_hide_takes_the_video_off_every_players_feed_and_taking_it_bac
     assert served(other) == {"Verma and Rao's stand", "Rao in the nets"}
 
 
+def test_an_admins_approval_or_pin_serves_a_video_the_judge_hasnt_read_or_held_back(made):
+    """BHA-439: with the judge down or out of credit, an admin can still put a video in front of fans: approving or
+    pinning one the judge has no verdict on scores it as one about the player (rank.UNREAD), and so does one the judge
+    held back (its "held" verdict is no word on the video). Taking the word back takes it out again until the judge
+    has read it, and the curator's next run keeps what the admin said."""
+    pid = asha()
+    unread = stored(pid, "unread00001", "Verma in the nets", EDITS, 5)
+    held = stored(pid, "heldback001", "Verma on the hundred", TALKS, 6, verdict=rank.held("declined", 3))
+    rank.rescore()
+    served = lambda: [i.title for g in page(made, player_id=pid).groups for i in g.items if i.kind == "video"]  # noqa: E731
+    assert served() == []
+
+    approved = admin.review_candidate(unread, "approved")
+    assert approved is not None and approved["served"] and approved["score"] is not None
+    assert served() == ["Verma in the nets"]
+    rank.rescore()  # the curator's next run
+    assert served() == ["Verma in the nets"]
+    pinned = admin.review_candidate(unread, "pinned")
+    assert pinned is not None and pinned["score"] >= rank.PIN
+
+    was_held = admin.review_candidate(held, "approved")
+    assert was_held is not None and was_held["served"]
+    row = rows()["heldback001"]
+    assert row.score == rank.score(rank.UNREAD, row.features, rank.LISTED, rank.when(row.candidate["published"]))  # not the held verdict's nothing
+    assert served() == ["Verma in the nets", "Verma on the hundred"]
+
+    taken_back = admin.review_candidate(unread, None)
+    assert taken_back is not None and not taken_back["served"] and taken_back["score"] is None
+    assert served() == ["Verma on the hundred"]
+
+
 def test_signed_in_fans_reports_lower_their_channels_trust_to_half_at_most_and_anonymous_ones_dont(made):
     pid = asha()
     stored(pid, "edit0000001", "Every boundary", EDITS, 8, verdict=said())

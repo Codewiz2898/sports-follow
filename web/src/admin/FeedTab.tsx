@@ -88,8 +88,8 @@ export function FeedTab() {
       )}
       <Note>
         Every video the curator found about a followed player, with what the judge said. A video is served when it's from a channel its sport
-        lists (official ones and a few top creators), about the player, isn't paid for and has no risk, or you approved or pinned it; hiding it keeps it out whatever the judge said,
-        under every player it was found for. Pinned ones go to the
+        lists (official ones and a few top creators), about the player, isn't paid for and has no risk, or you approved or pinned it (one the judge hasn't read or
+        held back too); hiding it keeps it out whatever the judge said, under every player it was found for. Pinned ones go to the
         top of This week (or of their moment), however old. A channel's trust multiplies its videos' scores: Hidden keeps them out, except one you approved or pinned. A channel no sport lists
         serves nothing whatever its trust: only a video of it you approve or pin. Signed-in
         fans reporting a channel's videos lower its default trust, to half at most; a trust you set stands as it is. A video a fan's app said
