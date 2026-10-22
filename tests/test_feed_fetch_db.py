@@ -337,7 +337,7 @@ def test_three_networks_saying_a_video_wont_play_take_it_from_every_feed_at_once
     """BUG-100: three networks' apps saying a video won't play inside them take it off every player's row at once, and
     nothing is queued or asked of YouTube: a report never spends its quota."""
     kohli, bumrah = player("Virat Kohli"), player("Jasprit Bumrah")
-    world.feeds[CHANNEL] = feed(("kohlibumrah", "Kohli and Bumrah on the tour", ""))
+    world.uploads[CHANNEL] = uploads(("kohlibumrah", "Kohli and Bumrah on the tour", ""))
     world.videos["kohlibumrah"] = video("kohlibumrah")
     candidates.poll(NOW)
     asked = world.api_calls()
@@ -352,7 +352,7 @@ def test_the_weekly_check_drops_a_video_fans_apps_took_out_once_youtube_says_it_
     it goes, marked or not, as any stored video does. One YouTube still says plays stays, marked, for the admin."""
     kohli = player("Virat Kohli")
     player("Jasprit Bumrah")
-    world.feeds[CHANNEL] = feed(("kohlibumrah", "Kohli and Bumrah on the tour", ""), ("kohlicover0", "Kohli's cover drive", ""),
+    world.uploads[CHANNEL] = uploads(("kohlibumrah", "Kohli and Bumrah on the tour", ""), ("kohlicover0", "Kohli's cover drive", ""),
                                 ("kohlipull00", "Kohli's pull shot", ""), ("kohlisweep0", "Kohli's sweep", ""))  # fmt: skip
     world.videos.update({v["id"]: v for v in (video("kohlibumrah"), video("kohlicover0"), video("kohlipull00"), video("kohlisweep0"))})
     candidates.poll(NOW)
