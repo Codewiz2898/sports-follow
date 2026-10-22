@@ -26,7 +26,7 @@ import { AlsoLive, MoreLive } from '../today/live'
 import { StartersSection } from '../today/starters'
 import { PlayersStrip } from '../today/strip'
 import { ThisWeek, useWeek, Wire } from '../today/week'
-import { Btn, Eyebrow, Notice } from '../ui'
+import { Btn, ErrorBoundary, Eyebrow, Notice } from '../ui'
 import { Page } from '../page'
 import { FromYourPlayers } from '../feedLayouts'
 import { useWelcomed } from '../welcome'
@@ -137,6 +137,8 @@ export default function TodayScreen() {
   // The events the fan's players are in, once their games have loaded: a change looks at the league again.
   const theirKey = useMemo(() => (loaded ? [...theirEvents(cards, teams)].sort((a, b) => a - b).join(',') : null), [cards, teams, loaded])
   const league = useLeague(theirKey)
+  // As the web's: a block that couldn't be shown says so, the rest of Today stays; it tries again on a newer read.
+  const railKey = useMemo(() => [cards, teams, matches, league], [cards, teams, matches, league])
   const now = useNow()
   const sports = useSports()
   const welcomed = useWelcomed()
@@ -161,9 +163,13 @@ export default function TodayScreen() {
       <Page onRefresh={refresh} refreshing={refreshing}>
         <Head now={now} />
         <AlsoLive mine={[]} />
-        <BigGames league={league} now={now} />
+        <ErrorBoundary resetKey={railKey}>
+          <BigGames league={league} now={now} />
+        </ErrorBoundary>
         {/* Who's out and who's back among the best-known players. */}
-        <Wire rows={week.wire} now={now} />
+        <ErrorBoundary resetKey={week}>
+          <Wire rows={week.wire} now={now} />
+        </ErrorBoundary>
         <View style={s.hero}>
           <Text style={[dsp(48), { color: colour.text }]}>Pick your players</Text>
           <Text style={s.heroText}>Any athlete in any sport: the live score and their own numbers while they play, then fixtures, results and news.</Text>
@@ -196,52 +202,72 @@ export default function TodayScreen() {
   return (
     <Page onRefresh={refresh} refreshing={refreshing}>
       <Head now={now} />
-      {cards.length + teams.length > 0 ? <PlayersStrip cards={cards} teams={teams} now={now} /> : null}
+      {cards.length + teams.length > 0 ? (
+        <ErrorBoundary resetKey={railKey}>
+          <PlayersStrip cards={cards} teams={teams} now={now} />
+        </ErrorBoundary>
+      ) : null}
       {failed && !loaded ? <LoadFailed /> : null}
 
       {/* Each opens its match page; a live score the research agent read names no game, and opens the player's page. */}
       {games.map(([key, group]) => (
-        <Pressable key={group[0].player_id} onPress={openMatch(group[0].live.match, `/player/${group[0].player_id}`)} style={{ gap: 8 }}>
-          <LiveScoreboard live={group[0].live} playerName={group[0].player.name} sport={group[0].player.sport} teams={group.flatMap((c) => c.player.teams ?? [])} lines={group.map((c) => c.live.player_stats)} compact seed={key} latest={latestIn(alerts, group, seen)} />
-          {group.length > 1 ? <Text style={[s.tinyMuted, { fontFamily: font[700] }]}>Also in this game: {group.slice(1).map((c) => c.player.name).join(', ')}</Text> : null}
-        </Pressable>
+        <ErrorBoundary key={group[0].player_id} resetKey={group[0].live}>
+          <Pressable onPress={openMatch(group[0].live.match, `/player/${group[0].player_id}`)} style={{ gap: 8 }}>
+            <LiveScoreboard live={group[0].live} playerName={group[0].player.name} sport={group[0].player.sport} teams={group.flatMap((c) => c.player.teams ?? [])} lines={group.map((c) => c.live.player_stats)} compact seed={key} latest={latestIn(alerts, group, seen)} />
+            {group.length > 1 ? <Text style={[s.tinyMuted, { fontFamily: font[700] }]}>Also in this game: {group.slice(1).map((c) => c.player.name).join(', ')}</Text> : null}
+          </Pressable>
+        </ErrorBoundary>
       ))}
       {/* Then the games they follow by themselves, nobody of theirs in them. */}
-      <FollowedLive matches={followed} />
+      <ErrorBoundary resetKey={railKey}>
+        <FollowedLive matches={followed} />
+      </ErrorBoundary>
       {/* And their teams' games, nobody of theirs in them, not followed by themselves. */}
-      <TeamsLive games={teamGames} />
+      <ErrorBoundary resetKey={railKey}>
+        <TeamsLive games={teamGames} />
+      </ErrorBoundary>
       {/* Only the fan's own games are on Today; every other game on now is a tap away, on the Live page. Once the
           follow list has answered, so a game of the fan's is never counted as another. */}
       {loaded || failed ? <MoreLive mine={games.flatMap(([, group]) => group)} /> : null}
 
-      {resultCount > 0 ? (
-        <Rail title={done ? 'Results' : 'Big results'} note={`${resultsWhen} · ${resultCount}`}
-          all={done ? `Every result ${done.day ? `on ${done.day}` : 'since yesterday'}${bigDone.length ? ', and the big ones' : ''}` : 'Every big result'} max={(done?.games.length ?? 0) + TAIL}>
-          {/* With nothing live, the biggest result leads the page. */}
-          {[
-            ...(done?.games ?? []).map((g, i) => <ResultCard key={g.key} game={g} hero={i === 0 && !games.length} now={now} />),
-            ...bigDone.map((g) => <LeagueResultCard key={g.key} game={g} now={now} />),
-          ]}
-        </Rail>
-      ) : null}
+      <ErrorBoundary resetKey={railKey}>
+        {resultCount > 0 ? (
+          <Rail title={done ? 'Results' : 'Big results'} note={`${resultsWhen} · ${resultCount}`}
+            all={done ? `Every result ${done.day ? `on ${done.day}` : 'since yesterday'}${bigDone.length ? ', and the big ones' : ''}` : 'Every big result'} max={(done?.games.length ?? 0) + TAIL}>
+            {/* With nothing live, the biggest result leads the page. */}
+            {[
+              ...(done?.games ?? []).map((g, i) => <ResultCard key={g.key} game={g} hero={i === 0 && !games.length} now={now} />),
+              ...bigDone.map((g) => <LeagueResultCard key={g.key} game={g} now={now} />),
+            ]}
+          </Rail>
+        ) : null}
+      </ErrorBoundary>
 
       {/* What fans and the players themselves shared: after the results that set it off, before what's next. */}
-      <FromYourPlayers now={now} again={pulled} />
+      <ErrorBoundary resetKey={railKey}>
+        <FromYourPlayers now={now} again={pulled} />
+      </ErrorBoundary>
 
       <SaveNudge />
 
-      {comingCount > 0 ? (
-        <Rail title={coming.length ? 'Coming up' : 'Big games coming up'} note={`Next ${AHEAD_DAYS} days · ${comingCount}`}
-          all={`Every ${coming.length ? '' : 'big '}game in the next ${AHEAD_DAYS} days${coming.length && bigComing.length ? ', and the big ones' : ''}`} max={coming.length + TAIL}>
-          {[
-            ...coming.map((g) => <ComingCard key={g.key} event={g.event} players={g.players} seed={g.key} sport={g.sport} teams={g.teams} />),
-            ...bigComing.map((g) => <LeagueComingCard key={g.key} game={g} now={now} />),
-          ]}
-        </Rail>
-      ) : null}
+      <ErrorBoundary resetKey={railKey}>
+        {comingCount > 0 ? (
+          <Rail title={coming.length ? 'Coming up' : 'Big games coming up'} note={`Next ${AHEAD_DAYS} days · ${comingCount}`}
+            all={`Every ${coming.length ? '' : 'big '}game in the next ${AHEAD_DAYS} days${coming.length && bigComing.length ? ', and the big ones' : ''}`} max={coming.length + TAIL}>
+            {[
+              ...coming.map((g) => <ComingCard key={g.key} event={g.event} players={g.players} seed={g.key} sport={g.sport} teams={g.teams} />),
+              ...bigComing.map((g) => <LeagueComingCard key={g.key} game={g} now={now} />),
+            ]}
+          </Rail>
+        ) : null}
+      </ErrorBoundary>
 
-      {week.posters.length > 0 ? <ThisWeek posters={week.posters} now={now} /> : null}
-      <Wire rows={week.wire} now={now} />
+      <ErrorBoundary resetKey={week}>
+        {week.posters.length > 0 ? <ThisWeek posters={week.posters} now={now} /> : null}
+      </ErrorBoundary>
+      <ErrorBoundary resetKey={week}>
+        <Wire rows={week.wire} now={now} />
+      </ErrorBoundary>
 
       {cards.length > 0 && cards.length < FEW ? <StartersSection /> : null}
     </Page>
