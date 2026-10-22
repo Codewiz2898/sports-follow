@@ -399,13 +399,14 @@ def test_a_game_put_back_moves_its_question_while_its_open_and_one_closed_stays_
     poll(1, board(status="*"))
     db.expire_all()
     assert (db.get(Question, q.id).status, db.get(Question, q.id).locks_at, db.get(Question, q.id).starts_at) == ("open", later, later)
+    predictions.pick(db, "asha", q.id, CARLSEN)
     predictions.sweep(db, later + timedelta(minutes=1))  # its new start came, the game didn't: closed
     db.commit()
     db.execute(text("UPDATE event SET start_utc = :at"), {"at": later + timedelta(days=1)})  # put back again
     db.commit()
     poll(1, board(status="*"))
     db.expire_all()
-    assert db.get(Question, q.id).status == "closed"  # friends' picks may have shown: it doesn't open again
+    assert db.get(Question, q.id).status == "closed"  # Asha's pick, and her friends', may have shown: it doesn't open again
     # Postponed, it waits for its new date: the sweep leaves it a month, not three days.
     db.execute(text("UPDATE event SET status = 'postponed'"))
     db.commit()
@@ -511,6 +512,116 @@ def test_a_match_postponed_before_its_start_waits_closed_to_picks_and_opens_at_i
     db.commit()
     db.expire_all()
     assert db.get_one(Question, q.id).status == "closed"
+
+
+def test_a_match_whose_source_drops_its_date_while_postponed_opens_at_the_new_one(db, redis):
+    """BUG-109, round two: a source that drops a postponed match's start, and gives it a new one later, never moved its
+    question, since only a start that replaced another did (structured.reschedule): its new date came with the old
+    kick-off still its close, so the next tick shut it, days before the match. A start after none moves it now."""
+    start = soon()
+    sportmonks = SimpleNamespace(system="sportmonks_football", live_cadence=10)
+
+    def schedule(at: datetime | None, status: str) -> None:
+        structured.upsert_game(db, sportmonks, "Football", Fixture("558", "Trabzonspor vs Galatasaray", "Super Lig", at, None, status, [str(HOME), str(AWAY)], {"fixture": "558"}))
+        db.commit()
+
+    schedule(start, "scheduled")
+    event_id = db.scalars(select(Event.id).where(Event.key == "sportmonks_football:558")).one()
+    poll(event_id, sm.parse_match({**football_match("NS", 0, 0), "id": 558}), "sportmonks_football")
+    q = db.scalars(select(Question)).one()
+    predictions.pick(db, "acct-asha", q.id, str(HOME))
+    db.commit()
+    schedule(None, "postponed")  # called off, its date gone
+    predictions.sweep(db, start + timedelta(minutes=1))
+    db.commit()
+    later = start + timedelta(days=7)
+    schedule(later, "scheduled")
+    predictions.sweep(db, start + timedelta(minutes=2))  # the tick after its new date came
+    db.commit()
+    db.expire_all()
+    q = db.get_one(Question, q.id)
+    assert (q.status, q.locks_at, q.starts_at) == ("open", later, later)
+
+
+def test_a_match_nobody_called_shut_at_a_kick_off_that_didnt_come_opens_again_at_its_new_date(db, redis):
+    """BUG-109, round two: the tick shuts a question at its game's start, though no poll saw it begin (one may be late),
+    so a match put back without word till after its old kick-off was shut, and its new date never opened it. One nobody
+    picked has shown nobody anything: a new date opens it again now, till then. One somebody picked stays closed, as
+    friends' picks may have shown, and is settled when the match is played."""
+    start = soon()
+    sportmonks = SimpleNamespace(system="sportmonks_football", live_cadence=10)
+
+    def schedule(fixture: str, at: datetime, status: str) -> None:
+        structured.upsert_game(db, sportmonks, "Football", Fixture(fixture, "Trabzonspor vs Galatasaray", "Super Lig", at, None, status, [str(HOME), str(AWAY)], {"fixture": fixture}))
+        db.commit()
+
+    for fixture in ("559", "560"):
+        schedule(fixture, start, "scheduled")
+        event_id = db.scalars(select(Event.id).where(Event.key == f"sportmonks_football:{fixture}")).one()
+        poll(event_id, sm.parse_match({**football_match("NS", 0, 0), "id": int(fixture)}), "sportmonks_football")
+    qs = {q.game: q for q in db.scalars(select(Question))}
+    nobodys, called = qs["sportmonks_football:559"], qs["sportmonks_football:560"]
+    predictions.pick(db, "acct-asha", called.id, str(HOME))
+    db.commit()
+    predictions.sweep(db, start + timedelta(minutes=1))  # both shut at the old kick-off; then word comes they were put back
+    db.commit()
+    later = start + timedelta(days=2)
+    for fixture in ("559", "560"):
+        schedule(fixture, start, "postponed")
+        schedule(fixture, later, "scheduled")
+    db.expire_all()
+    assert (db.get_one(Question, nobodys.id).status, db.get_one(Question, nobodys.id).locks_at) == ("open", later)
+    assert db.get_one(Question, called.id).status == "closed"
+    predictions.pick(db, "acct-ravi", nobodys.id, str(AWAY))  # it takes picks again
+    db.commit()
+
+
+def test_a_big_game_nobody_called_opens_again_when_its_postponement_gets_a_date(db, redis, monkeypatch):
+    """BUG-109, round two: a big game nobody has called has no event (a pick gives it one), so nothing held its question
+    while the game was postponed: its old kick-off shut it, three days on it was void, and the league's read of its new
+    date didn't have it read again, so it stayed shut. A first pick while it was postponed was taken, too. That pick's
+    refused now, as one on a game picked already is, and the league's new date has the game read, its question open
+    till then."""
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    start = now + timedelta(hours=5)
+    games, codes = {"1": start}, {}
+    pitch = made_up("pitch", "football", games, codes)
+    monkeypatch.setitem(ADAPTERS, "pitch", pitch)
+    monkeypatch.setitem(KNOWN, "pitch", pitch)
+    monkeypatch.setattr(league, "sources", lambda: [pitch])
+    monkeypatch.setattr(sports.BY_KEY["football"], "notable", lambda f: Notable(60, why="Derby"))
+    league.read("pitch", now)
+    assert predictions.prepare(now) == [("pitch", "1")]
+    match.read("pitch", "1")
+    predictions.made("pitch", "1")
+    q = db.scalars(select(Question)).one()
+    codes["1"] = "POSTPONED"  # put back, its date kept for now, as its match page's read says
+    match.read("pitch", "1")
+    predictions.made("pitch", "1")
+    with pytest.raises(predictions.Refused) as waiting:
+        predictions.pick(db, "nobody", q.id, str(HOME))
+    assert (waiting.value.status, waiting.value.message) == (409, predictions.POSTPONED)
+    db.rollback()
+    predictions.sweep(db, start + timedelta(minutes=1))
+    predictions.sweep(db, start + predictions.STALE + timedelta(minutes=1))
+    db.commit()
+    db.expire_all()
+    assert db.get_one(Question, q.id).status == "void"
+    # Its new date, five days on, in the league's read on the day: the game's read, and its question open till then.
+    later = start + timedelta(days=5)
+    day = later - timedelta(hours=6)
+    codes["1"], games["1"] = "NS", later
+    league.read("pitch", day)
+    redis.clock += predictions.PREPARE_EVERY + 1
+    assert predictions.prepare(day) == [("pitch", "1")]
+    match.read("pitch", "1")
+    predictions.made("pitch", "1")
+    db.expire_all()
+    q = db.get_one(Question, q.id)
+    assert (q.status, q.locks_at, q.starts_at, q.closed_at, q.settled_at) == ("open", later, later, None, None)
+    assert [c["id"] for c in predictions.today(db, "nobody", day)["open"]] == [q.id]
+    redis.clock += predictions.PREPARE_EVERY + 1
+    assert predictions.prepare(day) == []  # open, at the league's date: not read again
 
 
 def test_a_later_map_takes_no_pick_once_the_series_is_under_way_and_its_board_is_stale(db, redis):

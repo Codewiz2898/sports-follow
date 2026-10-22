@@ -136,7 +136,8 @@ def ensure(db: Session, system: str, fixture: str, sport: str | None, status: st
     (each one closed by now left out), and those made before, by their place in it; each knowing every event key
     it's shown under and, where one's given, the event it's polled by. A game to come whose start moved has its
     first question's close move with it while it's open, and one whose board has other sides now its answers (_sides);
-    one closed stays closed (friends' picks may have shown). Returns the game's key and its questions."""
+    one closed stays closed (friends' picks may have shown), but one nobody picked, shut at a start that didn't come,
+    opens again till its new one (_shut). Returns the game's key and its questions."""
     now = now or _now()
     rules = _rules(sport, state)
     game = game_key(system, fixture, rules.question_board(state))
@@ -162,6 +163,9 @@ def ensure(db: Session, system: str, fixture: str, sport: str | None, status: st
         if start is not None and q.status in UNSETTLED and q.starts_at != start:
             q.starts_at = start
         ask = asks.get(q.ask)
+        if ask is not None and ask.first and start is not None and start > now and q.status in (CLOSED, VOIDED) and db.scalar(select(Question.id).where(Question.id == q.id, _shut())):
+            for column, value in _reopened(start).items():
+                setattr(q, column, value)
         if ask is not None and ask.first and start is not None and start > now and q.status == OPEN and q.locks_at != start:
             q.locks_at, q.reminded_at = start, None  # moved: reminded again before its new start
         if ask is not None and q.status == OPEN and {k for k, _ in ask.options} != {o["key"] for o in q.options or []}:
@@ -236,15 +240,16 @@ def prepare(now: datetime | None = None) -> list[tuple[str, str]]:
         picked = db.execute(select(Event.start_utc, Event.key, Event.sport).where(Event.id.in_(watched()), Event.status.in_(TO_COME), Event.id.not_in(_refreshed()),
                                                                                  Event.start_utc > now, Event.start_utc <= now + AHEAD)).all()
         unrefreshed = and_(Event.id == Question.event_id, Event.status.in_(TO_COME), Event.id.not_in(_refreshed()))
-        made = db.execute(select(Question.keys, Question.status, Question.starts_at, Question.event_id, Event.id, Event.start_utc).outerjoin(Event, unrefreshed)
+        made = db.execute(select(Question.keys, Question.status, Question.starts_at, Question.event_id, Event.id, Event.start_utc, _shut()).outerjoin(Event, unrefreshed)
                           .where(Question.keys.has_any(array([key for _, key, _ in big])))).all() if big else []
     # Each big game asked of: the starts held here that only a read of it moves (made). Its open questions' while
-    # nothing polls them; once a pick gives them an event to be polled by (pick), that event's while it's still to
-    # start and no followed player's or team's refresh moves it (structured.upsert_game), which is read anyway in
-    # the AHEAD before that start (picked).
+    # nothing polls them, and those shut with nothing to show (_shut: one nobody picked, shut at its old start while
+    # the game was put back), which a read of its new start opens again; once a pick gives them an event to be polled
+    # by (pick), that event's while it's still to start and no followed player's or team's refresh moves it
+    # (structured.upsert_game), which is read anyway in the AHEAD before that start (picked).
     held: dict[str, set[datetime | None]] = {}
-    for keys, status, starts_at, event_id, ours, event_start in made:
-        start = ([starts_at] if status == OPEN else []) if event_id is None else ([event_start] if ours is not None and status in UNSETTLED else [])
+    for keys, status, starts_at, event_id, ours, event_start, shut in made:
+        start = ([starts_at] if status == OPEN or shut else []) if event_id is None else ([event_start] if ours is not None and status in UNSETTLED else [])
         for key in keys or []:
             held.setdefault(key, set()).update(start)
     # A start the league's read and the game's own disagree on (an older league read) is read again every
@@ -341,11 +346,12 @@ def score(db: Session, q: Question, answer: str, now: datetime) -> None:
     db.execute(update(Pick).where(Pick.question_id == q.id).values(points=case((Pick.option == answer, worth), else_=0)))
 
 
-def moved(db: Session, event: Event, start: datetime | None, now: datetime | None = None) -> None:
+def moved(db: Session, event: Event, start: datetime | None, status: str | None = None, now: datetime | None = None) -> None:
     """A schedule read moved a game's start (structured.upsert_game), with no poll or read to make its questions
     again (ensure): those still to settle start then, so a game put back weeks isn't voided by the sweep three days
     after its old date, and a first one still open closes then (at once, for one brought forward to a time that's
-    passed). One closed stays closed (friends' picks may have shown)."""
+    passed). One closed stays closed (friends' picks may have shown), but one nobody picked, shut at a start that
+    didn't come, opens again till its new one, where the read (`status`) says the game's still to start (_shut)."""
     if start is None:
         return
     now = now or _now()
@@ -353,8 +359,23 @@ def moved(db: Session, event: Event, start: datetime | None, now: datetime | Non
     db.execute(update(Question).where(theirs, Question.status.in_(UNSETTLED), Question.starts_at.is_distinct_from(start)).values(starts_at=start))
     if start > now:
         db.execute(update(Question).where(theirs, Question.status == OPEN, Question.locks_at.is_not(None), Question.locks_at != start).values(locks_at=start, reminded_at=None))
+        if status in PRE_START and event.status in TO_COME:
+            db.execute(update(Question).where(theirs, _shut(), Question.locks_at.is_not(None)).values(**_reopened(start)))
     else:
         db.execute(update(Question).where(theirs, Question.status == OPEN, Question.locks_at > start).values(locks_at=start))
+
+
+def _shut() -> Any:
+    """A question shut with nothing to show for it: closed, or voided by the sweep (its answer left empty), and
+    picked by nobody, so closing it showed no friend's pick and no split. Shut by its start time though the game
+    didn't start then (put back with no word in time, or a big game nobody picked, which has no event to be held by),
+    it opens again at the game's new start (ensure, moved)."""
+    return and_(or_(Question.status == CLOSED, and_(Question.status == VOIDED, Question.answer.is_(None))), ~exists().where(Pick.question_id == Question.id))
+
+
+def _reopened(start: datetime) -> dict[str, Any]:
+    """A shut question's columns as it opens again (_shut), closing at its game's new start."""
+    return {"status": OPEN, "starts_at": start, "locks_at": start, "closed_at": None, "settled_at": None, "reminded_at": None, "told_at": None, "split": None}
 
 
 def sweep(db: Session, now: datetime) -> None:
@@ -425,6 +446,8 @@ def pick(db: Session, fan: str, question_id: int, option: str, now: datetime | N
         event = matches.event_for(db, system, fixture)
         if event is None:
             raise Refused(409, NO_POLL)
+        if event.status == "postponed":
+            raise Refused(409, POSTPONED)  # its game's put back, as its last read says: held, as one picked already is
         db.execute(update(Question).where(Question.game == q.game, Question.event_id.is_(None)).values(event_id=event.id))
     elif (db.scalar(select(Event.live_binding).where(Event.id == q.event_id)) or {}).get("adapter") not in ADAPTERS:
         raise Refused(409, NO_POLL)  # its source is off for now: a pick would never be settled
