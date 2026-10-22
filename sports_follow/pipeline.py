@@ -740,10 +740,11 @@ def apply_profile(player_id: int, found: wiki.Profile | None, now: datetime) -> 
         if found is not None and (name := known_name(player.name, found.name)) != player.name:
             log.info("profile %s: %r goes by %r, as Wikidata has them", player_id, player.name, name)
             player.name = merged["name"] = name
-        if "nationality" in given:
-            player.nationality = merged["nationality"]
-        if "role" in given:
-            player.role = merged["role"]
+        for key in ("nationality", "role"):
+            if key in given:
+                setattr(player, key, merged[key])
+            elif key in before:  # Wikidata's, and it says none now (or the person was someone else): off the page too
+                setattr(player, key, None)
         if "teams" in given:
             player.teams = merged["teams"]
         elif "teams" in before and not bound:  # Wikidata's, and it lists none now: they're nobody's player

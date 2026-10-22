@@ -356,6 +356,25 @@ def test_unmatching_takes_the_persons_profile_off_the_card_at_once(db, monkeypat
     assert published[3]["player"] == shown and shown["name"] == "TenZ"
 
 
+def test_unmatching_takes_the_persons_country_and_role_off_the_page_itself_too(db, monkeypatch):
+    # BUG-297, BUG-255: the card lost the wrong person's country and role, but the page kept them: search showed the
+    # role under the pro's name, and stories were matched to them by that country. The agent's own word stays.
+    from sports_follow import pipeline
+
+    tenz(db)
+    page, card = db.get(Player, 3), db.get(PlayerCard, 3)
+    assert page is not None and card is not None
+    page.nationality, page.role = "Someland", "Duelist"
+    card.card = {**card.card, "player": {**card.card["player"], "nationality": "Someland", "role": "Duelist", "profile_from": {"nationality": "wikidata"}}}
+    db.commit()
+    monkeypatch.setattr(pipeline, "session", players.session)
+    monkeypatch.setattr(bus, "store_card", lambda *_: None)
+    assert players.main(["unmatch", "3"]) == 0
+    db.expire_all()
+    page = db.get(Player, 3)
+    assert page is not None and (page.nationality, page.role) == (None, "Duelist")
+
+
 def test_unmatching_takes_back_only_a_match_to_the_person_named(db, capsys):
     tenz(db)
     assert players.main(["unmatch", "pandascore:20401", "Q1"]) == 0  # he's matched to Q113450352
