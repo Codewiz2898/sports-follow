@@ -1727,13 +1727,17 @@ def _switch(body: dict, field: str) -> bool:
 async def admin_login(request: Request, response: Response, body: dict = Body(...)) -> dict[str, Any]:
     """Sign in to the admin panel with its password and, once one is set, a code from the authenticator
     app; each code works once. Tries are limited from each client address, and wrong ones from everyone
-    together, so neither can be guessed at speed. Every sign-in is counted (metrics.admin_sign_in), and
-    one that works is emailed (app-rules.json)."""
+    together, so neither can be guessed at speed. Past everyone's limit the right password and code still
+    get in (BUG-101: else a few addresses guessing keep the admin out), and every other try is refused
+    alike, so a guess learns nothing, not even whether its password was right; with no code set, nothing
+    gets in until the hour is over. Every sign-in is counted (metrics.admin_sign_in), and one that works is
+    emailed (app-rules.json)."""
     keys = await _admin_keys()
     now = time.time()
     await _take(f"admin-tries:{client_address(request) or 'unknown'}:{int(now // 900)}", admin.ATTEMPTS_PER_ADDRESS, 1800, "Too many tries. Wait a quarter of an hour.")
     failed = f"admin-fails:{int(now // 3600)}"
-    if int(await state["redis"].get(failed) or 0) >= admin.FAILURES_PER_HOUR:
+    walled = int(await state["redis"].get(failed) or 0) >= admin.FAILURES_PER_HOUR
+    if walled and not keys.totp:
         raise HTTPException(429, "Too many wrong tries this hour. Try again in an hour.")
     # Counted as wrong before it's checked, so tries sent at once can't all get in under the limit.
     await state["redis"].incr(failed)
@@ -1747,6 +1751,8 @@ async def admin_login(request: Request, response: Response, body: dict = Body(..
     if not right:
         metrics.admin_sign_in("wrong")
         admin_log.warning("admin panel: a wrong password or code")
+        if walled:
+            raise HTTPException(429, "Too many wrong tries this hour: until it's over, only the right password and code get in.")
         raise HTTPException(401, "That password or code isn't right." if keys.totp else "That isn't the admin password.")
     await state["redis"].decr(failed)
     token = secrets.token_urlsafe(32)

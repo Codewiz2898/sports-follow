@@ -344,6 +344,21 @@ def test_tries_are_limited_from_an_address_and_wrong_ones_from_everyone(api, pas
     assert sign_in(api, address="81.3.0.1").status_code == 429
 
 
+def test_wrong_tries_from_everyone_never_keep_out_the_right_password_and_code(api, with_code):
+    """BUG-101: past the hour's wrong tries from everyone, the right password and code were refused too, so a
+    few addresses guessing kept the admin out. They still get in; any other try is refused alike, whether its
+    password was right or not, so past the limit a guess learns nothing."""
+    for i in range(admin.FAILURES_PER_HOUR):
+        api.call("POST", "/api/admin/login", address=f"81.2.{i // 200}.{i % 200 + 1}", body={"password": "wrong", "code": "000000"})
+    wrong_code = "000000" if code_now() != "000000" else "111111"
+    refusals = [api.call("POST", "/api/admin/login", address="81.3.0.1", body=tried)
+                for tried in ({"password": "wrong", "code": code_now()}, {"password": PASSWORD, "code": wrong_code}, {"password": PASSWORD})]
+    assert len({(r.status_code, r.json()["detail"]) for r in refusals}) == 1 and refusals[0].status_code == 429
+    answer = api.call("POST", "/api/admin/login", address="81.3.0.1", body={"password": PASSWORD, "code": code_now()})
+    assert answer.status_code == 200
+    assert api.call("GET", "/api/admin/me", headers=admin_cookie(answer)).json() == {"admin": True, "code": True}
+
+
 def test_the_panel_turns_a_sport_off_for_the_app_too(api, password):
     cookie = admin_cookie(sign_in(api))
     sport = sport_with_sources()

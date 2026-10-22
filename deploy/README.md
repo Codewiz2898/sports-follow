@@ -253,9 +253,10 @@ A sign-in that works is emailed ("Someone signed in to the admin panel", with ho
 minutes; another within those 5 minutes sends no email of its own), and so are 10 wrong ones in an hour; the rules are in `grafana/app-rules.json`: after changing them, `deploy/grafana/apply-alerts.sh`.
 If a sign-in wasn't you, make a new password and key at once, and send them: that signs every admin out.
 The first time, the containers need the file mounted: `docker compose -f deploy/compose.yaml up -d
---force-recreate api worker` after the deploy that brings the panel. Wrong passwords are limited for
-everyone together (30 an hour), so someone guessing can lock you out for the rest of the hour; to get in
-sooner, clear the count:
+--force-recreate api worker` after the deploy that brings the panel. Tries are limited from each address
+(10 a quarter of an hour), and wrong ones for everyone together (30 an hour): past that, only the right
+password with a code from the authenticator app gets in until the hour is over. Without a code set,
+someone guessing can lock you out for the rest of the hour; to get in sooner, clear the count:
 `docker compose -f deploy/compose.yaml exec redis sh -c 'redis-cli --scan --pattern "admin-fails:*" | xargs -r redis-cli del'`.
 
 **Linear's plan on the admin panel** (you, once): the panel's Sources tab shows which plan the Linear
