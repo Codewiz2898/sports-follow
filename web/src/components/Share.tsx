@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { shareLink, type Shared } from '../share'
+import { sendLink } from '../shareSheet'
 import { CheckIcon, ShareIcon } from './Icons'
 
 /**
  * Share a page (../share.ts says which link, and its title): the phone's share sheet where the browser has
- * one (Web Share), else the link copied. The link is on this site, which gives it its preview.
+ * one (Web Share), else the link copied (../shareSheet.ts). The link is on this site, which gives it its preview.
+ * `onShared` once it went: not for a sheet the fan closed.
  */
 export function ShareButton({ path, title, label, className = 'btn icon', text, onShared }: Shared & { className?: string; text?: string; onShared?: () => void }) {
   const [copied, setCopied] = useState(false)
@@ -13,21 +15,9 @@ export function ShareButton({ path, title, label, className = 'btn icon', text, 
 
   const share = async () => {
     const url = shareLink(window.location.origin, path)
-    onShared?.()
-    if (navigator.share && (!navigator.canShare || navigator.canShare({ title, url }))) {
-      try {
-        await navigator.share({ title, url })
-        return
-      } catch (e) {
-        if ((e as Error).name === 'AbortError') return  // the fan closed the sheet
-      }
-    }
-    try {
-      await navigator.clipboard.writeText(url)
-    } catch {
-      window.prompt('Copy this link', url)  // no clipboard here (a page not on HTTPS)
-      return
-    }
+    const sent = await sendLink(navigator, title, url, (message, value) => window.prompt(message, value))
+    if (sent !== 'cancelled') onShared?.()
+    if (sent !== 'copied') return
     setCopied(true)
     window.clearTimeout(timer.current)
     timer.current = window.setTimeout(() => setCopied(false), 2500)

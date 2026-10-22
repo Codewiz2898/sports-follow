@@ -988,7 +988,8 @@ def test_signing_in_brings_every_pick_and_those_on_games_under_way_count_in_no_l
 
 def test_the_admin_panel_counts_leagues_invites_and_fans_who_came_back(db, redis):
     now = datetime.now(timezone.utc)
-    settled_question(db, "g:1", now - timedelta(days=2), {"a": "w", "b": "w"}, "w")
+    first = settled_question(db, "g:1", now - timedelta(days=2), {"a": "w", "b": "w"}, "w")
+    db.execute(text("UPDATE prediction_pick SET created_at = created_at - interval '3 days' WHERE question_id = :q"), {"q": first.id})  # picked then
     settled_question(db, "g:2", now, {"a": "b"}, "w")
     three = predictions.create(db, "acct-1", "Three", "One")
     for fan in ("acct-2", "acct-3"):
@@ -998,3 +999,33 @@ def test_the_admin_panel_counts_leagues_invites_and_fans_who_came_back(db, redis
     predictions.invite(db, three.code, "acct-9")
     db.commit()
     assert predictions.numbers(db) == {"leagues": 2, "leagues_3": 1, "invites_shared": 1, "invites_opened": 1, "pickers": 2, "picks": 3, "game_day_returns": 1}
+
+
+def test_launch_numbers_count_a_share_once_a_day_and_a_return_by_the_days_fans_picked_on(db, redis):
+    """BUG-193: "invites shared" counted every Share tap (one closed without sharing, and each again), and "game-day
+    returns" counted the days of the games picked, not of the picking: a fan who called tonight's and tomorrow's game
+    in one visit, or both maps of a series either side of midnight, came back twice. A member's shares of a league
+    count once a day now, and a fan came back if they picked on two days or more (the home audience's, IST)."""
+    gang = predictions.create(db, "acct-asha", "Derby", "Asha")
+    db.commit()
+    for _ in range(5):
+        predictions.was_shared(db, "acct-asha", gang.code)
+    db.commit()
+    now = datetime.now(timezone.utc).replace(hour=8, minute=0, second=0, microsecond=0)  # 1:30 pm IST
+
+    def question(game: str, ask: str, locks: datetime | None, closed: datetime | None = None) -> int:
+        row = Question(game=game, ask=ask, keys=[], sport="chess", match=f"x/{game}", title="Who wins?", game_title=game, options=[{"key": "a", "label": "A"}],
+                       status="open", locks_at=locks, closed_at=closed, starts_at=locks)
+        db.add(row)
+        db.flush()
+        return row.id
+
+    tonight, tomorrow = question("g:1", "result", now + timedelta(hours=10)), question("g:2", "result", now + timedelta(days=1))
+    late = (now + timedelta(days=3)).replace(hour=23, minute=30)
+    map1, map2 = question("bo3", "map1", late), question("bo3", "map2", None, closed=late + timedelta(hours=1))
+    db.add_all([Pick(question_id=tonight, fan_id="once", option="a", created_at=now), Pick(question_id=tomorrow, fan_id="once", option="a", created_at=now),
+                Pick(question_id=map1, fan_id="series", option="a", created_at=now), Pick(question_id=map2, fan_id="series", option="a", created_at=now),
+                Pick(question_id=tonight, fan_id="back", option="a", created_at=now - timedelta(days=2)), Pick(question_id=tomorrow, fan_id="back", option="a", created_at=now)])
+    db.commit()
+    found = predictions.numbers(db)
+    assert (found["invites_shared"], found["game_day_returns"]) == (1, 1)  # one share; only "back" came back

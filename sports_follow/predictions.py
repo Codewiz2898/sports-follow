@@ -69,7 +69,8 @@ NAME = 40  # a member's name, in characters
 LEAGUE_NAME = 60
 CODE = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"  # an invite code's letters: none mistaken for another (0 and O, 1 and I)
 CODE_LEN = 6
-OPENED_ONCE = 86400  # an invite opened again by the same fan within this many seconds counts once
+OPENED_ONCE = 86400  # an invite opened again by the same fan within this many seconds counts once, and shared by a member
+HOME_ZONE = "Asia/Kolkata"  # the home audience's days (campaigns.ZONE), which fans who came back are counted by (numbers)
 SHUT = "Picks for this one are closed: it's started."
 STALE_BOARD = "This one's game is under way and its latest score hasn't come in: open the game and try again in a minute."
 NO_START = "This one's game has no start time yet: open the game and try again in a minute."
@@ -699,9 +700,10 @@ def about(db: Session, code: str) -> dict[str, Any] | None:
 
 
 def was_shared(db: Session, fan: str, code: str) -> None:
-    """A member shared the invite from the app: counted for the launch numbers."""
+    """A member shared the invite from the app: counted for the launch numbers, once a day (OPENED_ONCE) a member, as
+    an opening is: sharing it again to another chat, or tapping Share twice, is still one."""
     league = find(db, code)
-    if league is not None and db.get(LeagueMember, (league.id, fan)) is not None:
+    if league is not None and db.get(LeagueMember, (league.id, fan)) is not None and bus.sync_redis().set(f"league:shared:{league.id}:{fan}", "1", nx=True, ex=OPENED_ONCE):
         db.execute(update(League).where(League.id == league.id).values(shared=League.shared + 1))
 
 
@@ -806,12 +808,12 @@ def forget(db: Session, fan: str) -> None:
 
 def numbers(db: Session) -> dict[str, int]:
     """How it's doing, for the admin panel: leagues and those of three or more, invites shared and opened, fans who
-    picked and their picks, and those who picked on two game days or more (they came back for another game). Of the
-    picks that count (Pick.counted): fans a request made up aren't fans who came."""
+    picked and their picks, and those who picked on two days or more (HOME_ZONE's: they came back, not one visit
+    calling tonight's game and tomorrow's). Of the picks that count (Pick.counted): fans a request made up aren't fans
+    who came."""
     sizes = select(LeagueMember.league_id, func.count().label("n")).group_by(LeagueMember.league_id).subquery()
     leagues, shared, opened = db.execute(select(func.count(), func.coalesce(func.sum(League.shared), 0), func.coalesce(func.sum(League.opened), 0)).select_from(League)).one()
-    days = select(Pick.fan_id, func.count(func.distinct(func.date(func.coalesce(Question.locks_at, Question.closed_at, Pick.created_at)))).label("d")) \
-        .join(Question, Question.id == Pick.question_id).where(Pick.counted).group_by(Pick.fan_id).subquery()
+    days = select(Pick.fan_id, func.count(func.distinct(func.date(func.timezone(HOME_ZONE, Pick.created_at)))).label("d")).where(Pick.counted).group_by(Pick.fan_id).subquery()
     return {
         "leagues": int(leagues),
         "leagues_3": int(db.scalar(select(func.count()).select_from(sizes).where(sizes.c.n >= 3)) or 0),
