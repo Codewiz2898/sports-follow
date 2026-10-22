@@ -292,7 +292,7 @@ def start_from_pick(adapter: Any, ref: Any) -> tuple[int, bool]:
         # moves to the new team's games now (structured.record_move), and a move that fails never stops the follow.
         if moved:
             try:
-                structured.record_move(player_id, ref)
+                structured.record_move(player_id, adapter, ref)
             except Exception:
                 log.exception("pick %s: couldn't move them to the teams %s names", player_id, ref.system)
         return player_id, False

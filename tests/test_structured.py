@@ -699,7 +699,7 @@ def test_a_bound_player_is_read_again_every_few_hours_and_a_spent_source_at_the_
     # long) and moves their bindings when the source names other teams (record_move). A source with nothing left for
     # the refresh lane is asked again at the next refresh, and the refresh doesn't fail for it (BUG-174's rule).
     moves = []
-    monkeypatch.setattr(structured, "record_move", lambda player_id, fresh: moves.append((player_id, fresh.team_ids)) or fresh)
+    monkeypatch.setattr(structured, "record_move", lambda player_id, adapter, fresh: moves.append((player_id, fresh.team_ids)) or fresh)
     ref = PlayerRef("fake_source", "A1", "P1", ["T1"], ["A"], league="l1")
     source = ReadAgain(budget.RateLimited("fake_source: the refresh share of its 10 requests a minute is spent"))
     assert structured.reread(1, source, ref) is ref

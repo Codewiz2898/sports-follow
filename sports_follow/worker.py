@@ -35,6 +35,9 @@ log = logging.getLogger("sports_follow.worker")
 # 2 vCPU server, so six long jobs used to leave every other job, and the tick, waiting for one.
 MAX_JOBS = 24
 _tick_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tick")
+# The prediction pushes' own thread, likewise: a job arq timed out keeps its thread, so the jobs' can all be taken.
+# One run at a time.
+_pushes_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pushes")
 # After a sleep or a paused VM, arq queues every run a cron job missed, one per heartbeat, from the first
 # it missed: 384 ticks in four minutes once. A run this many seconds past its time is skipped, unless no
 # other late run has gone for as long, so a busy queue that delays every tick can't stop them all.
@@ -278,7 +281,7 @@ async def prediction_pushes(ctx) -> None:
     minute, at :50 (ON_THE_CLOCK)."""
     if await _missed(ctx, "prediction_pushes"):
         return
-    await asyncio.to_thread(predictions_push.run)
+    await asyncio.get_running_loop().run_in_executor(_pushes_pool, logs.carried(predictions_push.run))
 
 
 async def read_league(ctx, system: str) -> None:
@@ -363,8 +366,9 @@ async def startup(ctx) -> None:
     (it looks up hosts in one)."""
     logs.setup()
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=MAX_JOBS + 4, thread_name_prefix="job"))
-    # A connection for each of those threads, the tick's, notify's and the live cards': checkouts give up after 5 s.
-    db.size_pool(MAX_JOBS + 4 + _tick_pool._max_workers + notify._pool._max_workers + livecards._pool._max_workers)
+    # A connection for each of those threads, the tick's, the prediction pushes', notify's and the live cards':
+    # checkouts give up after 5 s.
+    db.size_pool(MAX_JOBS + 4 + _tick_pool._max_workers + _pushes_pool._max_workers + notify._pool._max_workers + livecards._pool._max_workers)
     metrics.watch()  # the live games, the queue, cards and source allowances, read each minute here alone
     metrics.seed()
     redis = ctx.get("redis")
@@ -462,7 +466,7 @@ def _next_run(last: float, now: float, at: float = 0) -> float:
 
 async def _on_the_clock(ctx, fn, at: float, timeout: float, at_startup: bool) -> None:
     """An every-minute job (ON_THE_CLOCK) as a task of the worker's own, `at` seconds past each minute, and at once
-    if `at_startup`: it takes no job slot, and the tick's work keeps to threads of its own (_in_tick_pool). Each run
+    if `at_startup`: it takes no job slot, and its work keeps to threads of its own (_tick_pool, _pushes_pool). Each run
     is a task of its own, logged as a quiet job is, under an id like arq's for a cron run ("cron:tick:<ms>", which
     _missed reads); it's cancelled after `timeout` seconds, and runs once a minute however many workers share the
     queue (a "tick:<ms>" key), as arq's cron did. A run that fails, or Redis not answering, doesn't stop the next."""

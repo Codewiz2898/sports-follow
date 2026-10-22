@@ -2043,7 +2043,9 @@ PUSH_SERVICES = (
     (re.compile(r"[a-z0-9-]+\.notify\.windows\.com"), ("/w/",)),  # Edge on Windows
 )
 TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
-DEVICES_PER_ADDRESS = 20  # new devices one client address (an IPv6 /64) turns notifications on for in a UTC day
+# New devices (none already stored) one client address turns notifications on for in a UTC day: an IPv4 address is often
+# a carrier's or an office's, shared by many phones; an IPv6 /64 is one home or phone.
+DEVICES_PER_ADDRESS, DEVICES_PER_IPV6 = 50, 20
 
 
 def _push_host_ok(endpoint: str) -> bool:
@@ -2056,22 +2058,31 @@ def _push_host_ok(endpoint: str) -> bool:
 
 
 async def device_room(request: Request, body: dict = Body(...)) -> None:
-    """Room for one more device from this client's address: a browser's subscription or the Android app's token,
-    counted once a UTC day however often it's sent again (each start of the app sends it). Past DEVICES_PER_ADDRESS,
-    a 429: new cookies are free, so a fan's own cap (notify.MAX_DEVICES) doesn't bound one network's (BUG-181)."""
+    """Room for one more new device from this client's address: a browser's subscription or the Android app's token
+    that isn't stored already, counted once a UTC day. Past the address's room (DEVICES_PER_ADDRESS, or
+    DEVICES_PER_IPV6), a 429: new cookies are free, so a fan's own cap (notify.MAX_DEVICES) doesn't bound one
+    network's (BUG-181). A device already on is never counted: each start of the app sends it again, and it moves
+    to whoever signs in on it."""
     address = client_address(request)
     sub = body.get("subscription")
     device = _sent_text(sub.get("endpoint"), 999) if isinstance(sub, dict) else body.get("token")
     if address is None or not isinstance(device, str) or not (_push_host_ok(device) if isinstance(sub, dict) else fcm.valid_token(device)):
         return  # the route itself refuses what isn't a device
+    if await in_db(_device_stored, device):
+        return
     redis = state["redis"]
     key = f"push:devices:{address}:{datetime.now(timezone.utc).date().isoformat()}"
     seen = hashlib.sha256(device.encode()).hexdigest()[:16]  # never the token itself: only the device has that
     if await redis.sadd(key, seen):
         await redis.expire(key, 2 * DAY)
-        if await redis.scard(key) > DEVICES_PER_ADDRESS:
+        if await redis.scard(key) > (DEVICES_PER_IPV6 if ":" in address else DEVICES_PER_ADDRESS):
             await redis.srem(key, seen)
             raise HTTPException(429, "Notifications have been turned on for a lot of devices on your network today. Try again tomorrow.")
+
+
+def _device_stored(db: Session, device: str) -> bool:
+    """Is this endpoint or token a device that gets notifications already, whoever's it is?"""
+    return db.scalar(select(PushSubscription.id).where(PushSubscription.endpoint == device)) is not None
 
 
 @app.get("/api/push")
@@ -2256,11 +2267,13 @@ async def push_test(request: Request, fan: str = Depends(fan_id)) -> dict[str, i
     that never answer hold up nothing but other test pushes, never search, following or sign-in (BUG-182)."""
     if notify.public_key() is None and not fcm.enabled():
         raise HTTPException(503, "Notifications aren't set up on this server yet.")
-    refused = "That's a lot of test notifications for one hour. Try again later."
-    await _take(f"pushtest:fan:{fan}", PUSH_TESTS_PER_FAN, 3600, refused)
     address = client_address(request)
-    if address:
-        await _take(f"pushtest:address:{address}", PUSH_TESTS_PER_ADDRESS, 3600, refused)
+    limits = [(f"pushtest:fan:{fan}", PUSH_TESTS_PER_FAN)] + ([(f"pushtest:address:{address}", PUSH_TESTS_PER_ADDRESS)] if address else [])
+    for key, limit in limits:
+        used = await state["redis"].incr(key)
+        await state["redis"].expire(key, 3600, nx=True)  # the hour's end, set once: more tries don't push it back
+        if used > limit:
+            raise HTTPException(429, "That's a lot of test notifications for one hour. Try again later.")
     devices = await in_db(notify.newest_devices, fan)
     return {"sent": await notify.send_test(devices)}
 

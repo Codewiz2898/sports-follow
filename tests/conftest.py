@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import threading
 from pathlib import Path
 
@@ -16,6 +17,11 @@ os.environ["DATABASE_URL"] = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL") o
 for _key in ("SPORTMONKS_TOKEN", "PANDASCORE_TOKEN", "PUBG_TOKEN", "LIQUIPEDIA_TOKEN", "LICHESS_TOKEN", "YOUTUBE_KEY", "FCM_KEY", "RESEND_KEY", "GOOGLE_CLIENT_SECRET", "LINEAR_KEY", "CLIPS_KEY"):
     os.environ[f"SPORTS_FOLLOW_{_key}_FILE"] = _NONE
     os.environ.pop(f"SPORTS_FOLLOW_{_key}", None)
+os.environ["SPORTS_FOLLOW_VAPID_KEY"] = _NONE
+os.environ["SPORTS_FOLLOW_ADMIN_PASSWORD_FILE"] = _NONE
+# The fan cookies' key is made on first use: in a folder of the run's own, never in ~/.config.
+os.environ["SPORTS_FOLLOW_COOKIE_SECRET_FILE"] = str(Path(tempfile.mkdtemp(prefix="sports-follow-tests-")) / "cookie-secret")
+os.environ.pop("SPORTS_FOLLOW_COOKIE_SECRET", None)
 os.environ["LLM_GATEWAY_URL"] = "http://127.0.0.1:9"
 os.environ["LLM_PROVIDERS_KEYS_FILE"] = _NONE
 

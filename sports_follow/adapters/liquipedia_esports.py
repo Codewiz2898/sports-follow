@@ -353,6 +353,7 @@ class LiquipediaEsports(Adapter):
     id_pattern = re.compile(r"[a-z0-9]{1,30}:[^\s\[\]{}|#<>]{1,100}")  # wiki:Page_name
     sports = tuple(dict.fromkeys([*INDIA.values(), *WIKIS.values()]))
     games = tuple(WIKIS)  # its own names for them, beside PandaScore's: players never move between them
+    no_team_is_real = True  # a player page with no team is a free agent's or a retired player's
     live_cadence = 300  # Liquipedia is edited by hand, and the free key allows 60 requests an hour
     live_note = "Standings update from Liquipedia every few minutes as results are recorded."
     lag_note = "Lobby results appear as Liquipedia's editors record them, often several minutes after each match."

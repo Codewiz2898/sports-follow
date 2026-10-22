@@ -381,6 +381,7 @@ class PandascoreEsports(Adapter):
     covers = "Valorant, CS2, League of Legends, Dota 2 and other team games"
     sports = tuple(dict.fromkeys(GAMES.values()))
     games = tuple(GAMES)  # its own names for them, beside Liquipedia's: players never move between them
+    no_team_is_real = True  # a pro with no current team has none: between teams, or retired
     live_cadence = 60  # map results arrive as each map ends; one request a round for every live series
     MULTI_MAX = 100  # match ids one request takes (a page)
     WINDOW_BACK, WINDOW_AHEAD = 60, 45  # days of series a refresh reads; older ones come from history_pages

@@ -17,7 +17,7 @@ interface FollowingState {
   setAlerts: (playerId: number, level: AlertLevel) => Promise<void>
   moments: PlayerMoment[]  // moments to show as toasts while the app is open
   dismissMoment: (id: number) => void
-  heard: number  // moments the stream has brought at the fan's level, and coming back to the app: the activity list and This week look again on it
+  heard: number  // moments the stream has brought at the fan's level, and coming back to the app or the stream after a while: the activity list and This week look again on it
   listen: (onEvent: (e: StreamEvent) => void) => () => void  // every event the fan stream brings, for a followed player's page
   // The games the fan follows by themselves (sports_follow/matches.py), each board as last polled, and whether
   // the list has come; following one, or stopping, by its address after /match/; its level.
@@ -40,7 +40,7 @@ const RETRY_MS = 2000
 const RETRY_MAX_MS = 60_000
 const SAME_MS = 10_000  // a game's own moment this soon after one of the fan's players' of its kind in the game is that one
 const SETTLE_MS = 5_000  // a list the server sent this soon after a follow or unfollow here may be from before it
-const AWAY_MS = 30_000  // away from the app this long (a phone that slept): what came meanwhile is looked for on coming back
+const AWAY_MS = 30_000  // away from the app, or without its stream, this long: what came meanwhile is looked for on coming back
 
 /** A team's tag, as a game's own moment told from its side names it (PlayerMoment.sides). */
 const teamTag = (teamId: number) => `team:${teamId}`
@@ -181,8 +181,9 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     }
   }, [loaded, failed, reload])
 
-  // Back in the app after a while: what came while it was away may be in the activity list. Not on the stream's
-  // reconnect, which every open app makes at once when the server restarts (BUG-265).
+  // Back in the app after a while: what came while it was away may be in the activity list. Not on every reconnect
+  // of the stream, which every open app makes at once when the server restarts (BUG-265): only one after a while
+  // without it (below).
   useEffect(() => {
     let away = document.visibilityState === 'hidden' ? Date.now() : null
     const seen = () => {
@@ -269,9 +270,11 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   }, [])
 
   // The stream's channels are the fan's players, followed games and teams' games as it connects: a change reconnects it.
+  // Back after a while without it (a dropped connection, Wi-Fi gone, a long restart), with the app in front all
+  // along: what came meanwhile may be in the activity list. A short gap, and a connect's first opening, isn't.
   useEffect(() => {
     if (!idsKey && !gamesKey && !teamsKey) return
-    return subscribe('/api/me/stream', apply)
+    return subscribe('/api/me/stream', apply, (awayMs) => { if (awayMs >= AWAY_MS) setHeard((n) => n + 1) })
   }, [idsKey, gamesKey, teamsKey, apply])
 
   const followMatch = useCallback(async (address: string, on: boolean, eventId?: number | null) => {

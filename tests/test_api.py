@@ -205,6 +205,8 @@ class Db:
             return _param(stmt, "fan_id") in {fan for fan, _ in self.api.follows}  # does a fan id own anything here
         if d["expr"] is PlayerIdentity.player_id and _param(stmt, "system") == "wikidata":
             return self.api.qids.get(_param(stmt, "external_id"), (None,))[0]  # who holds a qid, by qid alone
+        if d["expr"] is PushSubscription.id:
+            return 1 if _param(stmt, "endpoint") in self.api.devices else None  # is a device stored, by its endpoint or token
         if d["entity"] is not Follow or (_param(stmt, "fan_id"), _param(stmt, "player_id")) not in self.api.follows:
             return None
         return SimpleNamespace(alert_rules={}) if d["expr"] is Follow else {} if d["expr"] is Follow.alert_rules else 1
@@ -1506,6 +1508,33 @@ def test_one_network_turns_notifications_on_for_only_so_many_new_devices_a_day(a
                                 "dGVzdC1pbnN0YW5jZQ:APA91bE2" + "x" * 140}
 
 
+def test_a_device_already_on_is_never_refused_however_many_new_ones_its_network_has(api, monkeypatch):
+    # Review of BUG-181's cap: it counted every device sent that day, and each start of the app sends its device
+    # again, so the 21st fan with notifications already on behind one carrier's address couldn't save quiet hours,
+    # live cards, or move their device with a sign-in. Only a device not already stored is new.
+    monkeypatch.setattr(server, "DEVICES_PER_ADDRESS", 2, raising=False)
+    monkeypatch.setattr(server, "DEVICES_PER_IPV6", 1, raising=False)
+    monkeypatch.setattr(server.fcm, "enabled", lambda: True)
+    token = "dGVzdC1pbnN0YW5jZQ:APA91bE" + "x" * 140
+
+    def browser(fan: str, n: int, address: str = PUBLIC) -> int:
+        body = {"subscription": {"endpoint": f"https://fcm.googleapis.com/fcm/send/{n}", "keys": {"p256dh": "k", "auth": "a"}}, "quiet_start": "22:00", "quiet_end": "07:00"}
+        return api.call("POST", "/api/push/subscriptions", fan=fan, address=address, body=body).status_code
+
+    def phone(fan: str, address: str = PUBLIC) -> int:
+        return api.call("POST", "/api/push/fcm", fan=fan, address=address, body={"token": token, "live_cards": False}).status_code
+
+    assert [browser("fan-0", 0), phone("fan-1")] == [200, 200]
+    for key in [k for k in api.redis.data if k.startswith("push:devices:")]:
+        del api.redis.data[key]  # the next day
+    assert [browser("fan-2", 2), browser("fan-3", 3), browser("fan-4", 4)] == [200, 200, 429]  # the day's new ones
+    # Past the day's room, devices already on change their settings, and move with a sign-in.
+    assert [browser("fan-0", 0), phone("fan-1"), browser("acct-0", 0), phone("acct-1")] == [200] * 4
+    assert (api.devices["https://fcm.googleapis.com/fcm/send/0"][0], api.devices[token][0]) == ("acct-0", "acct-1")
+    # An IPv6 /64 is one home or phone, not a carrier's many: it has less room.
+    assert [browser("v6-5", 5, "2a00:1450:4001:80b::5"), browser("v6-6", 6, "2a00:1450:4001:80b::6")] == [200, 429]
+
+
 @pytest.fixture
 def unanswered(api, monkeypatch):
     """Every fan has ten devices (the cap), whose push services never answer a test push till the event is set."""
@@ -1563,9 +1592,19 @@ def test_test_pushes_are_limited_for_each_fan_and_network(api, unanswered, monke
     def test_push(fan: str, address: str = PUBLIC) -> int:
         return api.call("POST", "/api/push/test", fan=fan, address=address).status_code
 
+    expiries: list[tuple[str, bool]] = []
+
+    async def expire(key, seconds, nx=False):
+        expiries.append((key, nx))
+        return True
+
+    monkeypatch.setattr(api.redis, "expire", expire)
     assert [test_push("fan") for _ in range(6)] == [200] * 5 + [429]
     assert [test_push(f"cookie-{n}") for n in range(4)] == [200, 200, 200, 429]  # new cookies share their network's
     assert test_push("someone", "81.2.69.143") == 200
+    # Each count's hour is set by its first try, never pushed back by more: a network someone keeps trying from
+    # still gets its tests back after the hour.
+    assert expiries and all(nx for _, nx in expiries)
 
 
 def test_starters_are_offered_as_the_fan_sees_them(api, monkeypatch):
