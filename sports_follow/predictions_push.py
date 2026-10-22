@@ -87,14 +87,18 @@ def _muted(db: Session, fans: set[str], event_ids: list[int]) -> set[str]:
 
 
 def _places(db: Session, fans: set[str]) -> dict[str, tuple[int, str]]:
-    """Each fan's best place among their leagues, and that league's name; each league's table read once."""
+    """Each fan's best place among their leagues, and that league's name; each league's table read once. None while
+    they have no points there, or everyone in it is level (all "1st" in a new league, a wrong call or not)."""
     out: dict[str, tuple[int, str]] = {}
     member_of: dict[int, set[str]] = {}
     for league_id, fan in db.execute(select(LeagueMember.league_id, LeagueMember.fan_id).where(LeagueMember.fan_id.in_(fans))) if fans else []:
         member_of.setdefault(league_id, set()).add(fan)
     for league in db.scalars(select(League).where(League.id.in_(list(member_of)))) if member_of else []:
-        for row in predictions.table(db, league):
-            if row["fan"] in member_of[league.id] and (row["fan"] not in out or row["place"] < out[row["fan"]][0]):
+        rows = predictions.table(db, league)
+        if len({row["points"] for row in rows}) < 2:
+            continue  # everyone level: no place says anything
+        for row in rows:
+            if row["fan"] in member_of[league.id] and row["points"] > 0 and (row["fan"] not in out or row["place"] < out[row["fan"]][0]):
                 out[row["fan"]] = (row["place"], league.name)
     return out
 

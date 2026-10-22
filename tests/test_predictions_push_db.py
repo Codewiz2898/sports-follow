@@ -201,7 +201,7 @@ def test_how_a_pick_went_goes_once_to_who_picked_with_their_league_place(db, red
     assert told["acct-asha"]["title"] == "You got it right: Magnus Carlsen"
     assert told["acct-asha"]["body"] == "Who wins? Magnus Carlsen vs Denis Lazavik · +40 points · 1st in Chess gang"  # 3 of 5 right
     assert told["acct-ravi"]["title"] == "Magnus Carlsen: not this time"
-    assert told["acct-ravi"]["body"] == "You said Draw. Who wins? Magnus Carlsen vs Denis Lazavik · 2nd in Chess gang"
+    assert told["acct-ravi"]["body"] == "You said Draw. Who wins? Magnus Carlsen vs Denis Lazavik"  # no points yet: no place (BUG-113)
     assert told["quiet"]["quiet"] is True and told["acct-asha"]["loud"] is True and told["acct-asha"]["kind"] == "called"
     predictions_push.run()
     assert heard(pushed) == {}  # once a question
@@ -211,6 +211,28 @@ def test_how_a_pick_went_goes_once_to_who_picked_with_their_league_place(db, red
     db.commit()
     predictions_push.run()
     assert heard(pushed)["acct-ravi"]["title"] == "You got it right: Draw"
+
+
+def test_how_a_pick_went_says_no_place_with_no_points_or_everyone_level(db, redis, pushed):  # noqa: F811
+    """BUG-113: in a league where everyone had 0, a wrong call was told "· 1st in <league>" (members level on points
+    share a place). A place is said only once the fan has points, and isn't level with everyone in it."""
+    start = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=3)
+    chess_board(db, start)
+    carlsen(db)
+    poll(1, board(status="*"))
+    q = db.scalars(select(Question)).one()
+    for fan, option in (("acct-asha", "draw"), ("acct-ravi", "draw"), ("acct-dev", CARLSEN), ("acct-sita", CARLSEN)):
+        predictions.pick(db, fan, q.id, option)
+    for maker, member, name in (("acct-asha", "acct-ravi", "New gang"), ("acct-dev", "acct-sita", "Pair")):
+        made = predictions.create(db, maker, name, maker[5:].title())
+        predictions.join(db, member, made.code, member[5:].title())
+    db.commit()
+    devices(db, "acct-asha", "acct-dev")
+    poll(1, board(0))  # the recorded result: Carlsen won
+    predictions_push.run()
+    told = heard(pushed)
+    assert told["acct-asha"]["body"] == "You said Draw. Who wins? Magnus Carlsen vs Denis Lazavik"  # 0 points: not "1st"
+    assert told["acct-dev"]["body"] == "Who wins? Magnus Carlsen vs Denis Lazavik · +50 points"  # level with Sita, the only other
 
 
 def test_a_call_made_on_a_phone_before_it_signed_in_mid_game_is_told_there(db, redis, pushed):  # noqa: F811
