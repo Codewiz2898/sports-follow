@@ -711,24 +711,69 @@ def test_a_positions_moves_count_from_its_fen_and_a_games_from_its_last_move():
 
 
 def test_a_live_boards_kept_moves_take_its_last_move_when_one_short():
-    kept = {"moves": [[1, "d4", "Nf6"], [2, "c4", "e6"]], "more": [], "opening": "Indian", "at": None}
+    kept = {"moves": [[1, "d4", "Nf6"], [2, "c4", "e6"]], "more": [], "opening": "Indian", "fen": None}
     at = "rnbqkb1r/pppp1ppp/4pn2/8/2PP4/8/PP2PPPP/RNBQKBNR w KQkq - 0 3"  # after 2... e6: 4 plies
     reached = lichess_chess.moves_to(kept, at, "e7e6")
-    assert reached == {**kept, "at": "e7e6"} and lichess_chess.moves_to(reached, at, "e7e6") is reached  # the move it reached it with
+    assert reached == {**kept, "fen": at} and lichess_chess.moves_to(reached, at, "e7e6") is reached  # the position it reached
     one_on = "rnbqkb1r/pppp1ppp/4pn2/8/2PP4/5N2/PP2PPPP/RNBQKB1R b KQkq - 1 3"
-    assert lichess_chess.moves_to(reached, one_on, "g1f3") == {**kept, "more": ["g1f3"], "at": "g1f3"}
+    assert lichess_chess.moves_to(reached, one_on, "g1f3") == {**kept, "more": ["g1f3"], "fen": one_on}
     assert lichess_chess.moves_to({**kept, "more": ["g1f3"]}, "rnbqkb1r/ppp2ppp/4pn2/3p4/2PP4/5N2/PP2PPPP/RNBQKB1R w KQkq - 0 4", "d7d5")["more"] == ["g1f3", "d7d5"]
     two_on = "rnbqkb1r/ppp2ppp/4pn2/3p4/2PP4/5N2/PP2PPPP/RNBQKB1R w KQkq - 0 4"
     assert lichess_chess.moves_to(kept, two_on, "d7d5") is None  # a move missed: its PGN is read again
-    # A relay correcting the last move keeps the count: the move it was reached with says so.
-    assert lichess_chess.moves_to({**kept, "more": ["g1f3"], "at": "g1f3"}, one_on, "b1c3") is None
+    # A relay correcting the last move keeps the count: the position it was reached at says so.
+    corrected = "rnbqkb1r/pppp1ppp/4pn2/8/2PP4/2N5/PP2PPPP/R1BQKBNR b KQkq - 1 3"  # 3. Nc3, not 3. Nf3
+    assert lichess_chess.moves_to({**kept, "more": ["g1f3"], "fen": one_on}, corrected, "b1c3") is None
     # Ahead of the board (a look at an older copy of the round than the one they were kept up by): as they are.
     behind = "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1"
     assert lichess_chess.moves_to(reached, behind, "d2d4") is reached
     assert lichess_chess.moves_to(None, at, "e7e6") is None  # none kept yet
 
 
-LIVE_PGN = """[Event "Made-up"]
+# A Two Knights (3. Bc4 Nf6 4. Ng5 d5) that a relay first shows as a Ruy Lopez (3. Bb5), and a Ruy Lopez (3. Bb5 a6
+# 4. Ba4 Nf6) whose 4. Ba4 was really 4. Bxc6.
+OPENING = [[1, "e4", "e5"], [2, "Nf3", "Nc6"]]
+AFTER_NC6 = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3"
+AFTER_BB5 = "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3"
+AFTER_BC4 = "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3"
+AFTER_NF6 = "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4"
+AFTER_NG5 = "r1bqkb1r/pppp1ppp/2n2n2/4p1N1/2B1P3/8/PPPP1PPP/RNBQK2R b KQkq - 5 4"
+AFTER_D5 = "r1bqkb1r/ppp2ppp/2n2n2/3pp1N1/2B1P3/8/PPPP1PPP/RNBQK2R w KQkq - 0 5"
+AFTER_A6 = "r1bqkbnr/1ppp1ppp/p1n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4"
+AFTER_BXC6 = "r1bqkbnr/1ppp1ppp/p1B5/4p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 0 4"
+
+
+def test_kept_moves_a_relay_corrects_or_takes_back_are_read_again_never_added_to():
+    # BUG-273: the moves kept reached 3. Bb5, which the relay then corrects to 3. Bc4.
+    kept = lichess_chess.moves_to({"moves": OPENING, "more": [], "opening": None, "fen": None}, AFTER_NC6, "b8c6")
+    assert kept is not None
+    wrong = lichess_chess.moves_to(kept, AFTER_BB5, "f1b5")
+    assert wrong is not None and wrong["more"] == ["f1b5"]
+    assert lichess_chess.moves_to(wrong, AFTER_BC4, "f1c4") is None  # as many moves, another position
+    # Corrected and answered (3... Nf6) between two looks: one move on, but not from where the moves kept are.
+    assert lichess_chess.moves_to(wrong, AFTER_NF6, "g8f6") is None
+    right = lichess_chess.moves_to(kept, AFTER_BC4, "f1c4")
+    assert right is not None
+    assert (lichess_chess.moves_to(right, AFTER_NF6, "g8f6") or {}).get("more") == ["f1c4", "g8f6"]
+    # Ahead of the board (a look at an older copy of the round): as they are while the board's last move is theirs at
+    # its place, by the square it went to where the PGN wrote it ("a6"); not when it was taken back or corrected (R3).
+    ruy = {"moves": [*OPENING, [3, "Bb5", "a6"]], "more": ["b5a4", "g8f6"], "opening": None, "fen": None}
+    assert lichess_chess.moves_to(ruy, AFTER_A6, "a7a6") is ruy
+    assert lichess_chess.moves_to(ruy, AFTER_BXC6, "b5c6") is None  # their 7th is 4. Ba4
+    assert lichess_chess.moves_to(ruy, AFTER_BC4, "f1c4") is None  # their 5th is 3. Bb5
+
+
+def test_a_board_one_move_on_is_told_by_the_squares_its_move_touches():
+    assert lichess_chess.one_move_on(AFTER_BC4, AFTER_NF6, "g8f6")
+    assert not lichess_chess.one_move_on(AFTER_BB5, AFTER_NF6, "g8f6")  # the bishop is on c4, not b5
+    assert not lichess_chess.one_move_on(AFTER_NC6, AFTER_NF6, "g8f6")  # a move between
+    castled = "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQ1RK1 b kq - 5 4"
+    assert lichess_chess.one_move_on(AFTER_NF6, castled, "e1g1") and lichess_chess.one_move_on(AFTER_NF6, castled, "e1h1")  # the rook moves too
+    before, taken = "rnbqkb1r/ppp1pppp/5n2/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3", "rnbqkb1r/ppp1pppp/3P1n2/8/8/8/PPPP1PPP/RNBQKBNR b KQkq - 0 3"
+    assert lichess_chess.one_move_on(before, taken, "e5d6")  # en passant: the pawn taken is beside it
+    assert lichess_chess.one_move_on(None, AFTER_NF6, "g8f6") and lichess_chess.one_move_on("g1f3", AFTER_NF6, "g8f6")  # nothing to tell by
+
+
+LIVE_PGN ="""[Event "Made-up"]
 [White "Carlsen, Magnus"]
 [Black "Lazavik, Denis"]
 [Opening "Queen's Gambit Declined"]
@@ -745,6 +790,9 @@ class Kept(dict):
 
     def set(self, key, value, ex=None):
         self[key] = value
+
+    def delete(self, key):
+        self.pop(key, None)
 
 
 def test_a_live_boards_moves_are_read_once_then_kept_up_a_move_at_a_time(monkeypatch):
@@ -835,6 +883,33 @@ def test_a_live_boards_moves_lichess_wont_give_leave_the_board_alone(monkeypatch
     monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: Kept())
     game = lichess_chess.LichessChess().match(f"{rnd}-{LAZAVIK}")
     assert game is not None and game.snapshot.status == "live" and "page_detail" not in game.snapshot.state  # the board still shows
+
+
+def test_a_move_a_relay_corrects_isnt_kept_for_the_rest_of_the_game(monkeypatch):
+    # BUG-273 (R4): a page read at 2... Nc6; the worker's polls see 3. Bb5, its correction to 3. Bc4, then 3... Nf6
+    # 4. Ng5 d5. The page's next read has the game as it was played, read again, not 3. Bb5 and the moves after it.
+    pgn = {"text": '[Event "x"]\n\n1. e4 e5 2. Nf3 Nc6 *'}
+    asked = []
+
+    def get_json(url, ttl, text=False):
+        asked.append(url)
+        return pgn["text"]
+
+    kept = Kept()
+    monkeypatch.setattr(lichess_chess, "get_json", get_json)
+    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: kept)
+
+    def look(fen, last, read=False):
+        return lichess_chess.LichessChess._moves_so_far("r4round1", {"game_id": "g1", "fen": fen, "last_move": last}, read=read)
+
+    first = look(AFTER_NC6, "b8c6", read=True)
+    assert first is not None and first["moves"] == OPENING and len(asked) == 1
+    for fen, last in ((AFTER_BB5, "f1b5"), (AFTER_BC4, "f1c4"), (AFTER_NF6, "g8f6"), (AFTER_NG5, "f3g5"), (AFTER_D5, "d7d5")):
+        look(fen, last)
+    pgn["text"] = '[Event "x"]\n\n1. e4 e5 2. Nf3 Nc6 3. Bc4 Nf6 4. Ng5 d5 *'
+    now = look(AFTER_D5, "d7d5", read=True)
+    assert now is not None and len(asked) == 2
+    assert (now["moves"], now["more"]) == ([*OPENING, [3, "Bc4", "Nf6"], [4, "Ng5", "d5"]], [])
 
 
 def test_a_games_moves_are_placed_by_their_move_numbers():

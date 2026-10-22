@@ -587,10 +587,11 @@ def _refresh(player_id: int) -> None:
         for f, snap in recent:
             if snap:
                 _record_final(db, events[f.source_id], player_id, snap, snap.lines.get(ref.athlete_id))
+        over = found_over(db, [events[f.source_id].id for f in finals_all])
         # Every finished game the source returns joins the player's results history, kept for good.
         for f in finals_all:
             snap = snaps.get(f.source_id)
-            keep_result(db, events[f.source_id].id, player_id, result_item(adapter, f, snap, events[f.source_id], ref), scorecard=snap is not None)
+            keep_result(db, events[f.source_id].id, player_id, result_item(adapter, f, snap, events[f.source_id], ref, over.get(events[f.source_id].id)), scorecard=snap is not None)
         _record_health(player_id, ok=True, db=db)
         if card_row.status != "ready":
             return  # nothing to show yet; the build that follows reads the same events
@@ -603,7 +604,7 @@ def _refresh(player_id: int) -> None:
         games = {r.get("event_id"): r.get("game_key") for r in card.get("recent_results") or []}
         card["recent_results"] = []
         for f, snap in reversed(recent):
-            item = result_item(adapter, f, snap, events[f.source_id], ref)
+            item = result_item(adapter, f, snap, events[f.source_id], ref, over.get(events[f.source_id].id))
             if snap is None:
                 item["game_key"] = games.get(item["event_id"])
             card["recent_results"].append(item)
@@ -798,6 +799,35 @@ def _record_final(db: Session, event: Event, player_id: int, snap: Snapshot, lin
         db.add(PlayerLine(event_id=event.id, player_id=player_id, as_of=_now(), stats={"headline": line.headline, "stats": line.stats}))
 
 
+def found_over(db: Session, event_ids: Iterable[int | None]) -> dict[int, datetime]:
+    """When each of these games was found over, where that says when it ended: its first final state since it was last
+    seen on (or to come, or called off) here, so a game on again after it seemed over (a super over) or replayed under
+    its fixture after it was called off (notify.editions) is dated by the end of the game it is now; and no later than
+    its sport says a game that started when it did can end (Sport.over_by). A game first seen here over (a new
+    follower's first read, a history read) or seen over long after it was played (a worker down for days) says nothing
+    of when it ended. A result is dated by it (result_item), so a game of several days (a Test) is one of the day it
+    ended on Today, and in its Big results (league.py)."""
+    ids = sorted({e for e in event_ids if e})
+    if not ids:
+        return {}
+    last_on = (select(EventState.event_id, func.max(EventState.as_of).label("at")).where(EventState.event_id.in_(ids), EventState.status != "final")
+               .group_by(EventState.event_id).subquery())
+    rows = db.execute(select(EventState.event_id, EventState.as_of, EventState.state, Event.start_utc).join(Event, Event.id == EventState.event_id)
+                      .join(last_on, last_on.c.event_id == EventState.event_id)
+                      .where(EventState.event_id.in_(ids), EventState.status == "final", EventState.as_of > last_on.c.at)
+                      .order_by(EventState.event_id, EventState.as_of)).all()
+    out: dict[int, datetime] = {}
+    first: set[int] = set()
+    for event_id, as_of, state, start in rows:
+        if event_id in first:
+            continue
+        first.add(event_id)
+        by = sports.of_state(state).over_by(start, state or {})
+        if by is not None and as_of <= by:
+            out[event_id] = as_of
+    return out
+
+
 def _record_health(player_id: int, ok: bool, error: str | None = None, db: Session | None = None) -> None:
     metrics.card("refresh", "ok" if ok else "failed")
     def write(s: Session) -> None:
@@ -849,7 +879,8 @@ def _side(f: Fixture, snap: Snapshot | None, ref: PlayerRef) -> str | None:
     return ours[0] if len(ours) == 1 else None
 
 
-def result_item(adapter: Adapter, f: Fixture, snap: Snapshot | None, event: Event | None, ref: PlayerRef) -> dict[str, Any]:
+def result_item(adapter: Adapter, f: Fixture, snap: Snapshot | None, event: Event | None, ref: PlayerRef, ended: datetime | None = None) -> dict[str, Any]:
+    """A finished game as the player's result; `ended`, when it was found over (found_over), where that's known."""
     # A lagging schedule has no result yet for a game the poller saw finish; the scorecard does.
     said = adapter.result_label(f, ref.team_ids) or snap_result(snap)
     # The game's sides as the source marks them: its final board, else the schedule's result.
@@ -862,6 +893,7 @@ def result_item(adapter: Adapter, f: Fixture, snap: Snapshot | None, event: Even
         "outcome": rules.outcome(said, [*ref.team_names, *ref.other_teams], board, _side(f, snap, ref)),
         "date": f.start_utc.date().isoformat() if f.start_utc else None,
         "start_utc": _iso(f.start_utc),  # the app dates a result by the fan's local day of the game
+        "ended_utc": _iso(ended),  # and Today's since yesterday by the day it ended, a Test's its last
         "player_contribution": contribution(snap, ref.athlete_id),
         "competition": f.competition,
         "event_id": event.id if event else None,
@@ -883,11 +915,12 @@ def snap_result(snap: Snapshot | None) -> str:
 
 def merged_result(old: dict[str, Any] | None, item: dict[str, Any], scorecard: bool) -> dict[str, Any]:
     """A result read again: a read without the scorecard keeps what an earlier scorecard added, and the outcome it
-    told from the side it had the player in (the schedule alone knows only their teams now)."""
+    told from the side it had the player in (the schedule alone knows only their teams now); and when it was found
+    over, once known."""
     old = old or {}
     new = {**item, "scorecard": True if scorecard else old.get("scorecard", False)}
     if not scorecard:
-        for key in ("player_contribution", "source_url", "result", "game_key"):
+        for key in ("player_contribution", "source_url", "result", "game_key", "ended_utc"):
             if old.get(key) and not new.get(key):
                 new[key] = old[key]
         if old.get("outcome") and (old.get("scorecard") is True or not new.get("outcome")):
@@ -1232,6 +1265,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
         changed = latest is None or (latest.status, latest.score_label, latest.clock_label, latest.state) != (snap.status, snap.score_label, snap.clock_label, snap.state)
         if changed:
             db.add(EventState(event_id=event_id, as_of=now, status=snap.status, score_label=snap.score_label, clock_label=snap.clock_label, state=snap.state, source_url=snap.source_url))
+        ended = found_over(db, [event_id]).get(event_id) if snap.status == "final" else None  # its result is dated by it
         if not (snap.status == "scheduled" and event.status == "armed"):
             event.status = snap.status
         # Its questions (predictions.py): made while it's to come, closed as it starts, settled from its board. A
@@ -1281,7 +1315,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
                 card["live"] = {"is_live": False, "player_stats": []}
                 card["freshness"] = {**card.get("freshness", {}), "live": now.isoformat()}
             else:
-                _apply_snapshot(card, event, snap, line, adapter, now)
+                _apply_snapshot(card, event, snap, line, adapter, now, ended)
             card["version"] = (card_row.version or 0) + 1
             card_row.card = card
             card_row.version = card["version"]
@@ -1381,7 +1415,9 @@ def _roster_names(event: Event) -> dict[str, str]:
     return {p["athlete_id"]: p["name"] for p in [*(game.get("players") or []), *(game.get("bench") or [])] if p.get("athlete_id") and p.get("name")}
 
 
-def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Line | None, adapter: Adapter, now: datetime) -> None:
+def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Line | None, adapter: Adapter, now: datetime, ended: datetime | None = None) -> None:
+    """A poll's snapshot on a player's card: their live game, or once it's over (`ended`: when it was found over,
+    found_over) their result."""
     stamp = now.isoformat()
     title = f"{event.title} · {event.notes}" if event.notes else event.title
     if snap.status == "live":
@@ -1414,6 +1450,7 @@ def _apply_snapshot(card: dict[str, Any], event: Event, snap: Snapshot, line: Li
             "result": snap_result(snap),
             "date": event.start_utc.date().isoformat() if event.start_utc else None,
             "start_utc": _iso(event.start_utc),
+            "ended_utc": _iso(ended),
             "player_contribution": line.headline if line else None,
             "competition": event.competition,
             "event_id": event.id,

@@ -167,6 +167,27 @@ def test_since_yesterday_is_where_the_fan_is(sources, redis):
     assert league.offer(Db(), late, tz=330)[0]["results"]["day"] == "2026-10-14"
 
 
+def test_a_game_of_several_days_is_a_result_of_the_day_it_ended(sources, redis, monkeypatch):
+    """BUG-319: a Test that started five days ago and ended yesterday is since yesterday, and dated so: its event here
+    says when it was found over (structured.found_over). One that's no event here goes by its start; one that started
+    within the day isn't looked up (it's since yesterday wherever the fan is)."""
+    from sports_follow import structured
+
+    ended = NOW - timedelta(hours=20)
+    looked = []
+    monkeypatch.setattr(structured, "found_over", lambda db, event_ids: looked.append(sorted(event_ids)) or {7: ended}, raising=False)  # raising: not there before BUG-319
+    keep(redis, "pitch", [game("pitch:test", "final", NOW - timedelta(days=5), 70, "cricket"), game("pitch:other", "final", NOW - timedelta(days=5), 90, "cricket"),
+                          game("pitch:today", "final", NOW - timedelta(hours=3), 40)])
+    served, _ = league.offer(Db({"pitch:test": 7, "pitch:other": 8, "pitch:today": 9}), NOW)
+    assert served["results"]["day"] is None
+    assert [(g["key"], g.get("ended_utc")) for g in served["results"]["games"]] == [("pitch:test", ended.isoformat()), ("pitch:today", None)]
+    assert looked == [[7, 8]]
+    # Where nothing since yesterday, the latest day is the one a game ended on.
+    monkeypatch.setattr(structured, "found_over", lambda db, event_ids: {7: NOW - timedelta(days=3)}, raising=False)
+    keep(redis, "pitch", [game("pitch:test", "final", NOW - timedelta(days=5), 70, "cricket"), game("pitch:other", "final", NOW - timedelta(days=4), 90, "cricket")])
+    assert league.offer(Db({"pitch:test": 7}), NOW)[0]["results"]["day"] == (NOW - timedelta(days=3)).date().isoformat()
+
+
 def test_coming_up_is_the_next_fortnight_biggest_first_then_soonest(sources, redis):
     keep(redis, "pitch", [game("pitch:started", "scheduled", NOW - timedelta(minutes=5), 90), game("pitch:a", "scheduled", NOW + timedelta(days=5), 40),
                           game("pitch:b", "scheduled", NOW + timedelta(days=1), 40), game("pitch:c", "scheduled", NOW + timedelta(days=9), 85),

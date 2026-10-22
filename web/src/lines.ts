@@ -3,7 +3,7 @@
 // Android app (mobile/), so it touches nothing of a browser's. A sport is passed by its key (each app finds
 // it its own way: sports/catalog.ts, mobile/src/sports.tsx).
 
-import { ahead, countdown, dateOnly, day, dayLabel, lineStats, parseDate, playedOn, resultOutcome, shortName, shortWhen } from './format'
+import { ahead, countdown, dateOnly, day, dayLabel, endedOn, lineStats, parseDate, playedOn, resultOutcome, shortName, shortWhen } from './format'
 import { factsOf, factsOfKind } from './sports/facts'
 import type { Card, FollowedTeam, LatestResult, LiveStatus, NewsItem, Stat, UpcomingEvent } from './types'
 
@@ -170,7 +170,7 @@ export function resultCard(game: GameResult, hero: boolean, now: number, key: st
   const result = !split ? r.result : marks.every(Boolean) && score && !/^by\b/i.test(score) ? score : r.title  // "by forfeit" says nothing alone
   const word = highlight(key, r.player_contribution) ?? (result || r.player_contribution || r.title)
   const wl = split ? null : marks[0]
-  const when = dayLabel(playedOn(r), new Date(now))
+  const when = dayLabel(endedOn(r), new Date(now))  // a Test's last day: the rail's since yesterday
   const stats = hero ? lineStats(r.player_contribution)?.slice(0, 3) : undefined
   const match = result && result !== r.title && word !== result ? `${result} · ${r.title}` : r.title
   // Each player's own line (with how their game went, when the card can't say it once); the hero's numbers

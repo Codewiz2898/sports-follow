@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { AppState, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native'
-import { dayLabel, shortWhen } from '../../../web/src/format'
+import { dayLabel, endedOn, shortWhen } from '../../../web/src/format'
 import { wordSize } from '../../../web/src/lines'
 import { leagueAbout, leagueComing } from '../../../web/src/today'
 import { api, type League, type LeagueGame } from '../api'
@@ -79,7 +79,7 @@ export function LeagueResultCard({ game, now, fill }: { game: LeagueGame; now: n
       <Text style={dsp(wordSize(word))}>{breakable(word)}</Text>
       <View style={{ gap: 2 }}>
         {word !== game.title ? <Text style={[s.line, { fontFamily: font[800] }]} numberOfLines={2}>{game.line || game.title}</Text> : null}
-        <Text style={[s.line, { color: colour.muted }]} numberOfLines={1}>{leagueAbout(game, dayLabel(game.start_utc, new Date(now)))}</Text>
+        <Text style={[s.line, { color: colour.muted }]} numberOfLines={1}>{leagueAbout(game, dayLabel(endedOn(game), new Date(now)))}</Text>
       </View>
     </LeagueCard>
   )
