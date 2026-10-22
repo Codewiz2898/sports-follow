@@ -74,7 +74,8 @@ until(150 * MIN)
 
 // Coming back to the front. Today open at 0, the app put away at 5 minutes; notifications come while it's away, at 6
 // and 35 minutes (the read after the first comes due while it's still away). Back at 40 minutes: a read at once, and
-// a second later the follow list and its games, read again on coming back, say there's news.
+// the follow list and its games, read again on coming back, say there's news as they answer (here a slow 14 s). Then
+// no news for half an hour.
 reset()
 const away = phone()
 away.now()
@@ -82,8 +83,8 @@ until(5 * MIN); away.front = false
 until(6 * MIN); away.feed.heard()
 until(35 * MIN); away.feed.heard()
 until(40 * MIN); away.front = true; away.now()
-until(40 * MIN + 1000); away.feed.heard()
-until(59 * MIN)
+until(40 * MIN + 14_000); away.feed.heard()
+until(70 * MIN)
 const backReads = away.reads.filter(([, t]) => t > 5 * MIN)
 
 // A pull while a read after news waits: the pull's read is that one.
@@ -134,8 +135,9 @@ def test_a_live_game_reads_the_feed_no_more_than_every_twenty_minutes(tmp_path):
 
 def test_coming_back_to_the_front_reads_once(tmp_path):
     # Nothing while away (the read after news that came due then is the one on coming back); once on coming back,
-    # with the news the follow list says then waiting its 20 minutes from that read. Was a read for each
-    # notification, the app away or not, and two on coming back.
+    # and the news the follow list says as it answers is that read's: nothing more in the half hour after. Was a
+    # read for each notification, the app away or not, and two on coming back. (News 30 s after a read at once still
+    # waits and reads: the live game's first.)
     assert run(tmp_path)["away"] == [["now", 40 * MIN]]
 
 
