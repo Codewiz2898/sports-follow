@@ -440,7 +440,8 @@ class Football(Sport):
         """Every game of the leagues its sources cover is one, as big as its stage (a final 95, a semi-final
         85, another knockout round 70) or its sides' places in their table (two of the top four 80, two of
         the top seven 65, the leaders' 55, any other 40). Once it's over, 15 more for an upset (the winner
-        UPSET_PLACES or more below), 10 for a shootout, a rout or a goal-fest. Its word is the score."""
+        UPSET_PLACES or more below), 10 for a shootout, a rout or a goal-fest. Its word is the score; after a shootout,
+        its line says who won it ("Arsenal beat Chelsea 4–2 on penalties"), as a final's "Final" stands in its why."""
         level, why = stage(fixture.detail)
         places = [p if isinstance(p, int) and p > 0 else None for p in (fixture.facts.get("table") or [])[:2]]
         rank = STAGE_RANK.get(level, 40)
@@ -466,7 +467,11 @@ class Football(Sport):
                 bonus, said = 10, "Penalties"
             elif abs(goals[0] - goals[1]) >= ROUT or sum(goals) >= GOALS:
                 bonus, said = 10, f"{sum(goals)} goals"
-        return Notable(min(100, rank + bonus), word=f"{home.get('score')}–{away.get('score')}", why=why or said)
+        line = ""
+        if home.get("pens") is not None and away.get("pens") is not None and (won := _on_penalties(home, away)) is not None:
+            lost = away if won is home else home
+            line = f"{won.get('name')} beat {lost.get('name')} {won['pens']}–{lost['pens']} on penalties" if won.get("name") and lost.get("name") else ""
+        return Notable(min(100, rank + bonus), word=f"{home.get('score')}–{away.get('score')}", line=line, why=why or said)
 
     def out_fact(self, who: str, kind: str, what: str, until: date | None) -> Fact | None:
         """ "Out", then who, what ("back injury", "red card suspension"; SAID rewords a few) and until when, if
