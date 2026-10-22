@@ -65,7 +65,7 @@ def queue(now: datetime | None = None) -> dict[str, int]:
                                                    .returning(FeedSearch.id)).all())
         rows = session.execute(
             select(Moment.id, Moment.player_id, Moment.event_id, Moment.kind, Moment.key, Moment.title, Moment.body, Moment.priority, Moment.created_at,
-                   Player.name, Player.sport, Event.title.label("game"), Event.competition, Event.venue)
+                   Player.name, Player.sport, Event.title.label("game"), Event.competition, Event.venue, Event.notes)
             .join(Player, Player.id == Moment.player_id).join(Event, Event.id == Moment.event_id)
             .where(Moment.level == "key", Moment.corrects.is_(None), Moment.id.not_in(taken_back), Moment.created_at > now - SECOND_AFTER,
                    Moment.created_at <= now, exists().where(Follow.player_id == Moment.player_id))
@@ -83,7 +83,7 @@ def queue(now: datetime | None = None) -> dict[str, int]:
             n = seen[(r.player_id, r.event_id, kind)] = seen.get((r.player_id, r.event_id, kind), 0) + 1
             if not sports.on(r.sport):
                 continue
-            fired = sports.Fired(kind, detail, r.title, r.body or "", r.priority, n, r.game or "", r.competition or "", r.venue or "")
+            fired = sports.Fired(kind, detail, r.title, r.body or "", r.priority, n, r.game or "", r.competition or "", r.venue or "", r.notes or "")
             said = sports.of(r.sport).search_words(fired)
             if not said:
                 continue

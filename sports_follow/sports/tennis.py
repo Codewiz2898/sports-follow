@@ -167,8 +167,9 @@ tournament and tour channels' highlights are official."""
         return "tennis"
 
     def search_words(self, fired: Fired) -> str | None:
-        """An upset, or a win from the semi-finals on, at the tournament."""
-        late, word = stage(fired.game, fired.competition)
+        """An upset, or a win from the semi-finals on, at the tournament: its round as the game's note names it
+        ("Final"), never the tournament's name, which may hold "Finals" for every match of it."""
+        late, word = stage(fired.notes)
         if fired.kind == "upset":
             return words("upset", fired.competition)
         if fired.kind == "final" and ": won" in fired.title.lower() and late >= 2:

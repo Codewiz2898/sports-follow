@@ -57,8 +57,9 @@ def fake(monkeypatch):
     return made
 
 
-def said(sport: str, kind: str, detail: str = "", title: str = "", body: str = "", count: int = 1, game: str = "", competition: str = "", venue: str = "") -> str | None:
-    return sports.of(sport).search_words(Fired(kind, detail, title, body, 90, count, game, competition, venue))
+def said(sport: str, kind: str, detail: str = "", title: str = "", body: str = "", count: int = 1, game: str = "", competition: str = "", venue: str = "",
+         notes: str = "") -> str | None:
+    return sports.of(sport).search_words(Fired(kind, detail, title, body, 90, count, game, competition, venue, notes))
 
 
 # ---------------------------------------------------------------- each sport's words
@@ -78,8 +79,12 @@ def test_each_sport_words_its_big_moments_and_leaves_the_rest_unsearched():
     assert said("basketball", "points", "30") is None and said("basketball", "triple", game="Lakers vs Celtics") == "triple-double Lakers vs Celtics"
     assert said("chess", "final", title="Gukesh: Won", game="World Championship, game 4") == "wins World Championship, game 4"
     assert said("chess", "final", title="Gukesh: Drew", game="World Championship, game 4") is None
-    assert said("tennis", "final", title="Sinner: Won in 3 sets", game="Final", competition="ATP Finals") == "wins final ATP Finals"
-    assert said("tennis", "final", title="Sinner: Won in 3 sets", game="Round of 32", competition="Shanghai Masters") is None
+    assert said("tennis", "final", title="Sinner: Won in 3 sets", game="Jannik Sinner vs Carlos Alcaraz", notes="Final", competition="ATP Finals") == "wins final ATP Finals"
+    assert said("tennis", "final", title="Sinner: Won in 3 sets", game="Jannik Sinner vs Ben Shelton", notes="Round of 32", competition="Shanghai Masters") is None
+    # BUG-239: the round is the game's note, not its title; nor is it the tournament's name, though "Finals" is in it.
+    assert said("tennis", "final", title="Aryna Sabalenka: Won in 2 sets", game="Aryna Sabalenka vs Jessica Pegula", notes="Final", competition="US Open") == "wins final US Open"
+    assert said("tennis", "final", title="Coco Gauff: Won in 3 sets", game="Coco Gauff vs Iga Swiatek", notes="Semifinal", competition="US Open") == "wins semi-final US Open"
+    assert said("tennis", "final", title="Sinner: Won in 2 sets", game="Jannik Sinner vs Ben Shelton", notes="Round Robin", competition="Nitto ATP Finals") is None
     assert said("tennis", "upset", competition="Shanghai Masters") == "upset Shanghai Masters"
     assert said("cs2", "final", title="donk: Spirit win 2–1", body="v Vitality · Grand final", competition="IEM Cologne") == "wins grand final IEM Cologne"
     assert said("cs2", "final", title="donk: Spirit win 2–1", body="v Vitality · Group A", competition="IEM Cologne") is None
