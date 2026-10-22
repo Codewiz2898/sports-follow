@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { api, type SearchResult, type StarterSport } from '../api'
+import { sportKey } from '../sports'
 import { starterReason } from '../today'
 import { useFollowing } from '../following'
+import { followedSports, startersOffered } from '../yourSports'
 import { SectionHead } from './Blocks'
 import { CheckIcon, PlusIcon } from './Icons'
 import { followTarget } from '../follow'
@@ -69,10 +71,10 @@ export function useFollowToggle() {
 
 /**
  * The starter picker: a sport's starters as tiles in its colour, each followed, or unfollowed, with one tap.
- * In the welcome's second step (each sport the fan picked, under its name) and on Today while a fan
- * follows few players (one sport at a time, by chips).
+ * In the welcome's second step (each sport the fan picked, under its name) and on Today (one sport at a time, by
+ * chips), with a line about the sport shown where `note` has one.
  */
-export function StarterPicker({ sports, chips = false }: { sports: StarterSport[]; chips?: boolean }) {
+export function StarterPicker({ sports, chips = false, note }: { sports: StarterSport[]; chips?: boolean; note?: (sport: StarterSport) => string | null }) {
   const [shown, setShown] = useState(sports.some((s) => s.key === lastChip) ? lastChip : sports[0]?.key ?? '')
   const { followed, toggle, busy: pendingFor, error } = useFollowToggle()
 
@@ -92,6 +94,7 @@ export function StarterPicker({ sports, chips = false }: { sports: StarterSport[
       {groups.map((s) => (
         <section key={s.key} className="section" aria-label={s.label}>
           {!chips && <SectionHead title={s.label} />}
+          {note?.(s) && <span className="small muted" style={{ fontWeight: 600 }}>{note(s)}</span>}
           <div className="tiles">
             {s.players.map((r) => {
               const on = followed(r)
@@ -112,14 +115,23 @@ export function StarterPicker({ sports, chips = false }: { sports: StarterSport[
   )
 }
 
-/** Today's "Players to follow": the starter picker, a sport at a time, while a fan follows few players. */
-export function StartersSection() {
+/**
+ * Today's "Players to follow": the starter picker, a sport at a time, the fan's sports first. Every sport's while the
+ * page says they follow few players (`few`); after, those of their sports they follow nobody in yet
+ * (yourSports.startersOffered). With a game picked on Today (`game`), its own alone. Nothing when that leaves none.
+ */
+export function StartersSection({ few, game = null }: { few: boolean; game?: string | null }) {
   const { sports } = useStarters()
+  const { cards, teams, sports: yours } = useFollowing()
   if (!sports?.length) return null
+  const followed = followedSports(cards, teams, sportKey)
+  const offered = startersOffered(sports, yours, followed, few, game)
+  if (!offered.length) return null
+  const note = (s: StarterSport) => (yours.includes(s.key) && !followed.has(s.key) ? `In ${s.label}, one of your sports. You follow nobody in it yet.` : null)
   return (
     <section className="section" aria-label="Players to follow">
       <SectionHead title="Players to follow" />
-      <StarterPicker sports={sports} chips />
+      <StarterPicker sports={offered} chips note={note} />
     </section>
   )
 }

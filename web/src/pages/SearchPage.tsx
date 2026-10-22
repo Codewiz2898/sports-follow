@@ -5,7 +5,9 @@ import { SectionHead } from '../components/Blocks'
 import { SearchIcon } from '../components/Icons'
 import { SearchResults, SportChips, sections, useSearch, useSearchActions } from '../components/Search'
 import { starterNames, useStarters } from '../components/Starters'
+import { useFollowing } from '../following'
 import { enterTeam } from '../search'
+import { inYourOrder } from '../yourSports'
 
 /** Follow a player or a team: search every source as you type, pick the exact athlete or the team, or hand a name
  * to the research agent. */
@@ -15,7 +17,9 @@ export function SearchPage() {
   const [sport, setSport] = useState(params.get('sport') ?? '')
   const { data, fresh, loading, error } = useSearch(query, sport)
   const actions = useSearchActions()
-  const tries = starterNames(useStarters().sports, 6)  // the starters, a sport at a time (starters.py)
+  const starters = useStarters().sports
+  const yours = useFollowing().sports
+  const tries = starterNames(starters && inYourOrder(starters, (s) => s.key, yours), 6)  // the starters, a sport at a time, the fan's sports first
   const research = useAccount().config?.research !== false
 
   // The query lives in the URL, so back from a preview returns to the same results.

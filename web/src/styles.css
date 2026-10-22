@@ -483,6 +483,29 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
    games on Today. */
 .game-chip.find { width: 40px; padding: 0; justify-content: center; }
 .find-game .game-list { display: flex; flex-wrap: wrap; gap: 8px; }
+/* At the foot of the game search: the way to the fan's sports (Your sports, BHA-653), so a game found keeps its chip. */
+.your-sports-link { display: flex; align-items: center; gap: 12px; width: 100%; padding: 14px 16px; border: 0; border-radius: 20px; background: var(--bg); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.your-sports-link .go { display: inline-flex; align-items: center; height: 36px; padding: 0 14px; border-radius: 999px; box-shadow: inset 0 0 0 2px var(--text); font-size: 13px; font-weight: 800; white-space: nowrap; flex-shrink: 0; }
+.your-sports-link:hover .go { background: rgba(13, 13, 13, 0.06); }
+/* Your sports at the top of Following: a card with each sport a pill in its colour, and Edit. */
+.your-sports { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 22px; background: var(--surface); }
+.your-sports-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.your-sports-head .dsp { font-size: 26px; }
+.sport-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.sport-pill { display: inline-flex; align-items: center; height: 40px; padding: 0 15px; border-radius: 999px; background: var(--sport); color: var(--on-sport); }
+.sport-pill .dsp { font-size: 19px; line-height: 1; }
+/* The welcome's tiles and the Edit sheet's: a group's sports (each esports game) smaller, three to a row. */
+.tiles.minis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.tile.pick.mini { min-height: 64px; padding: 10px 12px; border-radius: 16px; }
+.tile.pick.mini .corner { top: 9px; right: 9px; }
+.tile.pick.sport.mini .name { font-size: 17px; line-height: 1; padding-right: 18px; overflow-wrap: anywhere; }
+@supports (width: 1cqi) { .tile.pick.sport.mini .name { font-size: min(17px, (100cqi - 18px) / var(--ems, 5)); } }
+.your-sports-sheet .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.your-sports-sheet .tile.pick.sport:not(.mini) { min-height: 84px; }
+.your-sports-sheet .sheet-title { margin: 0; font-size: 44px; }
+.your-sports-sheet .sheet-foot { position: sticky; bottom: 0; display: flex; flex-direction: column; gap: 10px; padding-top: 10px; background: var(--surface); }
+.your-sports-sheet .summary { text-align: center; font-weight: 700; }
+.sheet-buttons { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 8px; }
 
 /* The Following page's way back to Today. */
 .back-link { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; min-height: 32px; }
