@@ -1049,9 +1049,11 @@ def rebuild_due(card: PlayerCard, now: datetime) -> bool:
 
 def to_arm(games: Iterable[tuple[int, str | None, datetime | None, bool]], now: datetime) -> list[int]:
     """Of scheduled games (id, sport, start, whether a source polls it), those to arm now: each within its
-    sport's lead. A game no source polls gets agent live checks once armed, which can't see a team sheet,
-    so it keeps the usual lead."""
-    return [game for game, sport, start, polled in games if start is not None and start <= now + structured.arm_before(sport if polled else None)]
+    sport's lead, of a sport that's on (one turned off in the admin panel isn't polled, so none of its games
+    is armed). A game no source polls gets agent live checks once armed, which can't see a team sheet, so it
+    keeps the usual lead."""
+    return [game for game, sport, start, polled in games
+            if start is not None and sports.on(sport) and start <= now + structured.arm_before(sport if polled else None)]
 
 
 def due_work(now: datetime | None = None) -> Due:
