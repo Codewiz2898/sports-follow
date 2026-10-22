@@ -5,7 +5,8 @@ starters, and puts its games first.
 They're kept per fan (FanSport), as follows are: an anonymous fan's under their cookie's id, moved into their account
 on sign-in (merge, accounts.adopt) and deleted with it (accounts.FAN_ROWS). Only the sports the app offers now count
 (offered: GET /api/sports' `on`). One turned off in the admin panel, or with nothing to show its players, is out of
-sight but kept, and back in its place when it's offered again, as a followed player of it is (server._following).
+sight but kept, and back when it's offered again, as a followed player of it is (server._following): in its place, or
+after the sports the fan saved meanwhile.
 Dropping a sport unfollows nobody in it.
 """
 

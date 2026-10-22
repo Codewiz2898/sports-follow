@@ -60,7 +60,7 @@ def test_a_sport_the_app_doesnt_offer_or_knows_nothing_of_isnt_taken(db):
     assert kept(db, "fan") == ["cricket"]
 
 
-def test_a_sport_turned_off_is_out_of_sight_and_back_in_its_place_when_its_on(db):
+def test_a_sport_turned_off_is_out_of_sight_and_back_when_its_on(db):
     """Bharath's choice 2 (22 Oct): hidden while it's off, as a followed player of it is, not dropped from the list."""
     save(db, "fan", ["football", "cricket", "chess"])
     controls.turn_sport("cricket", False)
@@ -70,7 +70,13 @@ def test_a_sport_turned_off_is_out_of_sight_and_back_in_its_place_when_its_on(db
     assert save(db, "fan", ["chess", "tennis"]) == ["chess", "tennis"]
     assert kept(db, "fan") == ["chess", "tennis", "cricket"]
     controls.turn_sport("cricket", True)
-    assert fansports.mine(db, "fan") == ["chess", "tennis", "cricket"]
+    assert fansports.mine(db, "fan") == ["chess", "tennis", "cricket"]  # after the ones saved while it was off
+    # Not saved meanwhile, it's back in its place.
+    save(db, "fan", ["football", "cricket", "chess"])
+    controls.turn_sport("cricket", False)
+    assert fansports.mine(db, "fan") == ["football", "chess"]
+    controls.turn_sport("cricket", True)
+    assert fansports.mine(db, "fan") == ["football", "cricket", "chess"]
 
 
 def test_a_sport_kept_keeps_the_date_it_was_first_picked(db):

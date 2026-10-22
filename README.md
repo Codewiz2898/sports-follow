@@ -357,7 +357,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   and Following's Edit changes them (`GET`/`PUT /api/me/sports`, `{"sports": [keys]}`); a change reaches the fan's
   other devices as a follow does (`sports` in the fan stream's list). Only the sports `/api/sports` says are on
   count: a key of another is left out, and a sport turned off in the admin panel stays in the fan's list out of
-  sight, back in its place when it's on again. Dropping a sport unfollows nobody in it.
+  sight, and is back when it's on again (after any the fan saved meanwhile). Dropping a sport unfollows nobody in it.
 - **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
   service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
   "Install app"; the app then opens full screen from the home screen. The app shell opens offline and

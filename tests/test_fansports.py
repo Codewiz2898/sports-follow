@@ -1,5 +1,6 @@
 """GET and PUT /api/me/sports (BHA-653): what a request may say, whose list it is, and that the fan's other devices
-hear of a change. Redis and the database are fakes; what the list does to real rows is tests/test_fansports_db.py."""
+hear of a change. Redis and the database are fakes; what the list does to real rows, and which keys it takes, is
+tests/test_fansports_db.py."""
 
 from __future__ import annotations
 
@@ -13,11 +14,11 @@ from .test_follow_push import told
 
 @pytest.fixture
 def lists(monkeypatch):
-    """Each fan's sports, as fansports keeps them, without its SQL: the fake database can't run it."""
+    """Each fan's sports as the route hands them to fansports, without its SQL: the fake database can't run it."""
     kept: dict[str, list[str]] = {}
 
     def replace(db, fan, keys, shown=None):
-        kept[fan] = [k for k in dict.fromkeys(keys) if k in fansports.offered()]
+        kept[fan] = list(keys)
         return kept[fan]
 
     monkeypatch.setattr(fansports, "replace", replace)
@@ -27,8 +28,8 @@ def lists(monkeypatch):
 
 def test_a_fans_sports_are_saved_in_their_order_and_read_back(api, lists):  # noqa: F811
     assert api.call("GET", "/api/me/sports", fan="fan").json() == {"sports": []}
-    saved = api.call("PUT", "/api/me/sports", fan="fan", body={"sports": ["chess", "golf", "cricket", "chess"]})
-    assert saved.status_code == 200 and saved.json() == {"sports": ["chess", "cricket"]}  # golf isn't a sport here
+    saved = api.call("PUT", "/api/me/sports", fan="fan", body={"sports": ["chess", "cricket"]})
+    assert saved.status_code == 200 and saved.json() == {"sports": ["chess", "cricket"]}
     assert api.call("GET", "/api/me/sports", fan="fan").json() == {"sports": ["chess", "cricket"]}
     assert api.call("GET", "/api/me/sports", fan="another").json() == {"sports": []}
 
