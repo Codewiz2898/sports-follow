@@ -10,12 +10,13 @@ import json
 import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import Column, create_engine, text
 
 from sports_follow import bus, db as db_module, results, retention, server
-from sports_follow.models import PlayerCard
+from sports_follow.models import Base, Moment, PlayerCard
 
 
 class Redis:
@@ -115,6 +116,25 @@ def test_moments_outlive_the_activity_list(monkeypatch):
     now = datetime(2026, 10, 13, tzinfo=timezone.utc)
     retention.run(now=now)
     assert now - seen["moment"] >= timedelta(days=server.ACTIVITY_DAYS)
+
+
+def _indexed(column: Column) -> bool:
+    """Whether an index, or the primary key, of the column's table starts with it."""
+    firsts = [list(i.columns)[0] for i in column.table.indexes] + [list(column.table.primary_key.columns)[0]]
+    return any(c is column for c in firsts)
+
+
+def test_deleting_old_moments_finds_what_points_at_them_by_an_index():
+    # Each moment deleted has every foreign key to it checked: without an index, each check read the whole table
+    # (100,000 feed candidates made deleting 5,000 moments take 88 s, BUG-219).
+    pointing = [fk.parent for t in Base.metadata.tables.values() for fk in t.foreign_keys if fk.column.table.name == "moment"]
+    assert {f"{c.table.name}.{c.name}" for c in pointing} >= {"feed_candidates.moment_id", "moment.corrects"}
+    assert [f"{c.table.name}.{c.name}" for c in pointing if not _indexed(c)] == []
+
+
+def test_a_games_moments_are_found_by_an_index():
+    # Every poll of a live game, its match page and the activity lists look its moments up by event_id (BUG-266).
+    assert _indexed(cast(Column, Moment.__table__.c.event_id))
 
 
 # ---------------------------------------------------------------- the real queries
