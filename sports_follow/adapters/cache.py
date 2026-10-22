@@ -5,8 +5,11 @@ first, so a live poll's few seconds of cache cost no round trip; then Redis; the
 then is a request counted (budget.py). A response is kept as the source sent it (its document, not what a
 parser made of it, so a parser change needs nothing flushed) with when it was fetched, and each caller
 judges freshness by its own ttl against that time: the same match is read with 5 s while it's live and
-24 h once it's over. A ttl of 0 is fetched every time and never kept. Threads of one process asking for
-the same thing at once send one request between them: the first fetches, the others take what it kept.
+24 h once it's over (where a copy kept while it was on is read again: Adapter.read_snapshot). A ttl of 0
+is fetched every time and never kept. Threads of one process asking for the same thing at once send one
+request between them: the first fetches, the others take what it kept. This process's copy holds at most
+ROOM bytes of each source's documents (and `size` of them), letting go of those used longest ago: Redis
+still has them.
 
 "When it was fetched" is when the request went out, not when its answer came back, and Redis keeps only
 the latest of those: an answer that took longer, sent before another process's, never replaces the
@@ -40,6 +43,9 @@ log = logging.getLogger("sports_follow.cache")
 # with a longer one may take a copy its writer no longer would (a live poll's, once the match is over).
 KEEP = 24 * 3600
 RETRY = 30  # seconds between tries while Redis can't be reached
+# A process's copy of one source's documents, in bytes of their JSON; read, they take about four times that
+# (an ESPN cricket scorecard is some 370 kB of JSON, 1.7 MB read). A history run reads them by the hundred.
+ROOM = 4 * 2**20
 T = TypeVar("T")
 
 # Write a copy only over an older one (or none), in one step, so two processes' writes can't interleave.
@@ -136,12 +142,16 @@ _caches: weakref.WeakSet[Cache] = weakref.WeakSet()
 
 
 class Cache:
-    """One source's responses: this process's copy (at most `size` of them), then Redis under src:<namespace>:."""
+    """One source's responses: this process's copy (at most `size` of them, `room` bytes of JSON between them),
+    then Redis under src:<namespace>:."""
 
-    def __init__(self, namespace: str, size: int = 2000) -> None:
+    def __init__(self, namespace: str, size: int = 2000, room: int = ROOM) -> None:
         self.namespace = namespace
         self.size = size
-        self.entries: dict[str, tuple[float, Any]] = {}  # this process's copy: key -> (fetched at, document)
+        self.room = room
+        # This process's copy: key -> (fetched at, document, its size as JSON), the one used longest ago first.
+        self.entries: dict[str, tuple[float, Any, int]] = {}
+        self.held = 0  # the sizes of everything in it
         self._guard = threading.Lock()
         self._flights: dict[str, list[Any]] = {}  # key -> [its lock, threads holding or waiting for it]
         _caches.add(self)
@@ -178,37 +188,47 @@ class Cache:
 
     def _local(self, key: str, ttl: float) -> tuple[float, Any] | None:
         hit = self.entries.get(key)
-        return hit if hit is not None and time.time() - hit[0] < ttl else None
+        if hit is None or time.time() - hit[0] >= ttl:
+            return None
+        with self._guard:
+            if self.entries.get(key) is hit:
+                self.entries[key] = self.entries.pop(key)  # used now: the last to go
+        return hit[0], hit[1]
 
     def _shared(self, key: str, ttl: float) -> tuple[float, Any] | None:
         kept = _store("get", self._key(key))
         if not kept or time.time() - kept[0] >= ttl:
             return None
         try:
-            data = json.loads(zlib.decompress(kept[1]))
+            raw = zlib.decompress(kept[1])
+            data = json.loads(raw)
         except (zlib.error, ValueError, TypeError):  # not one of ours: as good as missing
             return None
-        self._put(key, (kept[0], data))  # judged by when it was fetched, not when this process read it
+        self._put(key, kept[0], data, len(raw))  # judged by when it was fetched, not when this process read it
         return kept[0], data
 
     def _keep(self, key: str, at: float, data: Any, ttl: float) -> None:
-        self._put(key, (at, data))
         try:
-            doc = zlib.compress(json.dumps(data, separators=(",", ":")).encode())
+            raw = json.dumps(data, separators=(",", ":")).encode()
         except (TypeError, ValueError):  # not JSON: kept in this process only
+            self._put(key, at, data, len(repr(data)))
             return
-        if _store("put", self._key(key), at, doc, max(math.ceil(ttl), KEEP)) is False:
+        self._put(key, at, data, len(raw))
+        if _store("put", self._key(key), at, zlib.compress(raw), max(math.ceil(ttl), KEEP)) is False:
             # Redis has a copy whose request went out later: this process's next read takes that one.
             with self._guard:
                 if self.entries.get(key, (None,))[0] == at:
-                    del self.entries[key]
+                    self.held -= self.entries.pop(key)[2]
 
-    def _put(self, key: str, entry: tuple[float, Any]) -> None:
+    def _put(self, key: str, at: float, data: Any, size: int) -> None:
         with self._guard:
-            self.entries[key] = entry
-            if len(self.entries) > self.size:  # the oldest quarter go
-                for old, _ in sorted(self.entries.items(), key=lambda kv: kv[1][0])[: self.size // 4]:
-                    self.entries.pop(old, None)
+            old = self.entries.pop(key, None)
+            self.held += size - (old[2] if old else 0)
+            self.entries[key] = (at, data, size)
+            # Past its room or its count, what was used longest ago goes, never the one just kept: a document
+            # bigger than the room is kept alone, so threads waiting for it take this one.
+            while len(self.entries) > 1 and (self.held > self.room or len(self.entries) > self.size):
+                self.held -= self.entries.pop(next(iter(self.entries)))[2]
 
     def _key(self, key: str) -> str:
         return f"src:{self.namespace}:{hashlib.sha1(key.encode()).hexdigest()}"
@@ -234,4 +254,5 @@ def forget() -> None:
     for cache in list(_caches):
         with cache._guard:
             cache.entries.clear()
+            cache.held = 0
     _down.update(until=0.0, warned=0.0)

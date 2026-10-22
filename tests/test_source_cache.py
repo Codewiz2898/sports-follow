@@ -247,3 +247,44 @@ def test_the_redis_store_writes_through_its_script_and_reads_the_hash():
     assert asked == [(["src:example:kept"], ["1800000000.123456", b"made up", 86400])]
     assert store.get("src:example:kept") == (1_800_000_000.25, b"made up")
     assert store.get("src:example:missing") is None
+
+
+def _held(reads: cache.Cache) -> int:
+    """The JSON size of every document a process's copy holds."""
+    return sum(len(json.dumps(entry[1], separators=(",", ":"))) for entry in reads.entries.values())
+
+
+def test_a_processs_copy_is_bounded_by_size_and_redis_keeps_the_rest(source_cache):
+    # BHA-453: a history run reads scorecards by the hundred (an ESPN cricket summary is about 370 kB of JSON,
+    # nearer 1.8 MB once read), and each process kept up to 2,000 a source, with no bound on their size.
+    reads, source = cache.Cache("example"), Source()
+    rows = "x" * 200_000
+    for n in range(100):
+        reads.read(f"/summary/{n}", 24 * 3600, lambda n=n: {"n": n, "rows": rows})
+    assert _held(reads) < 10_000_000, f"{len(reads.entries)} documents kept, {_held(reads) / 2**20:.1f} MB of JSON"  # of the 20 MB read
+    assert _held(reads) == reads.held <= cache.ROOM and "/summary/99" in reads.entries  # the latest stay
+    # One this process let go is still in Redis: read from there, not asked of the source.
+    assert reads.read("/summary/0", 24 * 3600, source) == {"n": 0, "rows": rows} and source.fetched == 0
+
+
+def test_what_a_process_keeps_reading_stays_in_its_copy(monkeypatch, source_cache):
+    # The day's listing every refresh reads isn't pushed out by a run of scorecards read once each: the copy lets
+    # go of what was used longest ago, not of what was fetched first. With Redis down, that's the difference
+    # between one request for the listing and one a refresh.
+    monkeypatch.setattr(cache, "STORE", SimpleNamespace(get=lambda key: None, put=lambda key, at, doc, ex: True))  # nothing comes back from Redis
+    reads, listing = cache.Cache("example"), Source()
+    rows = "x" * 200_000
+    for n in range(100):
+        reads.read("/scoreboard/today", 1800, listing)
+        reads.read(f"/summary/{n}", 24 * 3600, lambda n=n: {"n": n, "rows": rows})
+    assert listing.fetched == 1 and _held(reads) <= cache.ROOM
+
+
+def test_a_document_bigger_than_a_processs_room_is_still_served(monkeypatch):
+    monkeypatch.setattr(cache, "STORE", SimpleNamespace(get=lambda key: None, put=lambda key, at, doc, ex: True))
+    reads = cache.Cache("example", room=1000)
+    big = {"rows": "x" * 5000}
+    reads.read("/small", 3600, lambda: {"rows": "x"})
+    assert reads.read("/big", 3600, lambda: big) == big
+    assert list(reads.entries) == ["/big"] and reads.held == _held(reads)  # kept on its own, so threads waiting for it take this one
+    assert reads.read("/big", 3600, Source()) == big

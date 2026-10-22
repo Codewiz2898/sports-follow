@@ -38,7 +38,7 @@ PARSE_WAIT = 300  # a match not parsed yet is asked again this often: a pro game
 MISS_WAIT = 60  # and one OpenDota doesn't have at all, this often (per process)
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20)
-_cache = cache.Cache(BUDGET.name, size=200)  # a match is a big document: this process keeps a few days' maps
+_cache = cache.Cache(BUDGET.name, size=200)  # a match is a big document: this process keeps a few (cache.ROOM), Redis the rest
 _memo: dict[str, tuple[float, Any]] = {}  # short-lived answers (the live list), and matches not there yet, per process
 
 
