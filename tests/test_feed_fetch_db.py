@@ -6,14 +6,16 @@ make one)."""
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import timedelta
 
+import httpx
 import pytest
 from sqlalchemy import create_engine, delete, func, select, text, update
 
-from sports_follow import bus, candidates, db as db_module, feed as feed_module, metrics
-from sports_follow.adapters import VIDEOS, Upload
+from sports_follow import bus, candidates, config, db as db_module, feed as feed_module, metrics, server, worker
+from sports_follow.adapters import VIDEOS, Upload, budget, youtube
 from sports_follow.models import FeedCandidate, Follow, Player, PlayerAlias
 from tests.test_feed_fetch import CHANNEL, NOW, Fake, feed, listing, video
 from tests.test_feed_metrics import counts
@@ -44,21 +46,20 @@ class Redis:
         self.data[key] = value
         self.ttl[key] = ex
 
+    def delete(self, *keys):
+        return sum(self.data.pop(k, None) is not None for k in keys)
+
     def execute(self):
         return []
 
 
 @pytest.fixture
 def world(monkeypatch):
-    from tests.test_feed_fetch import youtube
-
     engine = create_engine(URL)
     with engine.begin() as c:
         c.execute(text("TRUNCATE feed_candidates, follow, player_alias, player_identity, player RESTART IDENTITY CASCADE"))
     monkeypatch.setattr(db_module, "SessionLocal", db_module.sessionmaker(bind=engine, expire_on_commit=False))
     made = Fake()
-    import httpx
-
     monkeypatch.setattr(youtube, "_client", httpx.Client(transport=httpx.MockTransport(made)))
     monkeypatch.setattr(youtube, "key", lambda: "test-key")
     monkeypatch.setattr(candidates, "channels", lambda source: {CHANNEL: {"cricket"}})
@@ -186,8 +187,6 @@ def test_removing_a_player_takes_their_candidates_and_a_poll_doesnt_bring_them_b
 
 
 def test_without_a_key_nothing_is_read(world, monkeypatch):
-    from tests.test_feed_fetch import youtube
-
     player("Virat Kohli")
     monkeypatch.setattr(youtube, "key", lambda: None)
     world.feeds[CHANNEL] = feed(("kohli000001", "Kohli", ""))
@@ -224,8 +223,6 @@ def test_a_premiere_not_aired_yet_is_asked_about_again_within_the_hour(world):
 
 
 def test_a_row_no_check_could_read_for_a_month_goes(world, monkeypatch):
-    from tests.test_feed_fetch import youtube
-
     player("Virat Kohli")
     world.feeds[CHANNEL] = feed(("kohli000001", "Kohli: the chase", ""))
     world.videos["kohli000001"] = video("kohli000001")
@@ -296,13 +293,117 @@ def test_a_video_a_fans_app_said_wont_play_inside_it_stays_unserved_when_found_f
     world.videos["kohlibumrah"] = video("kohlibumrah")
     candidates.poll(NOW)
     with db_module.session() as s:
-        assert feed_module.unplayable(s, kohli, feed_module.item_id("https://www.youtube.com/watch?v=kohlibumrah"), NOW)
+        assert feed_module.unplayable(s, "youtube:kohlibumrah", NOW)
     bumrah = player("Jasprit Bumrah")
     world.feeds[CHANNEL] = feed_xml
     assert candidates.poll(NOW + timedelta(minutes=30))["kept"] == 1
     with db_module.session() as s:
         marks = dict(s.execute(select(FeedCandidate.player_id, FeedCandidate.unplayable_at)).all())
     assert marks == {kohli: NOW, bumrah: NOW}
+
+
+# ---------------------------------------------------------------- a video fans' apps say won't play: YouTube asked (BUG-100)
+
+
+def reported(world, monkeypatch, pid: int, vid: str, networks: range) -> list[tuple]:
+    """Fans' apps in India, one on each of these networks (81.2.70.n), say the player's video won't play inside them
+    (POST .../unplayable), as an app does when YouTube's player refuses it: the jobs that queued for the worker. The
+    API's Redis is the worker's (world.redis), so the worker finds the votes the API counted."""
+    from tests.test_api import KEY, Queue, Redis as ApiRedis
+
+    api, queue = ApiRedis(), Queue()
+    api.data = world.redis.data
+    monkeypatch.setitem(server.state, "redis", api)
+    monkeypatch.setitem(server.state, "arq", queue)
+    monkeypatch.setattr(server, "cookie_key", lambda: KEY)
+    item = feed_module.item_id(f"https://www.youtube.com/watch?v={vid}")
+
+    async def say(n: int) -> httpx.Response:
+        transport = httpx.ASGITransport(app=server.app, client=(f"81.2.70.{n}", 50000))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(f"/api/players/{pid}/feed/{item}/unplayable", headers={"Cookie": f"{config.FAN_COOKIE}={server.sign_fan(f'fan-{n}')}"},
+                                     json={"timezone": "Asia/Kolkata"})  # fmt: skip
+
+    for n in networks:
+        answer = asyncio.run(say(n))
+        assert answer.status_code == 200 and answer.json()["marked"] is False, answer.text  # nobody else's Feed loses it
+    return queue.jobs
+
+
+def check(video_: str) -> None:
+    """The worker's job those reports queued, run as the worker runs it."""
+    asyncio.run(worker.check_unplayable({}, video_))
+
+
+def marked() -> dict[tuple[int, str], bool]:
+    with db_module.session() as s:
+        return {(p, v): at is not None for p, v, at in s.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.unplayable_at))}
+
+
+def test_three_networks_saying_a_video_wont_play_have_youtube_asked_and_only_its_word_takes_it_from_every_feed(world, monkeypatch):
+    """BUG-100: three networks' word that a video won't play inside the app takes it from their own Feeds alone, and
+    has the worker ask YouTube about it as the weekly check does (a unit of the day's quota, in the feed lane). Only YouTube saying it won't play here (no longer embeddable, private,
+    removed) takes it from every player's Feed; the votes go with it."""
+    kohli, bumrah = player("Virat Kohli"), player("Jasprit Bumrah")
+    world.feeds[CHANNEL] = feed(("kohlibumrah", "Kohli and Bumrah on the tour", ""), ("kohlicover0", "Kohli's cover drive", ""), ("kohlipull00", "Kohli's pull shot", ""))
+    world.videos.update({v["id"]: v for v in (video("kohlibumrah"), video("kohlicover0"), video("kohlipull00"))})
+    candidates.poll(NOW)
+    world.videos["kohlibumrah"] = video("kohlibumrah", embeddable=False)  # its owner has turned embedding off since
+    world.videos["kohlicover0"] = video("kohlicover0", privacy="private")
+    del world.videos["kohlipull00"]  # removed
+    asked = world.api_calls("/videos")
+    queued = [job for vid in ("kohlibumrah", "kohlicover0", "kohlipull00") for job in reported(world, monkeypatch, kohli, vid, range(1, 4))]
+    assert not any(marked().values())  # three networks' word alone
+    assert queued == [("check_unplayable", f"youtube:{v}") for v in ("kohlibumrah", "kohlicover0", "kohlipull00")]
+    for _, vid in queued:
+        check(vid)
+    assert marked() == {(kohli, "kohlibumrah"): True, (bumrah, "kohlibumrah"): True, (kohli, "kohlicover0"): True, (kohli, "kohlipull00"): True}
+    assert world.api_calls("/videos") == asked + 3  # one each, never from what the poll read
+    assert {r["lane"]: r["sent_d"] for r in budget.usage([youtube.BUDGET])}["feed"] == 3
+    assert not [k for k in world.redis.data if k.startswith("feed:unplayable:votes:")]
+
+
+def test_a_video_youtube_says_plays_here_stays_in_every_feed_and_isnt_asked_about_again_for_a_day(world, monkeypatch):
+    """BUG-100: YouTube says the video plays here (embeddable, public, not blocked in India): the votes go, and no Feed
+    loses it but the reporters'. It isn't asked about again for a day (feed.UNPLAYABLE_CHECK_EVERY), however many more
+    networks say so, so reports can't spend the day's quota on it."""
+    kohli = player("Virat Kohli")
+    world.feeds[CHANNEL] = feed(("kohlibumrah", "Kohli and Bumrah on the tour", ""))
+    world.videos["kohlibumrah"] = video("kohlibumrah")
+    candidates.poll(NOW)
+    asked = world.api_calls("/videos")
+    [(_, vid)] = reported(world, monkeypatch, kohli, "kohlibumrah", range(1, 4))
+    check(vid)
+    assert not any(marked().values()) and world.api_calls("/videos") == asked + 1
+    assert "feed:unplayable:votes:youtube:kohlibumrah" not in world.redis.data
+    assert world.redis.ttl["feed:unplayable:check:youtube:kohlibumrah"] == feed_module.UNPLAYABLE_CHECK_EVERY
+    assert reported(world, monkeypatch, kohli, "kohlibumrah", range(4, 10)) == []  # six more networks within the day
+    assert world.api_calls("/videos") == asked + 1
+
+
+def test_with_youtube_out_of_quota_or_without_a_key_fans_reports_take_a_video_from_nobody_but_themselves(world, monkeypatch, source_budgets):
+    """BUG-100: with the day's quota spent, or no YouTube key, the check can't ask, so no Feed loses the video but the
+    reporters' (an admin can still hide it from the panel). Their votes stay, and it's asked about again an hour on."""
+    kohli = player("Virat Kohli")
+    world.feeds[CHANNEL] = feed(("kohlibumrah", "Kohli and Bumrah on the tour", ""))
+    world.videos["kohlibumrah"] = video("kohlibumrah")
+    candidates.poll(NOW)
+    world.videos["kohlibumrah"] = video("kohlibumrah", embeddable=False)
+    asked, wait = world.api_calls(), "feed:unplayable:check:youtube:kohlibumrah"
+    now = budget.time.time()
+    day = budget._window_key(youtube.BUDGET, "", youtube.BUDGET.windows[0], now)  # pyright: ignore[reportPrivateUsage]
+    source_budgets.data[day] = (youtube.PER_DAY - youtube.MARGIN, now + 3600)  # the day's quota spent
+    [(_, vid)] = reported(world, monkeypatch, kohli, "kohlibumrah", range(1, 4))
+    check(vid)
+    assert not any(marked().values()) and world.api_calls() == asked
+    assert world.redis.data["feed:unplayable:votes:youtube:kohlibumrah"] == {"81.2.70.1", "81.2.70.2", "81.2.70.3"}
+    assert world.redis.ttl[wait] == feed_module.UNPLAYABLE_UNCHECKED_AGAIN
+    # An hour on, with no key at all: a fourth network's word has it asked about again, and still nothing is marked.
+    del source_budgets.data[day], world.redis.data[wait]
+    monkeypatch.setattr(youtube, "key", lambda: None)
+    assert reported(world, monkeypatch, kohli, "kohlibumrah", range(4, 5)) == [("check_unplayable", vid)]
+    check(vid)
+    assert not any(marked().values()) and world.api_calls() == asked
 
 
 def test_a_video_an_admin_hid_stays_hidden_when_found_for_another_player(world):

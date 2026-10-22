@@ -54,9 +54,10 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import controls, feedpool, rank, sports, titles
-from .adapters import VIDEOS, feed_source
+from . import bus, candidates, controls, feedpool, rank, sports, titles
+from .adapters import VIDEOS, AdapterError, feed_source
 from .config import FEED_LAYOUT, FEED_ZONES
+from .db import session
 from .models import FeedCandidate, FeedFeedback, Follow, Moment, Player, PlayerCard
 
 log = logging.getLogger("sports_follow.feed")
@@ -67,15 +68,18 @@ VERDICTS = ("not_interested", "not_about_player", "report")
 # words from the sheet are, and the judge doesn't read it (rank.FEEDBACK).
 UNPLAYABLE = "unplayable"
 # Videos a fan's app may say in an hour won't play inside it (said_unplayable), from one fan, one address and
-# everyone: each is a vote on whether the video leaves everyone's Feed, so one app (or a script) can't cast many.
+# everyone: each is a vote on whether the video's source is asked about it, so one app (or a script) can't cast many.
 UNPLAYABLE_PER_FAN, UNPLAYABLE_PER_ADDRESS, UNPLAYABLE_PER_HOUR = 10, 30, 200
-# Networks whose apps must say a video won't play inside them before it leaves every fan's Feed (unplayable); until
-# then it leaves only the Feeds of the fans who said so. One fan, or one network with any number of new cookies,
-# can't take a video from anyone else, while one that really won't play does so for every fan who tries it, so it's
-# soon gone for all. Three: a fan has a home and a phone network at most, and with the few fans there are now, a video
-# that won't play isn't shown for long. A network's word is kept for UNPLAYABLE_VOTES_FOR seconds (a month). Only an
-# app in FEED_COUNTRY votes (counts_everywhere): fans abroad would soon be three networks too.
+# Networks whose apps must say a video won't play inside them before its source is asked whether it does
+# (check_unplayable); each of those fans' Feeds loses it at once. No number of them takes it from anyone else's: only
+# the source saying it won't play here does. Three: a fan has a home and a phone network at most. A network's word is
+# kept for UNPLAYABLE_VOTES_FOR seconds (a month). Only an app in FEED_COUNTRY votes (counts_everywhere): fans abroad
+# would soon be three networks too.
 UNPLAYABLE_VOTES, UNPLAYABLE_VOTES_FOR = 3, 30 * 24 * 3600
+# Seconds before a video's source is asked about it again once it was (it plays, or it was marked): a day, however many
+# networks say so meanwhile, so reports can't spend the source's allowance on one video. One it couldn't be asked
+# about (no key, its allowance spent) is asked about again UNPLAYABLE_UNCHECKED_AGAIN on, at the next network's word.
+UNPLAYABLE_CHECK_EVERY, UNPLAYABLE_UNCHECKED_AGAIN = 24 * 3600, 3600
 ITEM_ID = re.compile(r"[0-9a-f]{16}")
 YOUTUBE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 WEEK = timedelta(days=7)
@@ -700,8 +704,8 @@ def feedback(db: Session, fan: str, player_id: int, item: str, verdict: str) -> 
 def said_unplayable(db: Session, fan: str, player_id: int, item: str) -> str | None:
     """A fan's app said this video of the player's feed won't play inside it: its source's player refused it. It
     leaves this fan's Feed at once (UNPLAYABLE, kept as their words from the sheet are; said again, nothing changes),
-    and the video comes back as "source:id", for their network's vote on whether it leaves everyone's
-    (UNPLAYABLE_VOTES, then unplayable). None, and nothing kept, when an admin approved or pinned it: their word
+    and the video comes back as "source:id", for their network's vote on whether its source is asked about it
+    (UNPLAYABLE_VOTES, then check_unplayable). None, and nothing kept, when an admin approved or pinned it: their word
     that it plays stands over any app's. ValueError for an item id this never makes; LookupError for no such video
     of the player's."""
     found, vouched = _video_of(db, player_id, item)
@@ -713,31 +717,78 @@ def said_unplayable(db: Session, fan: str, player_id: int, item: str) -> str | N
 
 
 def counts_everywhere(zone: Any) -> bool:
-    """Whether a fan's app saying a video won't play is a vote on whether it leaves every fan's Feed (UNPLAYABLE_VOTES):
-    only from a device in FEED_COUNTRY, by the time zone it says it's in (FEED_ZONES). A video is kept because it plays
-    there (candidates.refused), and may play there alone (a broadcaster's rights there), so an app abroad that's refused
-    it says nothing of how it plays for the fans the Feed is for; it leaves that fan's Feed all the same. An app that
-    names no zone (one from before it said) doesn't vote. A device can name any zone, but one network's vote is all it
-    gets, as before. With FEED_ZONES empty, every app votes."""
+    """Whether a fan's app saying a video won't play is a vote on whether its source is asked about it (UNPLAYABLE_VOTES,
+    check_unplayable): only from a device in FEED_COUNTRY, by the time zone it says it's in (FEED_ZONES). A video is
+    kept because it plays there (candidates.refused), and may play there alone (a broadcaster's rights there), so an
+    app abroad that's refused it says nothing of how it plays for the fans the Feed is for; it leaves that fan's Feed
+    all the same. An app that names no zone (one from before it said) doesn't vote. A device can name any zone, but
+    one network's vote is all it gets, and only the source's word takes a video from anyone else. With FEED_ZONES
+    empty, every app votes."""
     return not FEED_ZONES or (isinstance(zone, str) and zone in FEED_ZONES)
 
 
-def unplayable(db: Session, player_id: int, item: str, now: datetime | None = None) -> bool:
-    """Enough fans' apps said this video of the player's feed won't play inside it (UNPLAYABLE_VOTES): its source's
-    player refused it (its owner keeps it off other sites, which the source's facts didn't say). It's marked on every
-    player's row of it, so no Feed serves it again, and a fetch that finds it again for someone else keeps the mark
-    (candidates.keep). An admin's approving or pinning it stands over that (rank.review): such a video is never
-    marked. True when this marked it, False when it was already or an admin vouched for it. ValueError for an item
-    id this never makes; LookupError for no such video of the player's."""
-    found, vouched = _video_of(db, player_id, item)
-    if vouched:
+def unplayable_votes_key(video: str) -> str:
+    """Redis's set of the networks whose apps said this video ("source:id") won't play inside them (UNPLAYABLE_VOTES)."""
+    return f"feed:unplayable:votes:{video}"
+
+
+def unplayable_check_key(video: str) -> str:
+    """Redis's mark that this video's source was asked about it (check_unplayable), or is about to be: while it's
+    there (UNPLAYABLE_CHECK_EVERY), no more votes have it asked again."""
+    return f"feed:unplayable:check:{video}"
+
+
+def check_unplayable(video: str, now: datetime | None = None) -> str | None:
+    """UNPLAYABLE_VOTES networks' apps said this video ("source:id", as said_unplayable gives it) won't play inside
+    them: ask its source now, as the weekly check does (candidates.recheck). The worker's job (worker.check_unplayable),
+    queued once for the reports that came together (server.feed_unplayable). Only the source saying it won't play here
+    (removed, private, no longer embeddable, age-restricted or blocked in FEED_COUNTRY) takes it from every fan's
+    Feed (unplayable). Then, or when it says it plays, the votes go, and it isn't asked about again for
+    UNPLAYABLE_CHECK_EVERY. When the source can't say (no key, its allowance spent, no answer), nothing is marked and
+    the votes stay, for another check UNPLAYABLE_UNCHECKED_AGAIN on. Either way the fans whose apps said so don't see
+    it (said_unplayable), and an admin can hide it from the panel; that's all for a video its owner keeps off other
+    sites without the source saying so. Why it won't play here, or None."""
+    source, _, external_id = video.partition(":")
+    redis = bus.sync_redis()
+    try:
+        why = candidates.recheck(source, external_id)
+    except AdapterError as exc:
+        log.info("feed: %s: fans' apps said it won't play inside them; its source can't say now (%s), so nothing is marked", video, exc)
+        redis.set(unplayable_check_key(video), "1", ex=UNPLAYABLE_UNCHECKED_AGAIN)
+        return None
+    if why is None:
+        log.info("feed: %s: fans' apps said it won't play inside them; its source says it plays here, so it's kept", video)
+    else:
+        with session() as s:
+            marked = unplayable(s, video, now)
+        log.info("feed: %s: fans' apps said it won't play inside them; its source says %s: %s", video, why, "no longer served" if marked else "left as it was")
+    redis.delete(unplayable_votes_key(video))
+    redis.set(unplayable_check_key(video), "1", ex=UNPLAYABLE_CHECK_EVERY)
+    return why
+
+
+def unplayable(db: Session, video: str, now: datetime | None = None) -> bool:
+    """This video ("source:id") won't play inside the app, its source says (check_unplayable, once fans' apps said
+    so). It's marked on every player's row of it, so no Feed serves it again, and a fetch that finds it again for
+    someone else keeps the mark (candidates.keep). An admin's approving or pinning it stands over that (rank.review):
+    such a video is never marked. True when this marked it; False when it was already, an admin vouched for it, or
+    there's no such video."""
+    source, _, external_id = video.partition(":")
+    found = (source, external_id)
+    if _vouched(db, found):
         return False
-    video = (FeedCandidate.source == found[0]) & (FeedCandidate.external_id == found[1])
-    marked = db.execute(update(FeedCandidate).where(video, FeedCandidate.unplayable_at.is_(None))
+    rows = (FeedCandidate.source == found[0]) & (FeedCandidate.external_id == found[1])
+    marked = db.execute(update(FeedCandidate).where(rows, FeedCandidate.unplayable_at.is_(None))
                         .values(unplayable_at=now or datetime.now(timezone.utc)).returning(FeedCandidate.id)).all()  # fmt: skip
     if marked:
-        log.info("feed: %s %s won't play inside the app, fans' apps said: no longer served (%d row(s))", found[0], found[1], len(marked))
+        log.info("feed: %s %s won't play inside the app, its source says: no longer served (%d row(s))", found[0], found[1], len(marked))
     return bool(marked)
+
+
+def video_of_row(db: Session, row_id: int) -> str | None:
+    """The video ("source:id", as said_unplayable names it) a candidate row is; None for no such row."""
+    found = db.execute(select(FeedCandidate.source, FeedCandidate.external_id).where(FeedCandidate.id == row_id)).first()
+    return f"{found.source}:{found.external_id}" if found else None
 
 
 def _video_of(db: Session, player_id: int, item: str) -> tuple[tuple[str, str], bool]:
@@ -750,8 +801,13 @@ def _video_of(db: Session, player_id: int, item: str) -> tuple[tuple[str, str], 
     found = next(((r.source, r.external_id) for r in rows if item_id(r.url) == item), None)
     if found is None:
         raise LookupError("That video isn't in this player's feed.")
+    return found, _vouched(db, found)
+
+
+def _vouched(db: Session, found: tuple[str, str]) -> bool:
+    """Whether an admin approved or pinned this video (source, its id) on any player's row of it."""
     video = (FeedCandidate.source == found[0]) & (FeedCandidate.external_id == found[1])
-    return found, bool(db.scalar(select(func.count()).where(video, FeedCandidate.review.in_(("approved", "pinned")))))
+    return bool(db.scalar(select(func.count()).where(video, FeedCandidate.review.in_(("approved", "pinned")))))
 
 
 # ---------------------------------------------------------------- inside
