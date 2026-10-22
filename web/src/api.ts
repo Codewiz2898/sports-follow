@@ -45,28 +45,37 @@ const SILENCE_MS = 40_000  // the server pings every 15 s (server.py HEARTBEAT)
  * connection on its own, but a non-200 answer (the proxy while the API restarts or deploys) closes it
  * for good: that reopens here after 1, 2, 4… up to 30 s. A connection that has gone quiet is dead even
  * if nothing said so (a proxy can keep it open after the API behind it is gone, a phone's can die
- * while it sleeps): that reopens, as does coming back to the app or back online.
+ * while it sleeps): that reopens, as does coming back to the app or back online. Each reconnect tells
+ * `onBack` how long it was since the stream last said anything (an event, a ping): what the app may have
+ * missed meanwhile.
  */
-export function subscribe(path: string, onEvent: (e: StreamEvent) => void): () => void {
+export function subscribe(path: string, onEvent: (e: StreamEvent) => void, onBack?: (awayMs: number) => void): () => void {
   let source: EventSource | null = null
   let failures = 0
   let retry: number | undefined
   let quiet: number | undefined
+  let said = 0  // when the stream last said anything; 0 before its first connect
 
   const alive = () => {
     window.clearTimeout(quiet)
     quiet = window.setTimeout(open, SILENCE_MS)
   }
+  const heard = () => { said = Date.now(); alive() }
   const open = () => {
     window.clearTimeout(retry)
     source?.close()
     const es = new EventSource(path, { withCredentials: true })
     source = es
     alive()
-    es.onopen = () => { failures = 0; alive() }
-    es.addEventListener('ping', alive)
+    const since = said  // the last connection's last word, until this one opens
+    es.onopen = () => {
+      failures = 0
+      heard()
+      if (since) onBack?.(said - since)
+    }
+    es.addEventListener('ping', heard)
     es.onmessage = (msg) => {
-      alive()
+      heard()
       try {
         onEvent(JSON.parse(msg.data) as StreamEvent)
       } catch { /* ignore malformed frames */ }
