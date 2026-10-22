@@ -743,11 +743,13 @@ class Account(Base):
 
 def followers(key: InstrumentedAttribute[int], fan: InstrumentedAttribute[str]) -> Select[int, int, int]:
     """The followers of each player anyone follows (key and fan: Follow.player_id, Follow.fan_id) or team (TeamFollow's):
-    its id, "accounts" and "follows". Accounts are the signed-in fans an admin hasn't blocked, as starters count them:
-    what's shown as "N following", and what ranks (search, For you's most followed, the Feed's sweeps). Follows are
-    every one, an anonymous fan's too, which only break a tie: a new cookie is free, so a script's mustn't steer what
-    every fan is shown (BUG-293)."""
-    return (select(key.label("id"), func.count(Account.id).label("accounts"), func.count().label("follows"))
+    its id, "accounts" and "follows". Accounts are the signed-in fans an admin hasn't blocked, one an inbox (me+1@ and
+    me+2@ are one person's: accounts.inbox_of, BUG-296), as starters count them: what's shown as "N following", and what
+    ranks (search, For you's most followed, the Feed's sweeps). Follows are every one, an anonymous fan's too, which only
+    break a tie: a new cookie is free, so a script's mustn't steer what every fan is shown (BUG-293)."""
+    from .accounts import inbox_of  # accounts.py builds on this module
+
+    return (select(key.label("id"), func.count(inbox_of(Account.email).distinct()).label("accounts"), func.count().label("follows"))
             .outerjoin(Account, and_(Account.fan_id == fan, Account.blocked_at.is_(None))).group_by(key))
 
 

@@ -431,7 +431,8 @@ def test_streams_with_no_fan_take_only_part_of_a_process_so_fans_still_get_their
     """BUG-299: a player's stream needs no cookie, and its address's share was all that held it, so four IPv4
     addresses (or seventeen /64s of one /48) held every stream of a process, and every web fan's live scores got a
     503. A stream with neither a fan's cookie nor a session takes one of the few kept for those now
-    (STREAMS_WITHOUT_FAN): the rest are fans'. A player's stream with a fan's cookie is held in that fan's share."""
+    (STREAMS_WITHOUT_FAN): the rest are fans'. A player's stream with a fan's cookie is a fan's, outside their own
+    share (their phone and their laptop may each have a player's page open)."""
     monkeypatch.setattr(server, "cookie_key", lambda: b"a test key for fan cookies, 32+ bytes")
     monkeypatch.setattr(server, "STREAMS_PER_FAN", 2, raising=False)
     monkeypatch.setattr(server, "STREAMS_PER_IPV4", 3, raising=False)
@@ -441,23 +442,23 @@ def test_streams_with_no_fan_take_only_part_of_a_process_so_fans_still_get_their
     assert held(server.player_stream(1, From("83.2.69.1"))) == 503  # the streams kept for no fan are all held
     assert held(server.my_stream(From("83.2.69.1"), fan="made-up")) == 503  # as is a fan's own without its cookie: a new fan each request
     assert held(server.my_stream(From("84.2.69.1", fan="asha"), fan="asha")) == 200  # a fan's own still opens
-    assert held(server.player_stream(1, From("84.2.69.1", fan="asha"))) == 200  # and a player's, with her cookie: in her share
-    assert held(server.player_stream(1, From("85.2.69.1", fan="asha"))) == 429  # which holds two, from anywhere
-    assert server.streaming["fanless"] == 6 and server.streaming["fan:asha"] == 2 and server.streaming["all"] == 8
+    assert [held(server.player_stream(1, From(f"8{4 + i}.2.69.1", fan="asha"))) for i in range(3)] == [200] * 3  # and players' with her cookie
+    assert server.streaming["fanless"] == 6 and server.streaming["fan:asha"] == 1 and server.streaming["all"] == 10
 
 
-def test_an_ipv4_24s_or_an_ipv6_48s_addresses_together_hold_only_so_many_streams(api, monkeypatch, caplog):
-    """BUG-299: each address had its share and nothing else did, so a /24's addresses, or a /48's 65,536 /64s,
-    together held every stream of a process. A prefix (an IPv4 /24, an IPv6 /48) has a ceiling of its own now
-    (STREAMS_PER_PREFIX), well under the process's; one reaching it is logged."""
+def test_an_ipv6_48s_64s_together_hold_only_so_many_streams_and_an_ipv4_24_is_logged_there(api, monkeypatch, caplog):
+    """BUG-299: each address had its share and nothing else did, so a /48's 65,536 /64s (free from a tunnel broker)
+    together held every stream of a process. A /48 has a ceiling of its own now (STREAMS_PER_PREFIX), well under the
+    process's. An IPv4 /24's addresses each have their own share and a phone network's NAT puts many fans behind a few
+    /24s, so one is only logged at that ceiling; a /48 reaching it is logged too."""
     caplog.set_level(logging.WARNING, "sports_follow.limits")
     monkeypatch.setattr(server, "_ceilings_logged", {}, raising=False)
     monkeypatch.setattr(server, "STREAMS_PER_IPV4", 3, raising=False)
     monkeypatch.setattr(server, "STREAMS_PER_ADDRESS", 2, raising=False)
     monkeypatch.setattr(server, "STREAMS_PER_PREFIX", 4, raising=False)
     monkeypatch.setattr(server, "STREAMS_PER_PROCESS", 100, raising=False)
-    assert [held(server.my_stream(From(f"81.2.69.{1 + i // 3}"), fan=f"fan-{i}")) for i in range(5)] == [200] * 4 + [429]  # three from one, one from the next
-    assert held(server.my_stream(From("81.2.70.1"), fan="other")) == 200  # another /24
+    assert [held(server.my_stream(From(f"81.2.69.{1 + i // 3}"), fan=f"fan-{i}")) for i in range(6)] == [200] * 6  # three from each of two addresses
+    assert held(server.my_stream(From("81.2.69.1"), fan="more")) == 429  # an address's own share still holds
     assert [held(server.my_stream(From(f"2a00:1450:4009:{i // 2:x}::1"), fan=f"v6-{i}")) for i in range(5)] == [200] * 4 + [429]
     assert held(server.my_stream(From("2a00:1450:400a::1"), fan="other-v6")) == 200  # another /48
     assert len([r for r in caplog.records if r.name == "sports_follow.limits" and "ceiling for streams" in r.getMessage()]) == 2

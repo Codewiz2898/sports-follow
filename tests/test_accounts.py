@@ -385,21 +385,14 @@ def carrier(i: int, site: str = CARRIER) -> str:
     return f"{site}:{i:x}::10"
 
 
-def test_each_ipv6_64_has_its_own_codes_a_day_and_its_48_a_much_larger_ceiling(api, store, outbox, monkeypatch, caplog):
+def test_fans_with_accounts_on_one_ipv6_48_each_have_their_own_64s_codes_a_day(api, store, outbox):
     """BUG-326: an IPv6 client's codes a day were capped by its /48, at forty, and a phone network or an ISP shares a
     /48 among many subscribers: after forty codes nobody there could sign in that day. A /64 (a household's, or a
-    phone's) has its own day now, as an IPv4 address has, and a /48's /64s together a ceiling many times larger, so a
-    /48 still can't take 65,536 /64s' worth (BUG-093). A /48 at its ceiling is logged, once."""
-    caplog.set_level(logging.WARNING, "sports_follow.limits")
-    monkeypatch.setattr(server, "_ceilings_logged", {}, raising=False)
-    start = lambda i, site=CARRIER: api.call(  # noqa: E731
-        "POST", "/api/auth/email/start", body={"email": f"fan{i}@example.com"}, address=carrier(i, site)).status_code
+    phone's) has its own day now, as an IPv4 address has, and fans whose accounts have stood a day aren't held back by
+    their /48's other subscribers."""
+    store.emails.update({i + 1: f"fan{i}@example.com" for i in range(41)})  # accounts that have stood a day
+    start = lambda i: api.call("POST", "/api/auth/email/start", body={"email": f"fan{i}@example.com"}, address=carrier(i)).status_code  # noqa: E731
     assert [start(i) for i in range(41)] == [200] * 41  # forty-one subscribers, a /64 each
-    monkeypatch.setattr(server, "CODES_PER_NETWORK_DAY", 43)  # the /48's ceiling, made small
-    assert [start(i) for i in range(41, 45)] == [200, 200, 429, 429]
-    assert start(99, site="2405:201:ab01") == 200  # another /48
-    assert [r.getMessage() for r in caplog.records if r.name == "sports_follow.limits"] == [
-        f"limits: a /48 reached its ceiling for auth-address-day ({hashlib.sha256(b'2405:201:ab00::/48').hexdigest()[:12]})"]
 
     def from_one_64(i):
         for key in [k for k in api.redis.data if k.startswith("auth-address:")]:
@@ -408,6 +401,27 @@ def test_each_ipv6_64_has_its_own_codes_a_day_and_its_48_a_much_larger_ceiling(a
 
     assert [from_one_64(i).status_code for i in range(server.CODES_PER_ADDRESS_DAY)] == [200] * server.CODES_PER_ADDRESS_DAY
     assert from_one_64(99).json()["detail"] == "Your network has asked for a lot of codes today. Try again tomorrow."  # a /64's day, as an IPv4 address's
+
+
+def test_new_addresses_from_one_ipv6_48_get_half_the_days_codes_for_new_addresses_at_most(api, store, outbox, caplog, monkeypatch):
+    """BUG-093, with BUG-326's fix: a /48's ceiling was twice the day's mail, so a free tunnel's /48, asking from a few
+    of its /64s, could spend every code for new addresses and leave nobody else able to sign up that day. New
+    addresses from one /48's /64s together get half of those at most (with the mail plan's allowance as it is set),
+    and a /48 at that ceiling is logged, once; a fan with an account there still gets a code."""
+    caplog.set_level(logging.WARNING, "sports_follow.limits")
+    monkeypatch.setattr(server, "_ceilings_logged", {}, raising=False)
+    new = server.MAIL_CODES_PER_DAY - round(server.MAIL_CODES_PER_DAY * server.KEPT_FOR_ACCOUNTS)
+    ceiling = min(server.CODES_PER_NETWORK_DAY, new // 2)
+    assert (server.MAIL_CODES_PER_DAY, ceiling) == (100, 35)  # the default allowance: seventy for new addresses
+    start = lambda email, address: api.call("POST", "/api/auth/email/start", body={"email": email}, address=address)  # noqa: E731
+    answers = [start(f"new{i}@example.com", carrier(i)) for i in range(ceiling + 2)]
+    assert [a.status_code for a in answers] == [200] * ceiling + [429, 429]
+    assert answers[-1].json()["detail"] == "Your network has asked for a lot of codes today. Try again tomorrow."
+    assert [r.getMessage() for r in caplog.records if r.name == "sports_follow.limits"] == [
+        f"limits: a /48 reached its ceiling for auth-address-day ({hashlib.sha256(b'2405:201:ab00::/48').hexdigest()[:12]})"]
+    assert start("someone-else@example.com", carrier(1, "2405:201:ab01")).status_code == 200  # others still sign up
+    store.emails[1] = "fan@example.com"  # an account that has stood a day, on the /48 at its ceiling
+    assert start("fan@example.com", carrier(ceiling + 5)).status_code == 200
 
 
 def test_a_subscriber_sharing_the_fans_48_can_neither_end_their_code_nor_shut_them_out_for_the_day(api, store, outbox):

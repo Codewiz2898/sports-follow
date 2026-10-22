@@ -128,8 +128,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`follow_player(background_only=True)`), and nothing else it says is kept: no news items and no news
   alerts, whose news is the publishers' (`news.py`). `python -m sports_follow.wiki Q213854 cricket` prints one player's profile.
 - **Search answers from the registry.** `GET /api/search` (`sports_follow/search.py`) reads Postgres only:
-  players on Sports Follow (those more signed-in fans follow first, and "N following" counts them: a cookie's
-  follow only breaks a tie, so a script's can't steer it; teams the same), then registry athletes by popularity, with a trigram index for typos ("did you
+  players on Sports Follow (those more signed-in fans follow first, and "N following" counts them, an inbox's
+  plus-address accounts as one: a cookie's follow only breaks a tie, so a script's can't steer it; teams the same), then registry athletes by popularity, with a trigram index for typos ("did you
   mean"). ESPN's search and Lichess's FIDE search are asked only when the registry has fewer than three
   matches. Two athletes with the typed name get a picker with birth years.
 - **Following binds the exact athlete.** A registry athlete is looked up in their live source by the id
@@ -196,9 +196,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   changing, otherwise once a minute.
 - **One stream per fan.** The app holds one SSE connection for all of a fan's players; a player's page
   listens on it too, and opens that player's own stream only for someone the fan doesn't follow. An API process
-  holds so many streams at once (`server.STREAMS_PER_PROCESS`): so many a fan, a client address, and an IPv4 /24's or
-  an IPv6 /48's addresses together; a player's stream with neither a fan's cookie nor a session takes one of the few
-  kept for those (`STREAMS_WITHOUT_FAN`), so the rest stay fans'.
+  holds so many streams at once (`server.STREAMS_PER_PROCESS`): so many a fan's own (`STREAMS_PER_FAN`; a player's
+  stream isn't counted there), a client address, and an IPv6 /48's /64s together (an IPv4 /24 is only logged at that
+  ceiling: a phone network's NAT puts many fans behind a few); a player's stream with neither a fan's cookie nor a
+  session takes one of the few kept for those (`STREAMS_WITHOUT_FAN`), so the rest stay fans'.
 - **A page for every game.** Every game on Today opens its match page, `/match/<source>/<game id>`
   (`sports_follow/match.py`, `GET /api/match/...`), live, over or to come: the fan's live boards, results
   and games to come, the big results and big games coming up, and Live now's games; so does a game on a
@@ -1147,7 +1148,7 @@ that build too: turn them on under Alerts. Always pass
 | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | every trace | e.g. `parentbased_traceidratio` and `0.2` to keep a fifth; a job keeps its request's choice |
 | `OTEL_SERVICE_NAME` | `sports-follow-api`, `sports-follow-worker` | the process's name in the traces (`OTEL_RESOURCE_ATTRIBUTES` adds more, e.g. `deployment.environment.name=production`) |
 | `SPORTS_FOLLOW_MAIL_LOG` | `0` | `1` logs sign-in codes instead of emailing them, for development; never over HTTPS |
-| `SPORTS_FOLLOW_MAIL_CODES_PER_DAY` | `100` | sign-in codes a UTC day to everyone, the mail plan's daily allowance (Resend's free plan: 100); one client address (an IPv4 address, an IPv6 /64) gets at most 20 a day and an IPv6 /48's /64s together 200; 30% is kept for accounts at least a day old; an inbox (plus-addresses together) gets 5 an hour |
+| `SPORTS_FOLLOW_MAIL_CODES_PER_DAY` | `100` | sign-in codes a UTC day to everyone, the mail plan's daily allowance (Resend's free plan: 100); one client address (an IPv4 address, an IPv6 /64) gets at most 20 a day; 30% is kept for accounts at least a day old, and of the rest, for new addresses, an IPv6 /48's /64s together get half at most (and 200); an inbox (plus-addresses together) gets 5 an hour |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_ID` | none | the Google OAuth web client for "Continue with Google"; redirect URI `<origin>/api/auth/google/callback` (locally `http://localhost:5173/...`) |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET` | from `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET_FILE`, else `~/.config/sports-follow/google-client-secret` | that client's secret; without it the Google button is hidden |
 | `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE` | `~/.config/sports-follow/admin-password` | the admin panel's password hash and authenticator key, written by `python -m sports_follow.admin password` and `code`; without it there's no panel |

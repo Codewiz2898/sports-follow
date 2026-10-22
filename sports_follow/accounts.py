@@ -18,7 +18,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import ColumnElement, SQLColumnExpression, case, delete, func, literal, or_, select, update
+from sqlalchemy import ColumnElement, SQLColumnExpression, case, delete, func, literal, null, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -74,11 +74,13 @@ def inbox(email: str) -> str:
     return f"{local}@{domain}"
 
 
-def inbox_of(email: SQLColumnExpression[str]) -> ColumnElement[str]:
-    """inbox, in SQL: the inbox of the address in a column, for a query that counts fans (starters._most_followed)."""
+def inbox_of(email: SQLColumnExpression[str | None]) -> ColumnElement[str | None]:
+    """inbox, in SQL: the inbox of the address in a column, for a query that counts fans (models.followers,
+    starters._most_followed); NULL for none, as an outer join's row with no account has."""
     local, domain = func.split_part(email, "@", 1), func.split_part(email, "@", 2)
     untagged = func.coalesce(func.nullif(func.split_part(local, "+", 1), ""), local)
-    return case((domain.in_(GMAIL), func.concat(func.replace(untagged, ".", ""), "@gmail.com")), else_=func.concat(untagged, "@", domain))
+    return case((email.is_(None), null()), (domain.in_(GMAIL), func.concat(func.replace(untagged, ".", ""), "@gmail.com")),
+                else_=func.concat(untagged, "@", domain))
 
 
 def find_or_create(db: Session, email: str) -> int:
