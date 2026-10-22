@@ -6,7 +6,7 @@ every candidate once per moment deleted.
 Built CONCURRENTLY, so the site and the worker keep reading and writing both tables while they're made.
 
 Revision ID: 3cf049ce482c
-Revises: ea943ebdccb3
+Revises: b5d1e8a2c7f4
 Create Date: 2026-10-22
 """
 
@@ -15,7 +15,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "3cf049ce482c"
-down_revision = "ea943ebdccb3"
+down_revision = "b5d1e8a2c7f4"
 branch_labels = None
 depends_on = None
 

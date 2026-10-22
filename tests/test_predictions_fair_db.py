@@ -137,7 +137,7 @@ def test_a_pick_from_a_fan_the_request_made_up_is_theirs_but_counts_in_nobody_el
         answer = put("draw")
         assert answer.json()["question"]["mine"] == "draw"
         made_up.append(server._signed(answer.cookies[FAN_COOKIE])[0])  # pyright: ignore[reportPrivateUsage, reportOptionalSubscript]
-    put("b", fan="a-fan-from-last-week")  # a fan whose cookie came with the pick: they count
+    put("b", fan="a-fan-with-a-cookie")  # a fan whose cookie came with the pick: they count
     predictions.pick(db, "crowd-w-0", q.id, "w", counted=False)  # and a pick that counted once always does
     db.commit()
     db.expire_all()
@@ -153,6 +153,39 @@ def test_a_pick_from_a_fan_the_request_made_up_is_theirs_but_counts_in_nobody_el
     scored = {p.fan_id: p.points for p in db.scalars(select(Pick).where(Pick.option == "draw"))}
     # A third of the fans who count called it: 67 each, the made-up fans' own picks included; not 58, as 10 of 24.
     assert scored == {**{f"crowd-draw-{i}": 67 for i in range(7)}, **{fan: 67 for fan in made_up}}
+
+
+
+def test_cookies_from_one_address_count_only_a_few_picks_a_question_however_they_were_got(db, redis, monkeypatch):  # noqa: F811
+    """The app's page gives any device a fan cookie (BUG-152), so a cookie is no proof of a fan: a script could fetch
+    one per fake fan and stuff a split. From one address only COUNTED_PER_ADDRESS fans' picks on a question count (an
+    account's always do); the rest are theirs, scored, and move nobody's numbers. A fan counted once stays counted."""
+    monkeypatch.setitem(server.state, "redis", ApiRedis())
+    monkeypatch.setattr(server, "cookie_key", lambda: KEY)
+    now = datetime.now(timezone.utc)
+    q = open_question(db, now + timedelta(hours=3))
+    other = open_question(db, now + timedelta(hours=3), game="g2", event_id=2)
+
+    def put(qid: int, option: str, fan: str, address: str = "81.2.69.142") -> None:
+        async def go() -> httpx.Response:
+            transport = httpx.ASGITransport(app=server.app, client=(address, 50000))
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                return await client.put(f"/api/predictions/{qid}/pick", json={"option": option}, headers={"Cookie": f"{FAN_COOKIE}={server.sign_fan(fan)}"})
+
+        answer = asyncio.run(go())
+        assert answer.status_code == 200, answer.text
+        assert answer.json()["question"]["mine"] == option
+
+    cap = server.COUNTED_PER_ADDRESS
+    for i in range(cap + 10):
+        put(q.id, "b", f"script-{i}")  # one address, a cookie each
+    put(q.id, "b", "elsewhere", address="81.2.69.160")  # another address
+    put(q.id, "w", "script-0")  # a counted fan changing their pick
+    put(other.id, "b", f"script-{cap + 5}")  # another question: its own few
+    db.expire_all()
+    counted = dict(db.execute(select(Pick.fan_id, Pick.counted).where(Pick.question_id == q.id)).all())
+    assert sum(counted.values()) == cap + 1 and counted["elsewhere"] and counted["script-0"] and not counted[f"script-{cap + 5}"]
+    assert db.scalar(select(Pick.counted).where(Pick.question_id == other.id))
 
 
 # ---------------------------------------------------------------- BUG-107

@@ -215,7 +215,8 @@ def test_a_fan_an_address_and_the_process_hold_only_so_many_streams_and_one_that
     fan's or an address's share the next is refused (429), past the process's too (503), and a stream that
     ends gives its place back."""
     monkeypatch.setattr(server, "STREAMS_PER_FAN", 2, raising=False)
-    monkeypatch.setattr(server, "STREAMS_PER_ADDRESS", 3, raising=False)
+    monkeypatch.setattr(server, "STREAMS_PER_ADDRESS", 1, raising=False)  # an IPv6 /64's
+    monkeypatch.setattr(server, "STREAMS_PER_IPV4", 3, raising=False)
     monkeypatch.setattr(server, "STREAMS_PER_PROCESS", 5, raising=False)
 
     def refused(stream) -> int:
@@ -232,8 +233,12 @@ def test_a_fan_an_address_and_the_process_hold_only_so_many_streams_and_one_that
     for _ in range(2):
         asyncio.run(server.player_stream(1, From("81.2.69.142")))
     assert refused(server.player_stream(1, From("81.2.69.142"))) == 429
-    asyncio.run(server.player_stream(1, From("81.2.69.143")))
+    last = asyncio.run(server.player_stream(1, From("81.2.69.143")))
     assert refused(server.player_stream(1, From("81.2.69.145"))) == 503  # the process holds five
+    ended(last)
+    assert server.client_address(From("2a02:c7c:1::1")) == "2a02:c7c:1::/64"
+    asyncio.run(server.player_stream(1, From("2a02:c7c:1::1")))  # an IPv6 household holds fewer than an IPv4 address
+    assert refused(server.player_stream(1, From("2a02:c7c:1::2"))) == 429
     assert server.streaming["all"] == 5  # a refused stream holds nothing
 
 

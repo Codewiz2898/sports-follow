@@ -1125,6 +1125,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_FEED_POOL_ADDS` | `40` | pool players made a day at most, each found in their sport's live source as a follow from search would (a request or a few each) |
 | `SPORTS_FOLLOW_FEED_POOL_SEARCHES` | `10` | pool-sweep searches in any 24 hours (`sweeps.py`): a pool player nobody follows, their last 60 days, each at most fortnightly; `0` turns it off |
 | `SPORTS_FOLLOW_FEED_COUNTRY` | `IN` | where the feed's fans watch from (ISO 3166-1 alpha-2): a video that doesn't play there isn't kept |
+| `SPORTS_FOLLOW_FEED_ZONES` | `Asia/Kolkata,Asia/Calcutta` with `IN`, else empty | the time zones a device in `SPORTS_FOLLOW_FEED_COUNTRY` says it's in, comma-separated: only an app in one of them helps take a "won't play" video from every fan's Feed (it always leaves that fan's); empty, every app does |
 | `SPORTS_FOLLOW_FEED_LAYOUT` | `edge` | how the apps draw the Feed tab: `edge` (posts edge to edge) or `full` (a video a screen); the admin panel's Feed tab changes it live, and every page of the Feed and `/api/config` say which |
 | `SPORTS_FOLLOW_CLIPS_ENDPOINT` | none | the clips bucket's S3 endpoint (`https://<account>.r2.cloudflarestorage.com`); clips are off without it and the next three |
 | `SPORTS_FOLLOW_CLIPS_BUCKET` | none | the clips bucket's name |

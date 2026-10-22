@@ -58,11 +58,13 @@ HEARTBEAT = 15
 PING = "event: ping\ndata:\n\n"
 # A live stream (_stream) holds a Redis connection while it's open, from a pool of the streams' own, so one
 # client can't hold enough to starve the worker's polling, locks and limits (BUG-184). So many are open at
-# once for one fan, for one client address (an IPv6 /64: a household, or a phone network's shared address)
-# and in this process; past that the next is refused, and the app tries again a little later. A connection a
-# phone dropped can stay open some minutes before the server hears of it, so a fan's share allows for a few.
+# once for one fan, for one client address and in this process; past that the next is refused, and the app tries
+# again a little later. A connection a phone dropped can stay open some minutes before the server hears of it, so
+# a fan's share allows for a few. An IPv6 /64 is a household; an IPv4 address can be a phone network's, shared by
+# thousands of its fans (carrier-grade NAT, as India's networks use), so it holds more.
 STREAMS_PER_FAN = 8
-STREAMS_PER_ADDRESS = 60
+STREAMS_PER_ADDRESS = 60  # an IPv6 /64's
+STREAMS_PER_IPV4 = 250  # an IPv4 address's
 STREAMS_PER_PROCESS = 1000
 REDIS_CONNECTIONS = 100  # the API's other Redis connections, in each process: past them a command waits its turn
 
@@ -696,6 +698,11 @@ LEAGUES_MADE_PER_HOUR = 5  # leagues one fan makes in an hour
 INVITES_PER_HOUR = 60  # invite pages one fan opens, and leagues they join, in an hour: a code can't be guessed by trying them all
 PICKS_PER_ADDRESS = 300  # picks from one client address in an hour: new fans from one place can't stuff a split
 PICKS_UNKNOWN_ADDRESS = 3000  # an hour, from every client without a public address together
+# Fans without an account whose picks on one question count (Pick.counted), from one client address: any device gets
+# a fan cookie (spa), so a split is stuffed only from as many addresses as the picks it would add. A home or a phone
+# network sharing one address has this many fans' calls in a game's split; the rest are theirs, and scored.
+COUNTED_PER_ADDRESS = 5
+COUNTED_FOR = 30 * 24 * 3600  # seconds an address's counted fans on a question are kept: longer than any question is open
 
 
 def _refused(db: Session, refused: predictions.Refused) -> HTTPException:
@@ -709,8 +716,9 @@ async def make_pick(request: Request, question_id: RowId, body: dict = Body(...)
     """Call a game (or a map): this fan's answer to one of its questions, or a new one in place of theirs, while
     it's open. No account needed. Answers with the question as the app shows it, how fans split now included.
     A question closed is a 409, an answer it doesn't offer a 400; PICKS_PER_ADDRESS an hour from one address.
-    It counts in the split and in what right picks score from an account, or a fan whose cookie came with it: a
-    fan this request made up (no cookie) has their pick, but it moves nobody else's numbers (predictions.pick)."""
+    It counts in the split and in what right picks score from an account, or a fan whose cookie came with it, up to
+    COUNTED_PER_ADDRESS of those on a question from one address (_counted_here): a fan this request made up (no
+    cookie), or past that, has their pick, but it moves nobody else's numbers (predictions.pick)."""
     option = body.get("option")
     if not isinstance(option, str) or not 0 < len(option) <= 64:
         raise HTTPException(400, "option is one of the question's answers")
@@ -718,8 +726,9 @@ async def make_pick(request: Request, question_id: RowId, body: dict = Body(...)
     await _take(f"picks:{address or 'unknown'}:{int(time.time() // 3600)}", PICKS_PER_ADDRESS if address else PICKS_UNKNOWN_ADDRESS, 7200,
                 "That's a lot of picks from your network. Try again in a while.")
 
+    counted = signed is not None or (_cookie_fan(request) == fan and await _counted_here(question_id, address, fan))
+
     def call(db: Session) -> dict[str, Any]:
-        counted = signed is not None or _cookie_fan(request) == fan
         try:
             q = predictions.pick(db, fan, question_id, option, counted=counted)
         except predictions.Refused as refused:
@@ -728,6 +737,20 @@ async def make_pick(request: Request, question_id: RowId, body: dict = Body(...)
         return predictions.shown(db, fan, [q], datetime.now(timezone.utc))[0]
 
     return {"question": await in_db(call)}
+
+
+async def _counted_here(question_id: int, address: str | None, fan: str) -> bool:
+    """Whether a fan without an account counts on this question from this address: one of the first
+    COUNTED_PER_ADDRESS there, or counted there before (a changed pick)."""
+    key = f"picks-counted:{question_id}:{address or 'unknown'}"
+    redis = state["redis"]
+    if not await redis.sadd(key, fan):
+        return True  # counted here before
+    await redis.expire(key, COUNTED_FOR)
+    if await redis.scard(key) <= COUNTED_PER_ADDRESS:
+        return True
+    await redis.srem(key, fan)  # past the address's share: not one of them
+    return False
 
 
 @app.delete("/api/predictions/{question_id}/pick")
@@ -1468,8 +1491,8 @@ async def app_start(request: Request, response: Response, signed: accounts.Signe
 
 @app.post("/api/auth/email/start")
 async def email_start(request: Request, body: dict = Body(...)) -> dict[str, Any]:
-    """Email a 6-digit sign-in code. The answer is the same whether or not the address has an account, until
-    the day's codes for addresses without one are spent (KEPT_FOR_ACCOUNTS)."""
+    """Email a 6-digit sign-in code. Part of the day's codes is kept for addresses with an account
+    (KEPT_FOR_ACCOUNTS)."""
     if not mail.configured(_secure(request)):
         raise HTTPException(503, "Signing in by email isn't set up on this server yet.")
     email = accounts.normal_email(body.get("email"))
@@ -2745,7 +2768,7 @@ def _hold_streams(request: Request, fan: str | None) -> list[str]:
     address = client_address(request)
     shares = {f"fan:{fan}": STREAMS_PER_FAN} if fan else {}
     if address:
-        shares[f"address:{address}"] = STREAMS_PER_ADDRESS
+        shares[f"address:{address}"] = STREAMS_PER_ADDRESS if ":" in address else STREAMS_PER_IPV4
     if any(streaming[key] >= share for key, share in shares.items()):
         raise HTTPException(429, "Too many live updates open at once from here. Close some, and they come back.")
     if streaming["all"] >= STREAMS_PER_PROCESS:
@@ -3033,7 +3056,8 @@ async def spa(path: str, request: Request) -> Response:
     if isinstance(found, Path):
         cache = "no-cache" if found.name in NO_CACHE else "public, max-age=86400"
         return FileResponse(found, media_type=MEDIA.get(found.suffix), headers={"Cache-Control": cache})
-    response = HTMLResponse(share.page(found, await _page_preview(path, request), _site(request)), headers={"Cache-Control": "no-cache", **_not_indexed(path)})
+    # private: it can carry this device's fan cookie (below), which no shared cache may keep for others.
+    response = HTMLResponse(share.page(found, await _page_preview(path, request), _site(request)), headers={"Cache-Control": "private, no-cache", **_not_indexed(path)})
     # The app's page is its first request: it makes this device's fan (a read doesn't: _fan), so the calls the app
     # sends together as it starts are all one fan's (BUG-152). Not a signed-in device's, which is its account.
     if not request.cookies.get(accounts.SESSION_COOKIE):
