@@ -292,9 +292,12 @@ CHANGES = ("title", "description", "image", "published")
 
 def keep(source: NewsSource, found: list[Linked], now: datetime) -> int:
     """Store what's new of what was found, one row per player and story; returns how many. A story kept before that
-    its publisher has changed at the same address (a corrected headline, a new picture) takes the change (changed)."""
+    its publisher has changed at the same address (a corrected headline, a new picture) takes the change (changed).
+    One an admin hid for one player is stored hidden for another found in it later: the Hide is on the story."""
     kept = 0
     with db.session() as session:
+        hidden = set(session.scalars(select(FeedCandidate.external_id).where(
+            FeedCandidate.source == source.system, FeedCandidate.external_id.in_({external_id(f.article.url) for f in found}), FeedCandidate.review == "hidden")))  # fmt: skip
         for f in found:
             # Its own savepoint: a player removed meanwhile fails only their row.
             try:
@@ -302,6 +305,7 @@ def keep(source: NewsSource, found: list[Linked], now: datetime) -> int:
                     added = session.scalar(insert(FeedCandidate).values(
                         player_id=f.player_id, source=source.system, external_id=external_id(f.article.url), url=f.article.url,
                         candidate=candidate(f), features={"outlets": 1}, fetched_at=now, checked_at=now,
+                        review="hidden" if external_id(f.article.url) in hidden else None,
                     ).on_conflict_do_nothing(index_elements=["player_id", "external_id"]).returning(FeedCandidate.id))  # fmt: skip
                     if added is not None:
                         kept += 1

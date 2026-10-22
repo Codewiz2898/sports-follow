@@ -230,6 +230,24 @@ def test_a_headline_the_publisher_corrects_at_the_same_address_reaches_the_card_
     assert stories() == [(asha, link, "Daily Wicket")] and run()[0] == ["Verma to miss only the first Test, board says"]
 
 
+def test_a_story_an_admin_hid_is_kept_hidden_for_a_player_found_in_it_later(world):
+    # An admin's Hide is on the story, whoever it was found for (BUG-117): a player followed after, whom it names
+    # too, doesn't bring it back.
+    _, feeds = world
+    asha = player("Asha Verma", ["Riverside XI"])
+    rao = player("Kiran Rao", ["Eastern Stars"], followed=False)
+    link = "https://wicket.example.com/h/1"
+    feeds[WICKET] = rss(("Asha Verma and Kiran Rao star in a tied game", link, "Both made fifties.", 1))
+    feeds[GAZETTE] = rss()
+    news.poll(NOW)
+    with db_module.session() as s:
+        s.execute(update(FeedCandidate).where(FeedCandidate.player_id == asha).values(review="hidden"))
+        s.add(Follow(fan_id="fan", player_id=rao, alert_rules={}))
+    assert news.poll(NOW + timedelta(minutes=20))["cricket"]["kept"] == 1
+    with db_module.session() as s:
+        assert {pid: review for pid, review in s.execute(select(FeedCandidate.player_id, FeedCandidate.review))} == {asha: "hidden", rao: "hidden"}
+
+
 def test_a_bound_players_card_loses_the_agents_old_news_at_the_curators_next_run(world, monkeypatch):
     # BUG-247: a player bound to a live source after the research agent wrote their page kept its news for good (the
     # agent never runs for them again), so their Today tile read an October story as their status. The curator's
@@ -307,7 +325,7 @@ def test_the_same_story_from_several_outlets_is_one_group_and_the_days_other_sto
     s = maker()
     try:
         rows = s.execute(select(FeedCandidate.id, FeedCandidate.player_id, FeedCandidate.url, FeedCandidate.candidate)).all()
-        published = {r.id: datetime.fromisoformat(r.candidate["published"]) for r in rows}
+        published: dict[int, datetime | None] = {r.id: datetime.fromisoformat(r.candidate["published"]) for r in rows}
         found = rank._stories(s, rows, published)  # pyright: ignore[reportPrivateUsage]
     finally:
         s.close()
