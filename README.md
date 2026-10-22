@@ -912,7 +912,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   every process reads again every 10 seconds; `sports.ENABLED`, `adapters.ADAPTERS` and the source
   budgets follow them. A sport turned off while its games are on is safe: the next tick puts them off
   (`structured.put_off`: no longer polled, nor LIVE on cards or phones), and once it's on again its
-  players' and teams' games are read at the next tick, which brings each back as its source has it.
+  players' and teams' games are read at the next tick, which brings each back as its source has it. One that
+  polling comes back to (a worker down for days too) only after it's over, past the longest its sport's games run
+  and half a day more (`Sport.over_by`: 12 hours, a Test's six days), tells nothing: its result is old news.
   The server's settings stay the ceiling: a sport `SPORTS_FOLLOW_SPORTS` leaves out, or a source
   `SPORTS_FOLLOW_SOURCES` leaves out or without its token, can't be turned on there. It opens
   with a password of its own, not a fan's account, and a 6-digit code from an authenticator app (TOTP,

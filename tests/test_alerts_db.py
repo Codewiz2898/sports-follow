@@ -8,14 +8,16 @@ import os
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import bus, notify, structured, teams
-from sports_follow.models import Event, Follow, Notification, Player, PushSubscription
+from sports_follow import bus, notify, sports, structured, teams
+from sports_follow.adapters.base import Line, Snapshot
+from sports_follow.models import Event, EventPlayer, Follow, MatchFollow, Notification, Player, PushSubscription
 from sports_follow.moments import Found
 
 from .test_match_follow import Store
@@ -197,3 +199,59 @@ def test_a_fan_of_two_teammates_hears_their_teams_result_once_naming_both(db, pu
     assert heard == {"fan": ("TenZ and zekken: Sentinels win 2–0", "v NRG · Upper bracket final"), "tenz-fan": ("TenZ: Sentinels win 2–0", "v NRG · Upper bracket final")}
     lines = {fan: lines for fan, lines in db.execute(select(Notification.fan_id, Notification.lines))}
     assert lines == {"fan": ["TenZ and zekken: Sentinels win 2–0"], "tenz-fan": ["TenZ: Sentinels win 2–0"]}
+
+
+# ---------------------------------------------------------------- a game long over when polling comes back (BUG-259)
+
+SALAH = "173896"
+
+
+def football(event_id: int, status: str, home: int, away: int, clock: str, goals: int = 0) -> None:
+    """One poll of an Egypt game with Salah in it, as the source has it, through the poller's real path."""
+    state = {"kind": "football", "home": {"id": "1", "name": "Egypt", "score": str(home)}, "away": {"id": "2", "name": "Ghana", "score": str(away)}}
+    line = Line(headline=f"{goals} goal" if goals else "Started", stats=[{"label": "Goals", "value": str(goals)}])
+    snap = Snapshot(status, f"Egypt {home} – {away} Ghana", clock, state, lines={SALAH: line})
+    structured.apply_poll(event_id, {"adapter": "espn_soccer", "cadence": 10}, SimpleNamespace(system="espn_soccer", credit=lambda snap: {"name": "ESPN"}), [(7, SALAH)], snap)
+
+
+def test_a_game_found_over_days_after_it_started_isnt_told_as_news(db, pushed, monkeypatch):
+    # Polling comes back to a game two days after it started (its sport turned back on, a worker down that long): the
+    # first look finds it over, and told its result as new. One that started two hours ago is still news.
+    now = datetime.now(timezone.utc)
+    db.add(Player(id=7, slug="mohamed-salah", name="Mohamed Salah", sport="Football"))
+    db.add_all([Event(id=1, key="espn_soccer:1", sport="Football", title="Egypt v Ghana", status="live", start_utc=now - timedelta(days=2)),
+                Event(id=2, key="espn_soccer:2", sport="Football", title="Egypt v Ghana", status="live", start_utc=now - timedelta(hours=2))])
+    db.flush()
+    db.add_all([EventPlayer(event_id=1, player_id=7), EventPlayer(event_id=2, player_id=7), Follow(fan_id="fan", player_id=7, alert_rules={"level": "key"}),
+                MatchFollow(fan_id="game-fan", event_id=1, alert_rules={"level": "key"}, keys=[]), MatchFollow(fan_id="game-fan", event_id=2, alert_rules={"level": "key"}, keys=[])])
+    db.commit()
+    device(db, "fan")
+    device(db, "game-fan")
+    polled = SimpleNamespace(recent=True)
+    monkeypatch.setattr(structured, "_polled", lambda event_id, cadence: polled.recent)
+    for event_id in (1, 2):
+        football(event_id, "live", 0, 0, "10'")
+    assert pushed == []
+    polled.recent = False  # no polls since: the sport was off, the worker down
+    football(1, "final", 1, 2, "FT", goals=1)
+    assert pushed == []  # two days old
+    football(2, "final", 1, 2, "FT", goals=1)
+    assert sorted((fan, p["title"]) for fan, p in pushed) == [("fan", "Mohamed Salah: Egypt 1 – 2 Ghana"), ("game-fan", "Egypt v Ghana: Ghana won")]
+
+
+@pytest.mark.parametrize("sport, board, days, old", [
+    ("football", {"kind": "football"}, 1.5, True),
+    ("football", {"kind": "football"}, 0.9, False),  # it may have run late, and a result keeps half a day
+    ("cricket", {"kind": "cricket", "format": "T20I"}, 3, True),  # a reserve day, and a day more
+    ("cricket", {"kind": "cricket", "format": "T20I"}, 2, False),
+    ("cricket", {"kind": "cricket", "format": "Test"}, 5, False),  # a Test runs five days
+    ("cricket", {"kind": "cricket", "format": "Test"}, 7, True),
+    ("cricket", {"kind": "cricket"}, 5, False),  # no word for its length: as long as a Test
+])
+def test_how_long_after_its_start_a_game_found_over_is_old_news(sport, board, days, old):
+    now = datetime.now(timezone.utc)
+    game = SimpleNamespace(start_utc=now - timedelta(days=days))
+    over = Snapshot("final", "", "", board)
+    assert structured.long_over(sports.of(sport), game, over, now) is old  # type: ignore[arg-type]
+    assert structured.long_over(sports.of(sport), game, Snapshot("live", "", "", board), now) is False  # one still on is news
+    assert structured.long_over(sports.of(sport), SimpleNamespace(start_utc=None), over, now) is False  # type: ignore[arg-type]  # no start: can't say

@@ -4,6 +4,7 @@ named by the side that won, and form over a run of matches."""
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from ..naming import team_key
@@ -228,6 +229,11 @@ class Cricket(Sport):
         """The source's summary, which says who won ("India won by 57 runs"), can come a poll or two after it says the
         match is over ("Result")."""
         return not self.verdict(state, score, clock)
+
+    def over_by(self, start: datetime | None, state: dict[str, Any]) -> datetime | None:
+        """A limited-overs match, its reserve day too, within two days of its start; a Test or a first-class match (or
+        one no word says the length of) within six, as the tick closes any source's game (pipeline.due_work)."""
+        return start + timedelta(days=2 if overs_a_side(state.get("format")) else 6) if start is not None else None
 
     def paused(self, state: dict[str, Any], score: str, clock: str) -> bool:
         """Stumps: the day's play is over, and the match goes on tomorrow ("Stump Day 2", "Day 3 · Stumps")."""

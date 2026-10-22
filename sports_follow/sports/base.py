@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from .. import naming
@@ -451,6 +451,14 @@ class Sport:
         """Whether a finished game's result is still to come from its source, though it says the game is over: its
         final is held a poll or two (structured.apply_poll), so fans hear who won. False where the board says it."""
         return False
+
+    # The longest a game of the sport runs, start to end, delays and all (a five-set match, an esports Bo5, a lobby).
+    lasts = timedelta(hours=12)
+
+    def over_by(self, start: datetime | None, state: dict[str, Any]) -> datetime | None:
+        """The latest a game that started at `start` can have ended, as its board says what it is: one first seen over
+        long after this tells nothing, its result old news (structured.long_over). None without a start."""
+        return start + self.lasts if start is not None else None
 
     def paused(self, state: dict[str, Any], score: str, clock: str) -> bool:
         """Whether a game that's on has stopped for the day, to go on tomorrow (a Test at stumps): its Android live card
