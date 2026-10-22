@@ -156,13 +156,21 @@ function useGame(chips: SportInfo[]): [SportInfo | null, (key: string | null) =>
 
 /** Today's game filter, under its header: All, then a chip per game with something on the page, the fan's own
  * first (filter.ts gameChips); the game picked is a block of its colour and the rest outlined, All picked is ink. Not
- * there while the page holds one game or none (no `chips`). The game picked is scrolled into the row's view: one
- * far along it, from a link or come back to, would be off the screen's edge. */
+ * there while the page holds one game or none (no `chips`). A game picked off the row's edge (far along it, from a
+ * link or come back to) is brought into it: the row scrolls sideways, never the page, which a fan come back to
+ * Today is put back down. All is first, so never off it. */
 function GameChips({ chips, game, onPick }: { chips: SportInfo[]; game: SportInfo | null; onPick: (key: string | null) => void }) {
   const row = useRef<HTMLDivElement>(null)
+  const picked = game?.key
   useEffect(() => {
-    row.current?.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [game?.key, chips.length])
+    const box = row.current
+    const chip = box?.querySelector<HTMLElement>('[aria-pressed="true"]')
+    if (!box || !chip || !picked) return
+    const left = chip.getBoundingClientRect().left - box.getBoundingClientRect().left + box.scrollLeft
+    if (left < box.scrollLeft || left + chip.offsetWidth > box.scrollLeft + box.clientWidth) {
+      box.scrollTo({ left: left - (box.clientWidth - chip.offsetWidth) / 2 })
+    }
+  }, [picked])
   if (!chips.length) return null
   return (
     <div ref={row} className="game-chips" role="group" aria-label="Show games">
@@ -177,11 +185,11 @@ function GameChips({ chips, game, onPick }: { chips: SportInfo[]; game: SportInf
 }
 
 /** The game picked has nothing on Today but the fan's players in it (the strip, a phone's alone): say so, and the
- * way back to every game. */
+ * way back to every game. "Games": posts of theirs may still be From your players, at the foot. */
 function NothingIn({ game, onAll }: { game: SportInfo; onAll: () => void }) {
   return (
     <div className="notice" role="status">
-      <span>Nothing in {game.label} today</span>
+      <span>No {game.label} games today</span>
       <button type="button" className="btn small" onClick={onAll}>All games</button>
     </div>
   )

@@ -126,8 +126,9 @@ export function OtherGame({ game, label, follow }: { game: LiveGame & { sport: s
 export function AlsoLive({ games, theirsOn = false }: { games: GameOn[]; theirsOn?: boolean }) {
   const follow = useFollowToggle()
   if (!games.length) return null
+  const shownKey = games.map((x) => x.game.key).join(',')  // `games` is new each render: a card that failed tries again on another game
   return (
-    <ErrorBoundary fallback={<BlockError />} resetKey={games}>
+    <ErrorBoundary fallback={<BlockError />} resetKey={shownKey}>
       <Rail title={theirsOn ? 'Also live' : 'Live now'} note={`${games.length} on`} all="Every game on now" max={SHOWN} className="also-live">
         {games.map(({ game, label }) => <OtherGame key={game.key} game={game} label={label} follow={follow} />)}
       </Rail>

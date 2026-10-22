@@ -88,9 +88,10 @@ export function gamesOnToday(blocks: TodayBlocks, keyOf: KeyOf): Set<string> {
   return gamesIn(blocks, BLOCKS.filter((b) => b !== 'moreLive'), keyOf)
 }
 
-/** The fan's own games on Today, by key: their players', their teams' and the games they follow by themselves. */
+/** The fan's own games on Today, by key: their players' and teams', and every game of theirs on, done or to come
+ * (the games they follow by themselves among them); not the big games', nor the Wire's or This week's. */
 export function theirGames(blocks: TodayBlocks, keyOf: KeyOf): Set<string> {
-  return gamesIn(blocks, ['cards', 'teams', 'followed'], keyOf)
+  return gamesIn(blocks, ['cards', 'teams', 'live', 'followed', 'teamGames', 'results', 'coming'], keyOf)
 }
 
 /**
