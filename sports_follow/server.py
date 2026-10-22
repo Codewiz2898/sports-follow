@@ -1564,7 +1564,10 @@ async def email_verify(request: Request, response: Response, body: dict = Body(.
         await state["redis"].incr(fails)
         await state["redis"].expire(fails, 2 * DAY)
         raise HTTPException(400, "That code isn't right. Check the email and try again.")
-    await state["redis"].delete(f"auth-code:{who}", f"auth-asked:{who}", f"auth-wait:{who}", tries, f"{tries}:{network}")
+    # Used up as it's checked: of requests that bring it at once (a double tap), one signs in (BUG-095).
+    if not await state["redis"].delete(f"auth-code:{who}"):
+        raise HTTPException(400, "That code has run out. Ask for a new one.")
+    await state["redis"].delete(f"auth-asked:{who}", f"auth-wait:{who}", tries, f"{tries}:{network}")
     if await in_db(accounts.blocked, email):
         raise HTTPException(403, BLOCKED)
     account_id = await in_db(accounts.find_or_create, email)

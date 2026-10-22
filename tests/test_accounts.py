@@ -5,6 +5,7 @@ replaced by a small in-memory stand-in. What that database work does to real row
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -218,6 +219,29 @@ def test_networks_other_than_the_one_that_asked_share_a_few_tries_at_a_code(api,
     tries = [verify(api, wrong_to(code), f"81.2.69.{20 + i // 4}").status_code for i in range(server.CODE_TRIES_ELSEWHERE + 2)]
     assert tries == [400] * server.CODE_TRIES_ELSEWHERE + [429, 429]  # four a network: each under its own five
     assert verify(api, code).status_code == 200
+
+
+def test_one_code_signs_in_once_however_many_requests_bring_it_at_once(api, store, outbox, monkeypatch):
+    """BUG-095: the code was read, checked and only then deleted, so two Verifies sent together (a double tap, or
+    someone else holding the code) each signed in, and one left a year's session nobody held. Now the code is used
+    up as it's checked: the second request finds it gone."""
+    assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=PUBLIC).status_code == 200
+    code = outbox["fan@example.com"]
+    counted, other = server._code_tries, []
+
+    async def together(tries, network, asked_here):
+        allowed = await counted(tries, network, asked_here)
+        if not other:  # the first request has read the code: the second comes in before it goes on
+            other.append(None)
+            other[0] = await asyncio.to_thread(verify, api, code)
+        return allowed
+
+    monkeypatch.setattr(server, "_code_tries", together)
+    first = verify(api, code)
+    assert sorted([first.status_code, other[0].status_code]) == [200, 400]
+    assert len(store.sessions) == 1
+    late = first if first.status_code == 400 else other[0]
+    assert late.json()["detail"] == "That code has run out. Ask for a new one." and "sf_session" not in set_cookies(late)
 
 
 def test_a_new_code_waits_a_minute_and_an_address_gets_five_an_hour(api, store, outbox):
