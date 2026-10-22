@@ -220,6 +220,10 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
         const theirs = e.teams
         setTeams((prev) => theirs.map((t) => (teamLevels.current.has(t.team_id) ? { ...t, alerts: prev.find((x) => x.team_id === t.team_id)?.alerts ?? t.alerts } : t)))
       }
+    } else if (e.type === 'signed_out') {
+      // Signed out elsewhere with this app open in front: the stream ends, and who this device is now is asked at
+      // once (account.tsx starts the app over as that), rather than at the next wake (BUG-162).
+      recheckRef.current(true)
     } else if (e.type === 'match') {
       // A followed game's board and where it's at, as its poll found it; the rest stays as the list has it.
       setMatches((prev) => prev.map((m) => (m.event_id === e.event_id ? { ...m, live: e.match.live, status: e.match.status } : m)))

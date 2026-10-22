@@ -167,6 +167,12 @@ def end_sessions(db: Session, account_id: int, session_id: int | None = None) ->
     return hashes
 
 
+def fan_of(db: Session, account_id: int) -> str | None:
+    """The account's fan id: its own channel's (bus.follows_channel), where its devices' open streams hear that its
+    sessions ended. None if there's no such account."""
+    return db.scalar(select(Account.fan_id).where(Account.id == account_id))
+
+
 def purge_expired() -> int:
     """Sessions not used for SESSION_LIFE: their devices go too. Returns how many. And what's left under the fan ids
     of accounts deleted since (forget_orphans)."""

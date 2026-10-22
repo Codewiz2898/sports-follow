@@ -21,8 +21,9 @@ interface AccountState {
   signedIn: (account: Account, back?: string) => void
   signOut: (everywhere?: boolean) => Promise<void>
   deleteAccount: () => Promise<void>
-  /** Ask again who this device is (the app woke, its stream connected again), at most once in RECHECK_MS. */
-  recheck: () => void
+  /** Ask again who this device is (the app woke, its stream connected again), at most once in RECHECK_MS; `now`:
+   * at once (its stream said its session ended). */
+  recheck: (now?: boolean) => void
 }
 
 const AccountContext = createContext<AccountState | null>(null)
@@ -143,11 +144,12 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     return () => asker.stop()
   }, [])
 
-  const recheck = useCallback(() => {
-    // Not known yet: asked at once (a stream connecting again says the server is back).
-    if (meRef.current !== null && Date.now() - asked.current < RECHECK_MS) return
+  const recheck = useCallback((now = false) => {
+    // Not known yet: asked at once (a stream connecting again says the server is back). `now`: anew, an answer under
+    // way from before the session ended dropped.
+    if (!now && meRef.current !== null && Date.now() - asked.current < RECHECK_MS) return
     asked.current = Date.now()
-    who.current?.ask()
+    who.current?.ask(now)
   }, [])
 
   useEffect(() => {

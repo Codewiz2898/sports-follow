@@ -57,6 +57,8 @@ HEARTBEAT = 15
 # An event, not a comment: EventSource hides comments, and the app counts on hearing something every
 # HEARTBEAT to know its stream is alive (a proxy can keep it open after the API behind it is gone).
 PING = "event: ping\ndata:\n\n"
+# A fan stream's last word when its session has ended elsewhere (_stream's `still`): the app asks who it is now.
+SIGNED_OUT = f"data: {json.dumps({'type': 'signed_out'})}\n\n"
 # A live stream (_stream) holds a Redis connection while it's open, from a pool of the streams' own, so one
 # client can't hold enough to starve the worker's polling, locks and limits (BUG-184). So many are open at
 # once for one fan, for one client address and in this process; past that the next is refused, and the app tries
@@ -1640,6 +1642,20 @@ async def _forget_sessions(token_hashes: list[str]) -> None:
             await ended.execute()
 
 
+async def _tell_signed_out(fan: str | None) -> None:
+    """Sessions of the account whose fan this is ended (signed out, everywhere or here, the account deleted or blocked),
+    their cached copies already saying so: a word on the fan's own channel, and each of the account's open streams asks
+    for its session again (my_stream). One whose session ended tells its app, which starts over as who it is now, and
+    ends: an app left open in front was told nothing, and kept the account and its moments (BUG-162). A courtesy: an
+    app also asks as it wakes, and its stream's next connect is as who it is."""
+    if fan is None:
+        return
+    try:
+        await state["redis"].publish(bus.follows_channel(fan), "{}")
+    except Exception as exc:  # noqa: BLE001 — the sessions have ended either way
+        log.warning("accounts: couldn't tell the account's open apps it was signed out: %s", exc)
+
+
 async def _sign_in(request: Request, response: Response, account_id: int, signed: accounts.Signed | None) -> dict[str, Any]:
     """Sign this device in to the account, bringing what its anonymous fan had (accounts.adopt). A
     session this device already had (signing in again, or as someone else) ends. The answer says how many
@@ -1841,6 +1857,7 @@ async def sign_out(request: Request, response: Response, body: dict | None = Bod
     if signed is not None:
         everywhere = bool((body or {}).get("everywhere"))
         await _forget_sessions(await in_db(accounts.end_sessions, signed.account_id, None if everywhere else signed.session_id))
+        await _tell_signed_out(signed.fan_id)  # this device's other tabs too: they share its cookie
         _clear_cookies_for_anonymous(request, response)
     elif request.cookies.get(accounts.SESSION_COOKIE):
         response.delete_cookie(accounts.SESSION_COOKIE, httponly=True, samesite="lax", secure=_secure(request))
@@ -1864,6 +1881,7 @@ async def _forget_account(gone: accounts.Deleted | None) -> None:
     """What Redis kept of a deleted account: its sessions' cached copies, its research count, its codes."""
     if gone is not None:
         await _forget_sessions(gone.token_hashes)
+        await _tell_signed_out(gone.fan_id)
         who = accounts.email_key(gone.email)
         await state["redis"].delete(player_search.research_key(gone.fan_id), f"auth-code:{who}", f"auth-asked:{who}")
 
@@ -2267,6 +2285,8 @@ async def admin_sign_out(account_id: RowId) -> dict[str, Any]:
     if ended is None:
         raise HTTPException(404, "There's no such account.")
     await _forget_sessions(ended)
+    if ended:
+        await _tell_signed_out(await in_db(accounts.fan_of, account_id))
     admin_log.info("admin panel: account %s signed out everywhere", account_id)
     return {"signed_out": len(ended)}
 
@@ -2279,6 +2299,8 @@ async def admin_block(account_id: RowId, body: dict = Body(...)) -> dict[str, An
     if ended is None:
         raise HTTPException(404, "There's no such account.")
     await _forget_sessions(ended)
+    if ended:
+        await _tell_signed_out(await in_db(accounts.fan_of, account_id))
     admin_log.info("admin panel: account %s %s", account_id, "blocked" if blocked else "unblocked")
     return {"blocked": blocked, "signed_out": len(ended)}
 
@@ -2996,11 +3018,14 @@ async def athlete_preview(request: Request, system: str, athlete_id: str, league
 # ---------------------------------------------------------------- realtime
 
 
-async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[str, Any]]]], request: Request, again: str | None = None):
+async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[str, Any]]]], request: Request, again: str | None = None,
+                  still: Callable[[], Awaitable[bool]] | None = None):
     """Every message on the channels, after `first()`: what they cover as it is now, read once
     subscribed so nothing published in between is missed. Each reconnect starts here, so it is how an
-    app catches up; a word on the channel `again` sends `first()` again. Holds no database connection, and
-    one Redis connection, from the streams' own pool; its route takes its places first (_hold_streams).
+    app catches up; a word on the channel `again` sends `first()` again, unless `still()` says the stream's
+    client isn't who it connected as (its session ended): then it says so (SIGNED_OUT) and ends. Holds no
+    database connection, and one Redis connection, from the streams' own pool; its route takes its places
+    first (_hold_streams).
     A client going away cancels the stream, and cancels each wait in its cleanup too, so the connection's
     return to the pool is shielded from it: unshielded, every stream that ended kept its connection, and a
     process's thousandth got none (BUG-184's round-two reopen)."""
@@ -3015,6 +3040,9 @@ async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[s
                 yield PING
                 continue
             if again is not None and msg.get("channel") == again:
+                if still is not None and not await still():
+                    yield SIGNED_OUT
+                    return
                 for event in await first():
                     yield f"data: {json.dumps(event, default=str)}\n\n"
                 continue
@@ -3086,7 +3114,7 @@ async def player_stream(player_id: RowId, request: Request) -> StreamingResponse
 
 
 @app.get("/api/me/stream")
-async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingResponse:
+async def my_stream(request: Request, fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of)) -> StreamingResponse:
     """One connection for every player the fan follows: browsers cap connections per origin, so one per player won't scale.
     It opens with what /api/me/following returns, and the games they follow by themselves (/api/me/matches),
     so an app that reconnects (a phone back from the lock screen, a restart) gets every score and result it
@@ -3095,7 +3123,10 @@ async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingRe
     A follow, an unfollow, a level or their sports (fansports.py) changed on another of their devices sends the list again (bus.follows_channel):
     the app takes it as the list (BUG-165), and connects again for the players it then has. A fan with nothing else
     to hear yet listens for that too; their list first, as on any stream, so an app whose fan was signed out
-    elsewhere (it reads as nobody now), or stopped following everyone there, drops what it shows (BUG-162)."""
+    elsewhere (it reads as nobody now), or stopped following everyone there, drops what it shows (BUG-162).
+    A signed-in device's stream asks for its session again at each word there, which ending sessions says too
+    (_tell_signed_out): ended, the stream tells its app (which starts over as who it is now) and ends, rather than
+    carry on as the account it connected as."""
     ids, games = await in_db(lambda db: (db.scalars(select(Follow.player_id).where(Follow.fan_id == fan)).all(),
                                          list(dict.fromkeys([*matches.event_ids(db, fan), *teams.event_ids(db, fan)]))))
 
@@ -3103,9 +3134,16 @@ async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingRe
         return [{"type": "following", "players": await _following(fan), "matches": await in_db(matches.mine, fan), "teams": await in_db(teams.mine, fan),
                  "sports": await in_db(fansports.mine, fan)}]
 
+    async def still() -> bool:
+        """Whether the device is still signed in with the session it connected with; one that wasn't has none to end."""
+        if signed is None:
+            return True
+        now = await account_of(request)
+        return now is not None and now.session_id == signed.session_id
+
     places = _hold_streams(request, fan)
     mine = bus.follows_channel(fan)
-    return _sse(_stream([*(bus.channel(i) for i in ids), *(bus.match_channel(e) for e in games), mine], first, request, again=mine), places)
+    return _sse(_stream([*(bus.channel(i) for i in ids), *(bus.match_channel(e) for e in games), mine], first, request, again=mine, still=still), places)
 
 
 # ---------------------------------------------------------------- the Android app

@@ -284,6 +284,8 @@ def test_signing_out_turns_off_that_sessions_devices(db, everywhere):
     db.commit()
     assert set(ended) == ({accounts.token_hash(here.token), accounts.token_hash(there.token)} if everywhere else {accounts.token_hash(here.token)})
     assert endpoints(db, fan) == (set() if everywhere else {"there", "loose"})
+    # Whose channel the account's open streams hear it on (server._tell_signed_out, BUG-162).
+    assert accounts.fan_of(db, account_id) == fan and accounts.fan_of(db, account_id + 1) is None
 
 
 def test_expired_sessions_are_purged_with_their_devices(db):

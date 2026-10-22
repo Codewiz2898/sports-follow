@@ -95,11 +95,15 @@ class Accounts:
         hashes = self.end_sessions(db, account_id)
         return accounts.Deleted(fan_id=f"acct-{account_id}", email=self.emails.pop(account_id), token_hashes=hashes)
 
+    def fan_of(self, db, account_id):
+        return f"acct-{account_id}" if account_id in self.emails else None
+
 
 @pytest.fixture
 def store(api, monkeypatch):
     fake = Accounts()
-    for name in ("find_or_create", "find_or_create_google", "sign_in", "session_for", "describe", "bump", "end_sessions", "delete_account", "blocked", "known"):
+    for name in ("find_or_create", "find_or_create_google", "sign_in", "session_for", "describe", "bump", "end_sessions", "delete_account", "blocked", "known",
+                 "fan_of"):
         monkeypatch.setattr(accounts, name, getattr(fake, name))
     return fake
 
@@ -525,6 +529,31 @@ def test_a_request_under_way_when_the_session_ends_doesnt_sign_the_device_back_i
     assert not pending and "sf_fan" not in set_cookies(during)  # the request under way was still signed in
     after = api.call("POST", "/api/me/source", body={}, headers=cookies(session=token))
     assert "sf_fan" in set_cookies(after)  # the next one isn't: a new anonymous fan
+
+
+@pytest.mark.parametrize("ending", [*ENDINGS, "signed out here"])
+def test_ending_sessions_tells_the_accounts_open_streams(api, store, outbox, password, monkeypatch, ending):
+    """BUG-162, round two: an app left open in front on a device signed out elsewhere was never told: its stream kept
+    the account it connected as, and nothing was said when sessions ended. Each way they end says so on the account's
+    own channel, once their cached copies say signed out, and each of its open streams asks for its session again
+    (tests/test_streams.py): one whose session ended tells its app, which starts over, and ends."""
+    token = set_cookies(sign_in(api, outbox))["sf_session"][0]
+    other = set_cookies(sign_in(api, outbox, address="81.2.69.143"))["sf_session"][0]  # another device
+    panel = admin_cookie(admin_sign_in(api))
+    monkeypatch.setattr(admin, "sign_out", store.end_sessions)
+    monkeypatch.setattr(admin, "block", lambda db, account_id, blocked: (store.blocked_ids.add(account_id), store.end_sessions(db, account_id))[1])
+    told: list[tuple[str, object]] = []
+
+    async def publish(channel, message):
+        told.append((channel, api.redis.data.get(f"session:{accounts.token_hash(token)}")))
+        return 1
+
+    api.redis.publish = publish
+    if ending == "signed out here":  # this device alone: its other tabs (the same cookie) are told too
+        assert api.call("POST", "/api/auth/signout", body={}, headers=cookies(session=token)).status_code == 200
+    else:
+        assert ENDINGS[ending](api, other, panel).status_code == 200
+    assert told == [("follows:acct-1", "")]  # said once the session reads as ended
 
 
 # ---------------------------------------------------------------- deleting the account
