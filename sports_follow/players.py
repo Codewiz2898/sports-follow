@@ -22,10 +22,10 @@ stale and unseen deletes), so it holds on a running server without a deploy and 
 undo it. Adding puts an athlete no source lists in the registry, keyed "op:…", or pins one an import would
 drop: search finds them, and following binds the source ids given. Removing deletes the player's page with
 everything that hangs off it (follows, moments, results, bindings: the database cascades) and its hot card
-in Redis, deletes their registry rows and their photo (off the Credits page at once) and blocks them: imports never write them again, and search and
-following leave out their ids in the sources, in every source of their sport (each one they have no id in
-is asked for them by name and birth date), and following refuses a pick with their name and birth date from
-a source that couldn't be asked. A name typed for research isn't blocked; the agent decides who that is.
+in Redis, deletes their registry rows and their photo (off the Credits page at once) and blocks them: imports
+never write them again, and search and following leave out their ids in the sources, in every source of their
+sport (each one they have no id in is asked for them by name and birth date), and following refuses a pick
+with their name and birth date from a source that couldn't be asked. A name typed for research isn't blocked; the agent decides who that is.
 Removing shows what it will delete and asks first, unless given --yes.
 
 Unmatching is for a pro matched to the wrong Wikidata person, and so shown with someone else's face
@@ -60,7 +60,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, campaigns, curate, logs, photos, registry, roster_wikidata, search, sports, starters
+from . import bus, campaigns, curate, logs, photos, pipeline, registry, roster_wikidata, search, sports, starters
 from .adapters import KNOWN, VIDEOS, AdapterError
 from .db import session
 from .models import Athlete, AthleteOverride, AthleteUnmatch, EventPlayer, Follow, Moment, Player, PlayerIdentity
@@ -279,8 +279,6 @@ def take_profiles_off(qids: list[str]) -> int:
     """Take what Wikidata and Wikipedia said of the person a match was taken back from (unmatch) off the pages of
     the players holding these registry athletes, now: their About, birth date, country, role and honours were that
     person's, not the player's (pipeline.apply_profile with no profile). Returns how many pages."""
-    from . import pipeline  # pipeline reads search, which this reads
-
     if not qids:
         return 0
     with session() as db:
