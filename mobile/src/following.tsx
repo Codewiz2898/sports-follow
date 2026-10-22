@@ -1,5 +1,5 @@
-// The fan's players and teams (GET /api/me/following) and the games they follow by themselves (GET /api/me/matches),
-// shared by every screen, as the web app's FollowingProvider (web/src/following.tsx) has them. The web keeps
+// The fan's players and teams (GET /api/me/following), the games they follow by themselves (GET /api/me/matches) and
+// their sports (GET /api/me/sports), shared by every screen, as the web app's FollowingProvider (web/src/following.tsx) has them. The web keeps
 // them live over the fan stream; here they're read again every 30 s while the app is in front, and at once on
 // coming back to it (the stream comes with BHA-231). `heard` says when there may be new moments: a changed
 // list, a followed game's score or status moving on, a notification arriving, the app coming back to the front.
@@ -38,6 +38,12 @@ interface Following {
   followTeam: (teamId: number, on: boolean) => Promise<void>
   isFollowingTeam: (teamId: number) => boolean
   setTeamAlerts: (teamId: number, level: AlertLevel) => Promise<void>
+  // The sports the fan said they watch, in their order (sports_follow/fansports.py: those the server offers now), read
+  // with the lists; whether the server has said them (not while its answer fails: no list then, rather than an empty
+  // one to save over theirs); saving the list (the welcome's Next, Following's Edit), or the error's the caller's.
+  sports: string[]
+  sportsLoaded: boolean
+  saveSports: (keys: string[]) => Promise<void>
 }
 
 const FollowingContext = createContext<Following | null>(null)
@@ -52,6 +58,10 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const [matches, setMatches] = useState<FollowedMatch[]>([])
   const [matchesLoaded, setMatchesLoaded] = useState(false)
   const [teams, setTeams] = useState<FollowedTeam[]>([])
+  const [sports, setSports] = useState<string[]>([])
+  const [sportsLoaded, setSportsLoaded] = useState(false)
+  // Saves of the fan's sports under way, and how many there have been: a read asked for before the latest isn't taken.
+  const sportsSaves = useRef({ busy: 0, seen: 0 })
   const teamsRef = useRef(teams)
   teamsRef.current = teams
   const cardsRef = useRef(cards)
@@ -120,6 +130,20 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     return moved
   }, [])
 
+  // The fan's sports as the server has them now (changed on another device, read here within the 30 s). Never news
+  // for the activity list: false.
+  const reloadSports = useCallback(async (): Promise<boolean> => {
+    const before = sportsSaves.current.seen
+    const asked = fan.current
+    try {
+      const r = await api.mySports()
+      if (fan.current !== asked || sportsSaves.current.busy > 0 || sportsSaves.current.seen !== before) return false
+      setSports(r.sports)
+      setSportsLoaded(true)
+    } catch { /* not said yet: still not loaded, asked again with the lists */ }
+    return false
+  }, [])
+
   // Every 30 s while the app is in front; at once on coming back to it. A sign-in or out (a new epoch) is
   // another fan: what was shown goes, and their list loads.
   useEffect(() => {
@@ -129,9 +153,11 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     setMatches([])
     setMatchesLoaded(false)
     setTeams([])
+    setSports([])
+    setSportsLoaded(false)
     versions.current = ''
     games.current = null
-    const both = () => Promise.all([reload(), reloadMatches()])
+    const both = () => Promise.all([reload(), reloadMatches(), reloadSports()])
     const start = () => {
       clearInterval(timer.current)
       timer.current = setInterval(both, EVERY_MS)
@@ -147,7 +173,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
       both().then((said) => { if (!said.some(Boolean) && fan.current === asked) setHeard((n) => n + 1) })
     })
     return () => { clearInterval(timer.current); sub.remove() }
-  }, [reload, reloadMatches, epoch])
+  }, [reload, reloadMatches, reloadSports, epoch])
 
   // A notification while the app is in front: one of the fan's moments, a player's or a game's, is new.
   useNotificationsArriving(useCallback(() => setHeard((n) => n + 1), []))
@@ -223,6 +249,20 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     try { await api.setTeamAlerts(teamId, level) } catch (e) { show(was); throw e } finally { writes.current++ }
   }, [])
 
+  // As the web's: the list the server kept is the one shown.
+  const saveSports = useCallback(async (keys: string[]) => {
+    const w = sportsSaves.current
+    const asked = fan.current
+    w.busy++
+    w.seen++
+    try {
+      const r = await api.setMySports(keys)
+      if (fan.current !== asked) return
+      setSports(r.sports)
+      setSportsLoaded(true)
+    } finally { w.busy--; w.seen++ }
+  }, [])
+
   // A game's level shows the moment it's tapped, and goes back to what it was if the server refuses it.
   const setMatchAlerts = useCallback(async (eventId: number, level: AlertLevel) => {
     const was = matchesRef.current.find((m) => m.event_id === eventId)?.alerts ?? 'key'
@@ -240,8 +280,10 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
       matches, matchesLoaded, reloadMatches, followMatch, setMatchAlerts,
       teams, followTeam, setTeamAlerts,
       isFollowingTeam: (id) => teams.some((x) => x.team_id === id),
+      sports, sportsLoaded, saveSports,
     }
-  }, [cards, loaded, failed, reload, follow, unfollow, setAlerts, heard, matches, matchesLoaded, reloadMatches, followMatch, setMatchAlerts, teams, followTeam, setTeamAlerts])
+  }, [cards, loaded, failed, reload, follow, unfollow, setAlerts, heard, matches, matchesLoaded, reloadMatches, followMatch, setMatchAlerts, teams, followTeam, setTeamAlerts,
+    sports, sportsLoaded, saveSports])
 
   return <FollowingContext value={value}>{children}</FollowingContext>
 }

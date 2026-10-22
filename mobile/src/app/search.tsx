@@ -6,7 +6,9 @@ import { useState } from 'react'
 import { StyleSheet, Text, TextInput, View } from 'react-native'
 import Constants from 'expo-constants'
 import { enterTeam, sections, starterNames } from '../../../web/src/search'
+import { inYourOrder } from '../../../web/src/yourSports'
 import { useAccount } from '../account'
+import { useFollowing } from '../following'
 import { SearchIcon } from '../icons'
 import { SearchResults, SportChips, useSearch, useSearchActions } from '../search'
 import { colour, dsp, font, t } from '../theme'
@@ -22,7 +24,9 @@ export default function SearchScreen() {
   const [sport, setSport] = useState(params.sport ?? '')
   const { data, fresh, loading, error } = useSearch(query, sport)
   const actions = useSearchActions()
-  const tries = starterNames(useStarters().sports, 6) // the starters, a sport at a time
+  const starters = useStarters().sports
+  const yours = useFollowing().sports
+  const tries = starterNames(starters && inYourOrder(starters, (x) => x.key, yours), 6) // the starters, a sport at a time, the fan's sports first
   const research = useAccount().config?.research !== false
 
   const submit = () => {

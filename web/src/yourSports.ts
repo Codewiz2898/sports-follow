@@ -1,7 +1,7 @@
 // Your sports (BHA-653): the sports a fan said they watch, in their order, kept on the server (GET and PUT
 // /api/me/sports, sports_follow/fansports.py). What the welcome's tiles and Following's Edit sheet show, what the sheet
 // saves, which starters Today keeps offering, and the fan's sports first in the rails and lists that hold several
-// sports. Shared by the web app and, later, the Android app (mobile/), so it touches nothing of a browser's.
+// sports. Shared by the web app and the Android app (mobile/), so it touches nothing of a browser's.
 
 import type { Card, FollowedTeam, SportInfo, StarterSport } from './types'
 

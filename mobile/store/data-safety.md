@@ -9,9 +9,9 @@ collected, shared, optional, and why; "collected" means sent off the device, eve
 ## The short version
 
 - **Collected:** email address (if you sign in), a user id, the players, teams and games followed with their
-  alert settings, the alert log, the Android push token with its time zone and quiet hours, what you type into
-  search (not kept) and into Research with AI (kept as the player's name), and your network address for up to
-  two days (abuse limits).
+  alert settings, the sports the fan said they watch, the alert log, the Android push token with its time zone and
+  quiet hours, what you type into search (not kept) and into Research with AI (kept as the player's name), and your
+  network address for up to two days (abuse limits).
 - **Shared with others:** nothing. Sold: nothing.
 - **Encrypted in transit:** yes. **Deletable:** yes, in the app and at stann.in/account.
 - **Not collected:** location, contacts, photos, files, messages, calendar, health, financial, browsing
@@ -27,7 +27,7 @@ collected, shared, optional, and why; "collected" means sent off the device, eve
 |---|---|
 | Does your app collect or share any of the required user data types? | **Yes** |
 | Is all of the user data collected by your app encrypted in transit? | **Yes** (the app talks to `https://stann.in` only; `mobile/src/api.ts`) |
-| Do you provide a way for users to request that their data is deleted? | **Yes**: Account → Delete account in the app, or `https://stann.in/account`. Without an account: unfollow players, teams and games and turn alerts off, then uninstall (uninstalling alone deletes nothing on the server) |
+| Do you provide a way for users to request that their data is deleted? | **Yes**: Account → Delete account in the app, or `https://stann.in/account`. Without an account: unfollow players, teams and games, untick your sports in Following, and turn alerts off, then uninstall (uninstalling alone deletes nothing on the server) |
 | Has your app been independently reviewed against a global security standard (MASA)? | **No** |
 
 ## Data types
@@ -49,7 +49,7 @@ For every row below: **Shared: No.** Purposes are Play's names.
 | Contacts | all | No | | | | |
 | App activity | **App interactions** | Yes | No | Optional (only with alerts on) | App functionality, Analytics | the log of alerts sent and whether each was opened (`notification`): the noise rules read it, and the open rate is counted from it |
 | App activity | **In-app search history** | Yes | **Yes** | Optional | App functionality | what you type into search goes to the server, which asks the sources and keeps nothing; request logs drop the query string (`server.py` `RequestLog`) |
-| App activity | **Other user-generated content** | Yes | No | Required | App functionality | the players, teams and games you follow, each one's alert level, muted games, quiet hours (`follow`, `team_follow`, `match_follow`, `notification_mute`, `push_subscription`); and a name typed into Research with AI, kept as that player's name and shown to every fan of them (`server.py` research, `agent.py`) |
+| App activity | **Other user-generated content** | Yes | No | Required | App functionality | the players, teams and games you follow, each one's alert level, the sports you said you watch, muted games, quiet hours (`follow`, `team_follow`, `match_follow`, `fan_sport`, `notification_mute`, `push_subscription`); and a name typed into Research with AI, kept as that player's name and shown to every fan of them (`server.py` research, `agent.py`) |
 | App activity | Other actions, Installed apps | No | | | | where the first link was opened from (`fan_source`) is the web app's only: the Android app sends no link tags (nothing in `mobile/src` calls it) |
 | Web browsing | Web browsing history | No | | | | |
 | App info and performance | Crash logs, Diagnostics, Other performance data | No | | | | the Android app sends no error reports (only the web app does, `web_errors.py`) and has no crash SDK |

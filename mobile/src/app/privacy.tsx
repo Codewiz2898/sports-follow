@@ -17,7 +17,7 @@ export default function PrivacyScreen() {
     <Page>
       <BackHead title="Privacy" />
       <Part title="What we keep">
-        <P>Without an account: a random id in a cookie on this device, the players you follow, how much you want to hear about each, and games you muted.</P>
+        <P>Without an account: a random id in a cookie on this device, the players, teams and games you follow, how much you want to hear about each, the sports you said you watch, and games you muted.</P>
         <P>With an account: your email address (and your Google account's id if you sign in with Google), when you last signed in, and the same things as above, so they're on every device you sign in on.</P>
         <P>If you turn alerts on: the address your browser gives us to deliver them (in the Android app, the token Google's Firebase gives the app for this phone), your time zone and quiet hours, whether the app shows live scores on your lock screen, and a log of the alerts we sent (to keep sound for the big moments, and to count how many are opened).</P>
         <P>If the first link you opened here says where it was posted (a tag on it, like whatsapp or share): that tag and the page it opened, once, to count which posts bring fans.</P>
@@ -36,7 +36,7 @@ export default function PrivacyScreen() {
       </Part>
       <Part title="Deleting it">
         <P>Signed in: <Text onPress={() => router.push('/account')} style={t.link}>Account</Text>, then Delete account. Everything above goes at once, and our daily backups are kept for 14 days.</P>
-        <P>Without an account: unfollow your players, teams and games and turn alerts off in Alerts, then clear this site's data in your browser, or uninstall the Android app.</P>
+        <P>Without an account: unfollow your players, teams and games, untick your sports in Following, and turn alerts off in Alerts, then clear this site's data in your browser, or uninstall the Android app.</P>
       </Part>
       {contact ? (
         <Part title="Questions">

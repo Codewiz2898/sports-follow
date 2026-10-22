@@ -2,17 +2,19 @@
 // (today/filter.tsx), the fan's players as a strip, their live games as scoreboards (each opening its match page)
 // and the games they follow by themselves, a link to everything else on now (the Live page), their results, their
 // games coming up with the league's big ones after them, this week's big moments and the Wire, the two best of their
-// Feed (post.tsx), and players to follow while they follow few. A fan with no players and no games gets the welcome
-// first, once.
+// Feed (post.tsx), and players to follow while they follow few, and of their sports they follow nobody in after. The
+// fan's sports (Your sports, BHA-653) get chips, and come first in Live now, the big rails and the Live page. A fan
+// with no players and no games gets the welcome first, once.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import Constants from 'expo-constants'
 import { Image } from 'expo-image'
 import { router, useIsFocused } from 'expo-router'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
 import { gameRow, gamesOnToday, narrow, NO_BLOCKS, nothingOn, theirGames, type TodayBlocks } from '../../../web/src/filter'
-import { AHEAD_DAYS, comingUp, FEW, followedLive, gamesOn, latestIn, leagueComingUp, liveGames, notTheirs, results, resultsDay, TAIL, teamsLive, theirEvents, type TeamGame } from '../../../web/src/today'
+import { AHEAD_DAYS, comingUp, FEW, followedLive, gamesOn, latestIn, leagueComingUp, liveGames, notTheirs, results, resultsDay, TAIL, teamsLive, theirEvents, type GameOn, type TeamGame } from '../../../web/src/today'
+import { yoursFirst, yoursMovedUp } from '../../../web/src/yourSports'
 import type { FollowedMatch, League, LeagueGame } from '../api'
 import { useAccount } from '../account'
 import { useActivity } from '../activity'
@@ -84,23 +86,26 @@ function SaveNudge() {
   )
 }
 
+/** A rail's note, and "yours first" where the fan's sports (`yours`) come before others' in it (the web's yoursNote). */
+const yoursNote = (note: string, yours: boolean) => (yours ? `${note} · yours first` : note)
+
 /**
  * Today for a fan who follows nobody yet: the big results and the big games coming up in the competitions the
  * app covers (GET /api/league), outlined, each rail TAIL long and its "All N" card the rest, the sports taking
- * turns. `done` and `coming` are the league's, narrowed to the game picked. Nothing until the server answers, and a
- * rail with nothing in it isn't there.
+ * turns, the fan's sports first (`ahead`: whether theirs went ahead of others' in each). `done` and `coming` are the
+ * league's, narrowed to the game picked. Nothing until the server answers, and a rail with nothing in it isn't there.
  */
-function BigGames({ league, done, coming, now }: { league: League | null; done: LeagueGame[]; coming: LeagueGame[]; now: number }) {
+function BigGames({ league, done, coming, now, ahead }: { league: League | null; done: LeagueGame[]; coming: LeagueGame[]; now: number; ahead: (games: LeagueGame[]) => boolean }) {
   if (!league) return null
   return (
     <>
       {done.length > 0 ? (
-        <Rail title="Big results" note={`${resultsDay(league.results.day)} · ${done.length}`} all="Every big result" max={TAIL}>
+        <Rail title="Big results" note={yoursNote(`${resultsDay(league.results.day)} · ${done.length}`, ahead(done))} all="Every big result" max={TAIL}>
           {done.map((g) => <LeagueResultCard key={g.key} game={g} now={now} />)}
         </Rail>
       ) : null}
       {coming.length > 0 ? (
-        <Rail title="Big games coming up" note={`Next ${AHEAD_DAYS} days · ${coming.length}`} all={`Every big game in the next ${AHEAD_DAYS} days`} max={TAIL}>
+        <Rail title="Big games coming up" note={yoursNote(`Next ${AHEAD_DAYS} days · ${coming.length}`, ahead(coming))} all={`Every big game in the next ${AHEAD_DAYS} days`} max={TAIL}>
           {coming.map((g) => <LeagueComingCard key={g.key} game={g} now={now} />)}
         </Rail>
       ) : null}
@@ -132,7 +137,7 @@ function FollowedLive({ matches }: { matches: FollowedMatch[] }) {
 
 export default function TodayScreen() {
   const following = useFollowing()
-  const { cards, loaded, failed, matches, matchesLoaded, teams } = following
+  const { cards, loaded, failed, matches, matchesLoaded, teams, sports: yours } = following
   const { items: alerts, seen } = useActivity()
   const week = useWeek()
   const live = useLive()
@@ -146,6 +151,15 @@ export default function TodayScreen() {
   const sports = useSports()
   const welcomed = useWelcomed()
   const focused = useIsFocused()
+  const { epoch } = useAccount()
+  // A visit to Today: it stays mounted under every page opened from it, so its Players to follow starts over each time
+  // it's back in front, and for another fan (the web's unmounts with the page).
+  const [visit, setVisit] = useState(0)
+  const wasFocused = useRef(focused)
+  useEffect(() => {
+    if (focused && !wasFocused.current) setVisit((n) => n + 1) // back in front: not the first time it shows
+    wasFocused.current = focused
+  }, [focused])
   const [refreshing, setRefreshing] = useState(false)
 
   // A fan who follows only games by themselves, or only teams, has a Today of their own too.
@@ -165,12 +179,16 @@ export default function TodayScreen() {
   // The games they follow by themselves are theirs too: on Today as such, not again among the big ones.
   const theirs = new Set([...theirEvents(cards, teams), ...matches.map((m) => m.event_id)])
   const big = loaded || failed ? league : null
+  // The games of every sport, the fan's sports' first (yourSports.ts): the big ones each lot as the server ranks it.
+  const onFirst = (list: GameOn[]) => yoursFirst(list, (x) => x.game.sport, yours, keyOf)
+  const bigOrdered = (list: LeagueGame[], arrange?: (lot: LeagueGame[]) => LeagueGame[]) => yoursFirst(list, (g) => g.sport, yours, keyOf, arrange)
+  const ahead = (list: LeagueGame[]) => yoursMovedUp(list, (g) => g.sport, yours, keyOf)
   // Everything Today shows, block by block; then only the game picked's (filter.ts).
   const all: TodayBlocks = nobody ? {
     ...NO_BLOCKS,
-    alsoLive: gamesOn(live, []).others,
-    bigResults: league?.results.games ?? [],
-    bigComing: league ? leagueComingUp(league.coming.games, new Set(), now) : [],
+    alsoLive: onFirst(gamesOn(live, []).others),
+    bigResults: bigOrdered(league?.results.games ?? []),
+    bigComing: league ? bigOrdered(league.coming.games, (lot) => leagueComingUp(lot, new Set(), now)) : [],
     wire: week.wire,
   } : {
     cards, teams,
@@ -181,13 +199,13 @@ export default function TodayScreen() {
     // Only once the follow list has answered, so a game of the fan's is never counted as another.
     moreLive: loaded || failed ? gamesOn(live, games.flatMap(([, group]) => group)).others : [],
     results: done?.games ?? [],
-    bigResults: big ? notTheirs(big.results.games, theirs) : [],
+    bigResults: big ? bigOrdered(notTheirs(big.results.games, theirs)) : [],
     coming: comingUp(cards, now, matches, teams),
-    bigComing: big ? leagueComingUp(big.coming.games, theirs, now) : [],
+    bigComing: big ? bigOrdered(big.coming.games, (lot) => leagueComingUp(lot, theirs, now)) : [],
     posters: week.posters,
     wire: week.wire,
   }
-  const row = gameRow(sports.listed(), gamesOnToday(all, keyOf), theirGames(all, keyOf))
+  const row = gameRow(sports.listed(), gamesOnToday(all, keyOf), theirGames(all, keyOf, yours))
   const [game, pick] = useGame(row)
   const shown = narrow(all, game?.key ?? null, keyOf)
   const shownKey = useMemo(() => [railKey, game?.key], [railKey, game?.key]) // and a block that failed tries again on a pick
@@ -207,7 +225,7 @@ export default function TodayScreen() {
         {filter}
         <AlsoLive games={shown.alsoLive} />
         <ErrorBoundary resetKey={shownKey}>
-          <BigGames league={league} done={shown.bigResults} coming={shown.bigComing} now={now} />
+          <BigGames league={league} done={shown.bigResults} coming={shown.bigComing} now={now} ahead={ahead} />
         </ErrorBoundary>
         {/* Who's out and who's back among the best-known players. */}
         <ErrorBoundary resetKey={week}>
@@ -218,7 +236,7 @@ export default function TodayScreen() {
           <Text style={s.heroText}>Any athlete in any sport: the live score and their own numbers while they play, then fixtures, results and news.</Text>
           <Btn label="Find a player" icon={<SearchIcon size={18} color={colour.bg} />} kind="primary" onPress={() => router.push('/search')} style={{ alignSelf: 'flex-start' }} />
         </View>
-        <StartersSection />
+        <StartersSection key={`${epoch}:${visit}`} few game={game?.key ?? null} />
       </Page>
     )
   }
@@ -260,11 +278,13 @@ export default function TodayScreen() {
         <TeamsLive games={shown.teamGames} />
       </ErrorBoundary>
       {/* Only the fan's own games are on Today; every other game on now is a tap away, on the Live page. */}
-      <MoreLive games={shown.moreLive} theirsOn={shown.live.length > 0} />
+      {/* The Live page puts the fan's sports first, in their order: the link names the one that leads it. */}
+      <MoreLive games={shown.moreLive} theirsOn={shown.live.length > 0} game={game?.key ?? null}
+        first={yoursMovedUp(shown.moreLive, (x) => x.game.sport, yours, keyOf) ? sports.info(yours.find((k) => shown.moreLive.some((x) => keyOf(x.game.sport) === k))).label : null} />
 
       <ErrorBoundary resetKey={shownKey}>
         {resultCount > 0 ? (
-          <Rail title={own.length ? 'Results' : 'Big results'} note={`${resultsWhen} · ${resultCount}`}
+          <Rail title={own.length ? 'Results' : 'Big results'} note={yoursNote(`${resultsWhen} · ${resultCount}`, !own.length && ahead(shown.bigResults))}
             all={own.length ? `Every result ${done?.day ? `on ${done.day}` : 'since yesterday'}${shown.bigResults.length ? ', and the big ones' : ''}` : 'Every big result'} max={own.length + TAIL}>
             {/* With nothing live, the biggest result leads the page. */}
             {[
@@ -279,7 +299,7 @@ export default function TodayScreen() {
 
       <ErrorBoundary resetKey={shownKey}>
         {comingCount > 0 ? (
-          <Rail title={shown.coming.length ? 'Coming up' : 'Big games coming up'} note={`Next ${AHEAD_DAYS} days · ${comingCount}`}
+          <Rail title={shown.coming.length ? 'Coming up' : 'Big games coming up'} note={yoursNote(`Next ${AHEAD_DAYS} days · ${comingCount}`, !shown.coming.length && ahead(shown.bigComing))}
             all={`Every ${shown.coming.length ? '' : 'big '}game in the next ${AHEAD_DAYS} days${shown.coming.length && shown.bigComing.length ? ', and the big ones' : ''}`} max={shown.coming.length + TAIL}>
             {[
               ...shown.coming.map((g) => <ComingCard key={g.key} event={g.event} players={g.players} seed={g.key} sport={g.sport} teams={g.teams} />),
@@ -302,7 +322,8 @@ export default function TodayScreen() {
         <FromYourPlayers now={now} again={pulled} game={game?.key ?? null} />
       </ErrorBoundary>
 
-      {cards.length > 0 && cards.length < FEW ? <StartersSection /> : null}
+      {/* While they follow few players, every sport's; then their sports' they follow nobody in yet. */}
+      <StartersSection key={`${epoch}:${visit}`} few={cards.length > 0 && cards.length < FEW} game={game?.key ?? null} />
     </Page>
   )
 }

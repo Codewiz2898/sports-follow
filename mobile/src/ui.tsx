@@ -172,11 +172,13 @@ export function ListCard({ children, style }: { children: ReactNode[]; style?: S
   )
 }
 
-/** The section heading every page uses (.section-head): a leaning title and, on the right, a note or a link. */
+/** The section heading every page uses (.section-head): a leaning title and, on the right, a note or a link. A long
+ * title wraps rather than push the note off the screen ("Big games coming up" beside "Next 14 days · 3 · yours first"),
+ * as the web's does. */
 export function SectionHead({ title, right }: { title: string; right?: ReactNode }) {
   return (
     <View style={s.sectionHead}>
-      <Dsp size={28}>{title}</Dsp>
+      <View style={{ flexShrink: 1 }}><Dsp size={28}>{title}</Dsp></View>
       {right}
     </View>
   )

@@ -373,7 +373,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   players; Following's row and Edit sheet (with none saved, the sports of who the fan follows ticked), also reached
   from Today's game search; on Today, each of the fan's sports with something on it gets a chip (`filter.ts
   theirGames`), "Players to follow" keeps offering their sports they follow nobody in past the first three follows,
-  and the fan's sports come first in Live now, the big rails, the Live page and search's "Try" names.
+  and the fan's sports come first in Live now, the big rails, the Live page and search's "Try" names. The Android app
+  does the same (`mobile/src/yourSports.tsx`, with the web's `yourSports.ts`), reading the fan's sports with its other
+  lists every 30 seconds and on coming back to the front.
 - **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
   service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
   "Install app"; the app then opens full screen from the home screen. The app shell opens offline and

@@ -1,9 +1,12 @@
-// Following, the web's FollowingPage.tsx: every team and player the fan follows as a grid of their sport's
-// colours (Today's strip opens it), their teams first. Names only: photos are on a player's own page.
+// Following, the web's FollowingPage.tsx: their sports first (Your sports, and Edit), then every team and player the
+// fan follows as a grid of their sport's colours (Today's strip opens it), their teams first. Names only: photos are
+// on a player's own page.
 
 import { router } from 'expo-router'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { tileOrder } from '../../../web/src/today'
+import { yoursShown } from '../../../web/src/yourSports'
+import { useSports } from '../catalog'
 import { PlayerTile, TeamTile } from '../blocks'
 import { useNow } from '../clock'
 import { useFollowing } from '../following'
@@ -13,12 +16,16 @@ import { colour, dsp, RADIUS_TILE, t } from '../theme'
 import { Eyebrow } from '../ui'
 import { Page } from '../page'
 import { LoadFailed } from '../today/load'
+import { YourSportsRow } from '../yourSports'
 
 export default function FollowingScreen() {
-  const { cards, loaded, failed, progress, teams } = useFollowing()
+  const { cards, loaded, failed, progress, teams, sports: yours } = useFollowing()
+  const catalog = useSports()
   const now = useNow()
   const live = cards.filter((c) => c.live.is_live).length + teams.filter((x) => x.live?.is_live).length
-  const counted = [cards.length && `${cards.length} ${cards.length === 1 ? 'player' : 'players'}`, teams.length && `${teams.length} ${teams.length === 1 ? 'team' : 'teams'}`].filter(Boolean)
+  const ownSports = yoursShown(yours, (key) => catalog.info(key)).length // as the row shows them
+  const counted = [ownSports && `${ownSports} ${ownSports === 1 ? 'sport' : 'sports'}`, cards.length && `${cards.length} ${cards.length === 1 ? 'player' : 'players'}`,
+    teams.length && `${teams.length} ${teams.length === 1 ? 'team' : 'teams'}`].filter(Boolean)
   return (
     <Page>
       <View style={{ gap: 6 }}>
@@ -29,6 +36,7 @@ export default function FollowingScreen() {
         <Text style={dsp(54)}>Following</Text>
         {loaded || cards.length > 0 ? <Eyebrow>{counted.join(' · ') || '0 players'}{live ? ` · ${live} live` : ''}</Eyebrow> : null}
       </View>
+      <YourSportsRow />
       {failed && !loaded ? <LoadFailed /> : null}
       {loaded && cards.length === 0 && teams.length === 0 ? <Text style={[t.body, t.muted]}>You don't follow anyone yet. Find a player or a team to see their games here.</Text> : null}
       {loaded || cards.length > 0 ? (
