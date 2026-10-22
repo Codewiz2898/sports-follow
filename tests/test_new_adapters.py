@@ -254,7 +254,7 @@ def test_an_armageddon_drawn_is_blacks_win(monkeypatch):
     assert lichess_chess.parse_board(scored, s, now).lines[s].headline == "Lost with White vs D Gukesh on armageddon"
     # Its tournament's PGN (a finished round's games, as a refresh reads them) names it in the game's event.
     pgn = ('[Event "Norway Chess 2027 Armageddon"]\n[White "Sindarov, Javokhir"]\n[Black "Gukesh, D"]\n[Result "1/2-1/2"]\n[WhiteFideId "14205483"]\n'
-           '[BlackFideId "46616543"]\n[GameURL "https://lichess.org/broadcast/t/r/AbCdEf12/game0002"]\n')
+           '[BlackFideId "46616543"]\n[GameURL "https://lichess.org/broadcast/t/r/AbCdEf12/game0002"]\n\n1. d4 Nf6 2. c4 e6 1/2-1/2\n')
     assert lichess_chess.match_score(lichess_chess.games_of({"games": lichess_chess.parse_pgn_rounds(pgn)["AbCdEf12"]}, g), g) == (1.0, 1)
     # Any other game drawn is half a point each, as before.
     assert lichess_chess.match_score(lichess_chess.games_of({**data, "games": [classical]}, g), g) == (0.5, 1)
@@ -828,6 +828,35 @@ def test_tournament_pgn_gives_every_round_in_one_read():
     assert len(final) == 8
     assert lichess_chess.match_score(final, CARLSEN) == (6.0, 8)  # same as the round JSON says
     assert final[0]["players"][0] == {"name": "Carlsen, Magnus", "fideId": 1503014, "rating": 2823, "title": "GM"}
+
+
+def test_an_unplayed_chess_game_isnt_a_game():
+    # BUG-214: the recorded Esports World Cup third-place match. Nakamura won it 3–1 after four games, and the
+    # broadcast lists a fifth, "1-0" with no move and Termination "Unplayed": it was scored as his win, "Won 4–1"
+    # (5 games), and in form.
+    with gzip.open(FIXTURES / "lichess/tour-ewc-playoffs.pgn.gz", "rt") as f:
+        games = lichess_chess.parse_pgn_rounds(f.read())["Py6uVlbB"]
+    nakamura, firouzja = "2016192", "12573981"
+    now = datetime(2026, 9, 29, tzinfo=timezone.utc)
+    rnd, tour = {"id": "Py6uVlbB", "name": "3rd Place Match", "finished": True}, {"name": "Esports World Cup 2026 | Playoffs"}
+    mine, theirs = (lichess_chess.fixture_for(tour, rnd, lichess_chess.games_of({"games": games}, fide), fide, now) for fide in (nakamura, firouzja))
+    assert (lichess_chess.result_label(mine, [nakamura]), lichess_chess.result_label(theirs, [firouzja])) == ("Won 3–1", "Lost 1–3")
+    assert mine.result["games"] == 4
+    # A game with a result and no move (a forfeit) wasn't played either, whatever its Termination says; one with a move was.
+    forfeit = ('[White "A"]\n[Black "B"]\n[Result "1-0"]\n[WhiteFideId "1"]\n[BlackFideId "2"]\n[Termination "forfeit"]\n'
+               '[GameURL "https://lichess.org/broadcast/t/r/abcdefgh/ijklmnop"]\n\n 1-0\n\n'
+               '[White "C"]\n[Black "D"]\n[Result "0-1"]\n[WhiteFideId "3"]\n[BlackFideId "4"]\n[GameURL "https://lichess.org/broadcast/t/r/abcdefgh/qrstuvwx"]\n\n'
+               '1. f3 { [%eval -0.5] } 1... e5 2. g4 Qh4# 0-1\n')
+    pgn_games = lichess_chess.parse_pgn_rounds(forfeit)["abcdefgh"]
+    assert [lichess_chess.games_of({"games": pgn_games}, fide) != [] for fide in "1234"] == [False, False, True, True]
+    # A round's JSON doesn't say how a game ended: one with a result and no move made (its board at the start) wasn't played.
+    start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    played = [{**g, "fen": "8/8/4k3/8/8/4K3/8/8 w - - 0 50", "lastMove": "e2e3"} for g in games if g["status"] != "1-0"]
+    data = {"round": {**rnd, "url": "https://lichess.org/broadcast/x/y/Py6uVlbB"}, "tour": tour,
+            "games": [*played, {"id": "Q3GR2FUs", "players": games[-1]["players"], "fen": start, "status": "1-0"}]}
+    snap = lichess_chess.parse_board(data, nakamura, now)
+    assert (snap.clock_label, snap.lines[nakamura].headline) == ("Hikaru Nakamura won the match (4 games)", "Won the match 3–1 vs Alireza Firouzja")
+    assert snap.state["match"]["games"] == 4 and snap.state["game_id"] == played[-1]["id"]  # the board shown is the last game played
 
 
 def test_tournament_pgn_reads_tags_with_escaped_quotes():

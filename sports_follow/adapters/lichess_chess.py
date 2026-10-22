@@ -280,6 +280,7 @@ def ref_for(record: dict[str, Any]) -> PlayerRef:
 # A PGN tag: [Name "value"], where the value escapes a quote or a backslash with a backslash
 # ([Event "The \"Alcalá\" Open"]).
 _TAG = r'\[(\w+) "((?:[^"\\]|\\.)*)"\]'
+_MOVED = re.compile(r"(?:^|\s)\d+\.")  # a move number in a game's moves: it had one
 
 
 def _pgn_player(tags: dict[str, str], colour: str) -> dict[str, Any]:
@@ -292,10 +293,12 @@ def parse_pgn_rounds(pgn: str) -> dict[str, list[dict[str, Any]]]:
     """A tournament's PGN export -> its games grouped by round id, shaped like the round JSON's games.
 
     One request for a whole event, instead of one per round: Lichess rate-limits round reads hard.
-    Each game's GameURL ends in /{roundId}/{gameId}.
+    Each game's GameURL ends in /{roundId}/{gameId}. One its tags say wasn't played (Termination "Unplayed"), or with
+    no move, is marked so (unplayed).
     """
     rounds: dict[str, list[dict[str, Any]]] = {}
-    for block in re.finditer(rf"(?:^{_TAG}\n?)+", pgn, flags=re.M):
+    blocks = list(re.finditer(rf"(?:^{_TAG}\n?)+", pgn, flags=re.M))
+    for block, after in zip(blocks, [*blocks[1:], None]):
         tags = {name: re.sub(r"\\(.)", r"\1", value) for name, value in re.findall(_TAG, block[0])}
         parts = (tags.get("GameURL") or "").rstrip("/").split("/")
         if len(parts) < 2:
@@ -305,6 +308,9 @@ def parse_pgn_rounds(pgn: str) -> dict[str, list[dict[str, Any]]]:
         game = {"id": game_id, "players": players, "status": tags.get("Result", "*"), "fen": ""}
         if ARMAGEDDON.search(" ".join(tags.get(k) or "" for k in ("Event", "ChapterName"))):
             game["armageddon"] = True
+        moves = re.sub(r"\{[^}]*\}", " ", pgn[block.end():after.start() if after else len(pgn)])  # its moves, comments out
+        if (tags.get("Termination") or "").lower() == "unplayed" or not _MOVED.search(moves):
+            game["unplayed"] = True
         rounds.setdefault(round_id, []).append(game)
     return rounds
 
@@ -381,10 +387,19 @@ def moves_to(kept: dict[str, Any] | None, fen: str | None, last_move: str | None
 
 
 def games_of(round_data: dict[str, Any], fide_id: str) -> list[dict[str, Any]]:
-    """The player's games in a round, in board order, an armageddon marked so (its "armageddon"). Knockout rounds hold
-    a whole mini-match (Esports World Cup "Grand Final": eight games between the same two players)."""
+    """The player's games in a round, in board order, an armageddon marked so (its "armageddon"), and none that wasn't
+    played (unplayed). Knockout rounds hold a whole mini-match (Esports World Cup "Grand Final": eight games between
+    the same two players)."""
     return [{**g, "armageddon": True} if armageddon(round_data, g) else g
-            for g in round_data.get("games") or [] if any(str(p.get("fideId")) == fide_id for p in g.get("players") or [])]
+            for g in round_data.get("games") or [] if any(str(p.get("fideId")) == fide_id for p in g.get("players") or []) and not unplayed(g)]
+
+
+def unplayed(game: dict[str, Any]) -> bool:
+    """Whether a game in a round has a result but wasn't played, so it's no game of its players', not a point in a
+    match's score nor a result in their form (the Esports World Cup's third-place match, won 3–1 after four games, lists
+    a fifth "1-0" with Termination "Unplayed"; a forfeit): its PGN says so, or has no move (parse_pgn_rounds), or, in a
+    round's JSON, which doesn't say how a game ended, no move was made, its board at the start."""
+    return bool(_result(game.get("status"))) and (bool(game.get("unplayed")) or (fen_ply(game.get("fen")) == 0 and not game.get("lastMove")))
 
 
 def armageddon(round_data: dict[str, Any], game: dict[str, Any]) -> bool:
