@@ -397,31 +397,39 @@ def test_an_esports_game_turned_off_has_no_match_page_while_its_source_runs_for_
 def test_a_read_that_found_nothing_isnt_asked_again_every_minute(db, redis, source):
     followed(db)
     source.game = None  # the source hasn't got it (it filters the series out, say)
-    match.read("pitch", "100", NOW)
-    page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(minutes=10))
+    on = NOW + timedelta(seconds=match.LATE)  # read once the game could have begun
+    match.read("pitch", "100", on)
+    page, ask = match.view(db, "fan", "pitch", "100", on + timedelta(minutes=10))
     assert page["event_ids"] == [40] and not ask  # what's stored still shows
-    assert match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=match.AHEAD + 1))[1]  # it's on: every half hour, for a source that lists it late
+    assert match.view(db, "fan", "pitch", "100", on + timedelta(seconds=match.AHEAD + 1))[1]  # it's on: every half hour, for a source that lists it late
 
 
 @needs_db
 def test_a_read_that_found_nothing_before_the_start_is_read_again_once_the_game_is_on(db, redis, source):
-    """A look before a chess round's start finds no board (its broadcast lists them as it starts). Once the
-    game's on, that read is stale: it's read every FRESH like any live game, and its read's detail comes."""
+    """A look before a chess round's start finds no board (its broadcast lists them as its games begin). Once
+    the game's on, that read is stale: it's read every FRESH like any live game, and its read's detail comes."""
     followed(db)  # its event starts at NOW, and Saka's card has it live
     source.game = None
     match.read("pitch", "100", NOW - timedelta(minutes=90))
     page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=40))
-    assert (page["status"], page["live"]["clock"], ask) == ("live", "71'", True)
-    source.game = game(players=ELEVENS)
+    assert (page["status"], page["live"]["clock"], page["streams"], ask) == ("live", "71'", [], True)
+    # The round's late: a read just after its start finds nothing yet, and the next look asks again.
     match.read("pitch", "100", NOW + timedelta(seconds=50))
-    assert not match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=60))[1]
     assert match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=50 + match.FRESH + 1))[1]
+    source.game = game(players=ELEVENS)
+    source.game.streams = [Stream("https://www.twitch.tv/costreamer", "es")]
+    match.read("pitch", "100", NOW + timedelta(minutes=2))
+    page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(minutes=2, seconds=10))
+    assert [p["name"] for s in page["sides"] for p in s["players"]] == ["Bukayo Saka", "Harry Kane", "Cole Palmer"]
+    assert ([s["platform"] for s in page["streams"]], ask) == (["Twitch"], False)
+    assert match.view(db, "fan", "pitch", "100", NOW + timedelta(minutes=2, seconds=match.FRESH + 1))[1]
 
 
 @needs_db
 def test_a_read_that_found_nothing_of_a_game_no_board_shows_on_isnt_asked_again(db, redis, source):
     """No board shows the game (none polled, none stored, not on Live now): a read that found nothing is the
-    last for hours. One made before the game's start is read once more after it; one made since is the last."""
+    last for hours. One made before the game could have begun is read again once its start has passed; one
+    made since is the last."""
     db.add(Event(id=40, key="pitch:100", sport="Football", title="Arsenal vs Chelsea", competition="Premier League", status="scheduled", start_utc=NOW))
     db.commit()
     source.game = None
@@ -429,9 +437,14 @@ def test_a_read_that_found_nothing_of_a_game_no_board_shows_on_isnt_asked_again(
     assert not match.view(db, "fan", "pitch", "100", NOW - timedelta(minutes=5))[1]  # its start still to come
     page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(minutes=1))
     assert (page["live"], ask) == (None, True)  # its start has passed since that read
-    match.read("pitch", "100", NOW + timedelta(minutes=1))
+    match.read("pitch", "100", NOW + timedelta(seconds=match.LATE))
     page, ask = match.view(db, "fan", "pitch", "100", NOW + timedelta(hours=5))
     assert (page["status"], page["live"], ask) == ("scheduled", None, False)
+
+
+def test_a_start_that_doesnt_say_its_zone_is_utc():
+    nothing = {"as_of": (NOW - timedelta(hours=1)).isoformat(), "game": None}
+    assert match._fresh("live", "2026-10-16T14:00:00", nothing, NOW + timedelta(minutes=1)) == match.FRESH
 
 
 @needs_db
