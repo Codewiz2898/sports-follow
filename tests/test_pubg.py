@@ -439,6 +439,9 @@ def test_a_lobby_whose_first_matches_were_never_read_isnt_offered(ageing, monkey
     monkeypatch.setattr(pubg, "kept", lambda mid: None)
     Clock.at = _at("2026-10-27T11:45:00")
     assert [pe.lobby_key(lb) for lb in pe.PubgEsports().lobbies()] == ["as-pgsc4t:2026-10-14:1"]
+    # Ones PUBG had nothing at when they were read were never in a lobby: the rest is whole.
+    monkeypatch.setattr(pubg, "kept", lambda mid: {} if mid in ("a0", "a1") else pe.summarize_match(ageing[mid]))
+    assert [pe.lobby_key(lb) for lb in pe.PubgEsports().lobbies()] == ["as-pgsc4t:2026-10-13:1", "as-pgsc4t:2026-10-13:2", "as-pgsc4t:2026-10-14:1"]
 
 
 @pytest.mark.skipif(not os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL"), reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
