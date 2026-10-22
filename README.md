@@ -289,7 +289,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   id they share), and is made from its board the first time it's seen before the start: a poll of a followed
   game, a look at its match page (which lists its questions), or the worker's read of a fan's game, or one of
   Today's big games, coming up within a day (`prepare_questions`, every ten minutes, at most once every two hours a
-  game till its board asks: a big game's card says "Call it" to a fan who follows nobody). It
+  game till its board asks: a big game's card says "Call it" to a fan who follows nobody). A game with no start
+  time is asked nothing till it has one (nothing would close it as it began); one asked before that takes a pick
+  only on a board a few minutes fresh that says the game's still to come. It
   closes as its game or map starts (`Sport.closed`; a first question's start time closes it too, and the server
   refuses a pick after that) and settles from the board (`Sport.answer`): a right pick scores 100 less the share of
   fans who picked the same, at least 10; a wrong one 0; a map the series didn't need is voided, as is a question
@@ -303,14 +305,19 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   joining a league needs one (`prediction_league`, `prediction_member`: a six-letter invite code, a name the
   friends see, never the email). Fans see how everyone split once they've picked; friends' picks show in the
   league once the question's closed; a league's table is its members' points on what settled since it was made.
-  The split shows to a fan once they've picked and at least 20 have, as shares only while it's open (counts, or
-  fewer picks, would tell them a friend's pick), and to everyone once the question's closed; picks on questions still open move into an account on sign-in, those
+  The split shows to a fan once they've picked and at least 20 have, and to everyone once the question's closed.
+  While it's open it's shares of the split as it stood when last refreshed (at 20 picks, then each 10 more, a tenth
+  more past a hundred: `Question.split`), with that count, never the exact one: else its moves would tell a fan a
+  friend's pick. Only picks from an account, or from a fan whose cookie came with the pick, count in the split and
+  in what a right pick scores (`Pick.counted`): a request without a cookie is a new fan, whose pick is theirs and
+  scored but moves nobody else's numbers. Picks on questions still open move into an account on sign-in, those
   already under way stay the device's (no calling a game three ways and signing in on the right browser). A game
   whose source is off asks nothing, and picks are limited per address. In the app: "Call it" on a match page (beside the
   game on a wide screen, in the side column) and on a campaign page (its players' games); on Today and in the side
   column, a game's card says "Call it" until the fan has, then their pick, then "You called it · +38" or what they said
   (`GET /api/me/predictions`, `web/src/components/Calls.tsx`); `/me/leagues`, `/league/<code>` and the invite `/j/<code>`, whose sign-in comes back
-  to it. A question's own link (`/match/<game>?q=<id>`, its card's Share) previews its split (`share.of_question`).
+  to it. A question's own link (`/match/<game>?q=<id>`, its card's Share) previews the question, and its split once
+  it's closed (`share.of_question`).
   The admin panel's Users tab counts leagues (and those of three or more), invites shared and opened, and fans who
   picked on two game days. Pushes (`sports_follow/predictions_push.py`, the worker every minute): "Make your pick" two
   hours before a campaign's game (`campaigns.player_ids`: its players' game within three hours of one on its

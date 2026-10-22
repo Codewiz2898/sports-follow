@@ -6,9 +6,9 @@ What's asked is each sport's (Sport.asks, read off a game's board): a chess game
 match's winner, each map of a team esports series. A question belongs to the game, whichever of its fixtures shows
 it (a chess board is one of each player's: Sport.board tells the game apart), and is made the first time its board
 is seen before the start: a poll of a followed game (structured.apply_poll), a look at its match page (match.view),
-or the worker's read of a fan's game, or one of Today's big games, coming up (prepare, made). It closes as the game,
-or its map, starts (a first question's start time closes it too, should a poll be late: sweep), and a pick after that
-is refused.
+or the worker's read of a fan's game, or one of Today's big games, coming up (prepare, made); a game with no start
+time is asked nothing till it has one. It closes as the game, or its map, starts (a first question's start time
+closes it too, should a poll be late: sweep), and a pick after that is refused.
 
 A fan picks without an account: picks are kept under the fan id, as follows are, and move into the account they
 sign in to (merge). A league needs one. A game with a pick waiting on it is polled as a followed game is (watched)
@@ -21,7 +21,11 @@ picks unscored; one still unanswered STALE past its start is voided too (sweep).
 settles again.
 
 Fans see how everyone split once they've picked, or once the question's closed; friends' picks in a league once
-it's closed. A league's table is its members' points on the questions settled since it was made.
+it's closed (before, only who has). While it's open the split shows as it stood when last refreshed, once SPLIT_FROM
+had picked and again each time SPLIT_EVERY more have, so it never moves with one friend's pick. Only picks that count
+are in it and in what a right pick scores: an account's, or a fan's whose cookie came with it, not one from a fan the
+request itself made up, which is theirs and scored but moves nobody else's numbers (Pick.counted). A league's table
+is its members' points on the questions settled since it was made.
 """
 
 from __future__ import annotations
@@ -44,6 +48,7 @@ from .models import Event, EventPlayer, EventState, EventTeam, Follow, League, L
 FLOOR = 10  # a right pick scores at least this: one everyone made is still worth something
 STALE = timedelta(days=3)  # a question unanswered this long past its game's start (or its making, with none) is voided
 SPLIT_FROM = 20  # picks before an open question's split shows: with fewer, its moves would tell a fan a friend's pick
+SPLIT_EVERY = 10  # and more picks before it's refreshed (a tenth more, from a hundred on): a friend's is one of them
 FRESH = timedelta(minutes=3)  # a game under way takes a later map's pick only on a board this fresh: never after it's begun
 POSTPONED_KEEP = timedelta(days=30)  # a postponed game's questions wait this long for its new date before the sweep voids them
 OPEN, CLOSED, SETTLED, VOIDED = "open", "closed", "settled", "void"
@@ -56,6 +61,7 @@ PREPARE_MOST = 10  # games read a run
 RECENT = timedelta(hours=36)  # Today lists a fan's picks settled since
 OPEN_MOST = 60  # and this many questions still open at most: their games' and Today's big games'
 LEAGUES = 20  # leagues a fan is in at most
+LEAGUE_CALLS = 20  # a league's page's calls still to settle at most, and as many settled lately
 MEMBERS = 50  # fans in a league at most
 NAME = 40  # a member's name, in characters
 LEAGUE_NAME = 60
@@ -64,6 +70,7 @@ CODE_LEN = 6
 OPENED_ONCE = 86400  # an invite opened again by the same fan within this many seconds counts once
 SHUT = "Picks for this one are closed: it's started."
 STALE_BOARD = "This one's game is under way and its latest score hasn't come in: open the game and try again in a minute."
+NO_START = "This one's game has no start time yet: open the game and try again in a minute."
 OFF = "Picks for this sport are off for now."
 NO_POLL = f"Picks aren't open for this game: {APP_NAME} can't follow it live."
 SIGN_IN = "Sign in to make or join a league."
@@ -120,18 +127,20 @@ def _rules(sport: str | None, state: dict[str, Any]) -> sports.Sport:
 
 def ensure(db: Session, system: str, fixture: str, sport: str | None, status: str | None, state: dict[str, Any], start: datetime | None,
            title: str, keys: list[str], event_id: int | None = None, now: datetime | None = None) -> tuple[str, list[Question]]:
-    """A game's questions: those its sport asks of its board, made now if it hasn't started (each one closed by now
-    left out), and those made before, by their place in it; each knowing every event key it's shown under and, where
-    one's given, the event it's polled by. A game to come whose start moved has its first question's close move
-    with it while it's open; one closed stays closed (friends' picks may have shown). Returns the game's key and its
-    questions."""
+    """A game's questions: those its sport asks of its board, made now if it hasn't started and its start is known
+    (each one closed by now left out), and those made before, by their place in it; each knowing every event key
+    it's shown under and, where one's given, the event it's polled by. A game to come whose start moved has its
+    first question's close move with it while it's open; one closed stays closed (friends' picks may have shown).
+    Returns the game's key and its questions."""
     now = now or _now()
     rules = _rules(sport, state)
     game = game_key(system, fixture, rules.question_board(state))
     asks = {a.key: a for a in rules.asks(state)} if status in PRE_START else {}
     rows = list(db.scalars(select(Question).where(Question.game == game).order_by(Question.position, Question.id)))
-    # Not one closed already: by its board, or a first one by its start time (a source late to say it began).
-    new = [a for a in asks.values() if a.key not in {q.ask for q in rows} and not rules.closed(a.key, status, state) and not (a.first and start is not None and start <= now)]
+    # Not one closed already: by its board, or a first one by its start time (a source late to say it began). Nor
+    # any of a game with no start time: nothing would close it as it begins (its event isn't polled till it has
+    # one), so it would take picks after its result was known. Its questions come once a read gives it a start.
+    new = [a for a in asks.values() if start is not None and a.key not in {q.ask for q in rows} and not rules.closed(a.key, status, state) and not (a.first and start <= now)]
     for ask in new:
         db.execute(insert(Question).values(
             game=game, ask=ask.key, keys=keys, event_id=event_id, sport=rules.key, match=f"{system}/{fixture}"[:100], title=ask.title[:200],
@@ -292,7 +301,8 @@ def settle(db: Session, rows: list[Question], rules: sports.Sport, status: str |
 
 
 def score(db: Session, q: Question, answer: str, now: datetime) -> None:
-    """Settle a question with its answer: each pick scored by how many made it (points), or, voided, none."""
+    """Settle a question with its answer: each pick scored by how many of those that count made it (points), its
+    own too if it doesn't count; or, voided, none."""
     q.answer, q.settled_at, q.closed_at = answer, now, q.closed_at or now
     q.told_at = None  # settled again (a void a winner came for, a corrected result): its fans are told again
     if answer == sports.VOID:
@@ -300,7 +310,7 @@ def score(db: Session, q: Question, answer: str, now: datetime) -> None:
         db.execute(update(Pick).where(Pick.question_id == q.id).values(points=None))
         return
     q.status = SETTLED
-    counts: dict[str, int] = {option: n for option, n in db.execute(select(Pick.option, func.count()).where(Pick.question_id == q.id).group_by(Pick.option))}
+    counts = _counts(db, [q.id]).get(q.id, {})
     worth = points(counts.get(answer, 0), sum(counts.values()))
     db.execute(update(Pick).where(Pick.question_id == q.id).values(points=case((Pick.option == answer, worth), else_=0)))
 
@@ -354,10 +364,13 @@ def is_open(q: Question, now: datetime) -> bool:
     return q.status == OPEN and not (q.locks_at is not None and q.locks_at <= now)
 
 
-def pick(db: Session, fan: str, question_id: int, option: str, now: datetime | None = None) -> Question:
+def pick(db: Session, fan: str, question_id: int, option: str, now: datetime | None = None, counted: bool = True) -> Question:
     """A fan's answer to a question, or a new one in place of theirs, while it's open. A question with no event to
-    be settled by yet gets its game's (matches.event_for), so the poller follows it from now on. Raises Refused for
-    no such question, one closed, an answer it doesn't offer, or a game no running source can follow."""
+    be settled by yet gets its game's (matches.event_for), so the poller follows it from now on. `counted`: whether
+    it counts in the split and in what right picks score (server.make_pick: an account's, or a fan's whose cookie
+    came with it); one that doesn't is still theirs, and scored. Raises Refused for no such question, one closed, an
+    answer it doesn't offer, a game no running source can follow, or one with no start time that a fresh board
+    doesn't say is still to come."""
     from . import matches  # the event a followed game's polled by (matches reads match, which reads Live now)
 
     now = now or _now()
@@ -380,9 +393,43 @@ def pick(db: Session, fan: str, question_id: int, option: str, now: datetime | N
         raise Refused(409, NO_POLL)  # its source is off for now: a pick would never be settled
     if q.locks_at is None and q.starts_at is not None and q.starts_at <= now and not _fresh(db, q, now):
         raise Refused(409, STALE_BOARD)  # a later map of a game under way: only a fresh board says it hasn't begun
-    db.execute(insert(Pick).values(question_id=q.id, fan_id=fan, option=option)
-               .on_conflict_do_update(index_elements=["question_id", "fan_id"], set_={"option": option, "updated_at": func.now()}))
+    if q.starts_at is None and not (_fresh(db, q, now) and _to_come(db, q)):
+        raise Refused(409, NO_START)  # asked before a start was needed: nothing closes it, so only a fresh board can
+    made = insert(Pick).values(question_id=q.id, fan_id=fan, option=option, counted=counted)
+    db.execute(made.on_conflict_do_update(index_elements=["question_id", "fan_id"], set_={"option": option, "counted": Pick.counted | made.excluded.counted, "updated_at": func.now()}))
+    _refresh(db, q)
     return q
+
+
+def _to_come(db: Session, q: Question) -> bool:
+    """Whether a game is still to start as far as it's known here: its event, its last poll's board and its match
+    page's last read all say so (or say nothing)."""
+    from . import match
+
+    event_id = q.event_id
+    status = db.scalar(select(Event.status).where(Event.id == event_id)) if event_id is not None else None
+    polled = db.scalar(select(EventState.status).where(EventState.event_id == event_id).order_by(EventState.as_of.desc()).limit(1)) if event_id is not None else None
+    system, _, fixture = q.match.partition("/")
+    read = ((match.last_read(system, fixture) or {}).get("game") or {}).get("status")
+    return all(s is None or s in TO_COME for s in (status, polled, read))
+
+
+def _counts(db: Session, ids: list[int]) -> dict[int, dict[str, int]]:
+    """How many picks that count (Pick.counted) each answer of these questions has."""
+    out: dict[int, dict[str, int]] = {}
+    for qid, option, n in db.execute(select(Pick.question_id, Pick.option, func.count()).where(Pick.question_id.in_(ids), Pick.counted).group_by(Pick.question_id, Pick.option)):
+        out.setdefault(qid, {})[option] = n
+    return out
+
+
+def _refresh(db: Session, q: Question) -> None:
+    """An open question's split as fans see it (Question.split), taken once SPLIT_FROM have picked and again each time
+    SPLIT_EVERY more have (a tenth more, from a hundred on): a friend's pick only ever moves it among others', never by
+    itself. A pick changed or taken back moves it no sooner."""
+    counts = _counts(db, [q.id]).get(q.id, {})
+    total, last = sum(counts.values()), sum((q.split or {}).values())
+    if total >= (last + max(SPLIT_EVERY, last // 10) if q.split else SPLIT_FROM):
+        q.split = counts
 
 
 def _fresh(db: Session, q: Question, now: datetime) -> bool:
@@ -410,34 +457,34 @@ def unpick(db: Session, fan: str, question_id: int, now: datetime | None = None)
 # ---------------------------------------------------------------- what the app shows
 
 
-def shown(db: Session, fan: str | None, rows: list[Question], now: datetime, public: bool = False) -> list[dict[str, Any]]:
+def shown(db: Session, fan: str | None, rows: list[Question], now: datetime) -> list[dict[str, Any]]:
     """Questions as the app shows them, of sports that are on: each answer with how fans split on it, once this fan
     has picked (and SPLIT_FROM have, so it can't tell them a friend's pick) or the question's closed (the crowd doesn't
-    pick for them), as shares while it's open and with counts once closed;
-    their own pick, what it scored or would score now, and the answer once it's settled. `public`: a link preview's,
-    whose split shows to anyone once SPLIT_FROM have picked (the picker shared it)."""
+    pick for them), in the picks that count (Pick.counted). While it's open, as shares of the split as last refreshed
+    (Question.split) and how many picks that was, never the exact count; once closed, as it is, with counts. Their own
+    pick, what it scored or would score now, and the answer once it's settled."""
     rows = [q for q in rows if sports.on(q.sport)]  # a sport turned off isn't offered
     ids = [q.id for q in rows]
     if not ids:
         return []
-    counts: dict[int, dict[str, int]] = {}
-    for qid, option, n in db.execute(select(Pick.question_id, Pick.option, func.count()).where(Pick.question_id.in_(ids)).group_by(Pick.question_id, Pick.option)):
-        counts.setdefault(qid, {})[option] = n
+    counts = _counts(db, ids)
     mine = {qid: (option, pts) for qid, option, pts in db.execute(select(Pick.question_id, Pick.option, Pick.points).where(Pick.question_id.in_(ids), Pick.fan_id == fan))} if fan else {}
     out = []
     for q in rows:
         keys = [o["key"] for o in q.options or []]
-        c = counts.get(q.id, {})
-        total = sum(c.get(k, 0) for k in keys)
         live = is_open(q, now)
+        # While it's open, the split as last refreshed: the counts as they are, or shares moving with each pick, would
+        # tell a friend's pick to a fan watching them.
+        c = {k: int(n) for k, n in (q.split or {}).items()} if live else counts.get(q.id, {})
+        total = sum(c.get(k, 0) for k in keys)
         own = mine.get(q.id)
-        split = shares(c, keys) if ((own is not None or public) and total >= SPLIT_FROM) or not live else None
+        split = shares(c, keys) if (own is not None and total >= SPLIT_FROM) or not live else None
         out.append({
             "id": q.id, "ask": q.ask, "title": q.title, "game": q.game_title, "sport": q.sport, "match": q.match,
             "status": q.status if q.status != OPEN or live else CLOSED, "locks_at": _iso(q.locks_at), "answer": q.answer,
-            "picks": total,
+            "picks": total if q.split or not live else None,  # while it's open, as many as the split was refreshed at
             "split_from": SPLIT_FROM,
-            # Shares only while it's open: exact counts moving as friends pick would tell their picks.
+            # Shares only while it's open: exact counts would tell friends' picks.
             "options": [{"key": o["key"], "label": o["label"], **({"share": split[o["key"]]} if split is not None else {}), **({"picks": c.get(o["key"], 0)} if not live else {})}
                         for o in q.options or []],
             "mine": own[0] if own else None,
@@ -464,10 +511,11 @@ def for_page(db: Session, fan: str | None, system: str, fixture: str, page: dict
 
 
 def public(db: Session, question_id: int, now: datetime | None = None) -> dict[str, Any] | None:
-    """A question as its link preview shows it to anyone (share.of_question): its split, once SPLIT_FROM have picked
-    or it's closed. None for no such question, or one of a sport that's off."""
+    """A question as its link preview shows it to anyone (share.of_question): its split once it's closed; while it's
+    open, the question itself (its split is for those who've picked it). None for no such question, or one of a sport
+    that's off."""
     q = db.get(Question, question_id)
-    found = shown(db, None, [q], now or _now(), public=True) if q is not None else []
+    found = shown(db, None, [q], now or _now()) if q is not None else []
     return found[0] if found else None
 
 
@@ -653,8 +701,9 @@ def table(db: Session, league: League) -> list[dict[str, Any]]:
 
 def league(db: Session, fan: str, code: str, now: datetime | None = None) -> dict[str, Any]:
     """A league's page, for its members: its table, and the questions its members have picked that are still to
-    settle or settled lately, each with who picked what once it's closed (before, only who has picked). Raises
-    Refused for no such league, or one this fan isn't in."""
+    settle, soonest first, then those settled lately, newest first (LEAGUE_CALLS of each at most, of sports that are
+    on), each with who picked what once it's closed (before, only who has picked). Raises Refused for no such
+    league, or one this fan isn't in."""
     now = now or _now()
     found = find(db, code)
     if found is None or db.get(LeagueMember, (found.id, fan)) is None:
@@ -662,13 +711,21 @@ def league(db: Session, fan: str, code: str, now: datetime | None = None) -> dic
     rows = table(db, found)
     names = {r["fan"]: r["name"] for r in rows}
     asked = select(Pick.question_id).where(Pick.fan_id.in_(list(names)))
-    questions = [q for q in db.scalars(select(Question).where(Question.id.in_(asked), or_(Question.status.in_(UNSETTLED), Question.settled_at >= now - RECENT))
-                                       .order_by(Question.locks_at.asc().nulls_last(), Question.game, Question.position).limit(20)) if sports.on(q.sport)]
+    theirs = [Question.id.in_(asked), or_(Question.status.in_(UNSETTLED), Question.settled_at >= now - RECENT)]
+    # Sports turned off are left out before the cut, and the calls still to settle come first: else members' calls
+    # settled lately take every place, and the open ones (whose "still to pick" is the page's point) go.
+    theirs.append(Question.sport.not_in([s for s in db.scalars(select(Question.sport).where(*theirs).distinct()) if not sports.on(s)]))
+    coming = list(db.scalars(select(Question).where(*theirs, Question.status.in_(UNSETTLED))
+                             .order_by(Question.locks_at.asc().nulls_last(), Question.game, Question.position).limit(LEAGUE_CALLS)))
+    settled = list(db.scalars(select(Question).where(*theirs, Question.status.not_in(UNSETTLED))
+                              .order_by(Question.settled_at.desc(), Question.game, Question.position).limit(LEAGUE_CALLS)))
+    questions = {q.id: q for q in [*coming, *settled]}
     picks: dict[int, dict[str, str]] = {}
-    for qid, who, option in db.execute(select(Pick.question_id, Pick.fan_id, Pick.option).where(Pick.question_id.in_([q.id for q in questions]), Pick.fan_id.in_(list(names)))):
+    for qid, who, option in db.execute(select(Pick.question_id, Pick.fan_id, Pick.option).where(Pick.question_id.in_(list(questions)), Pick.fan_id.in_(list(names)))):
         picks.setdefault(qid, {})[who] = option
-    shown_ = shown(db, fan, questions, now)
-    for q, item in zip(questions, shown_):
+    shown_ = shown(db, fan, list(questions.values()), now)
+    for item in shown_:
+        q = questions[item["id"]]
         made = picks.get(q.id, {})
         hidden = is_open(q, now)
         item["friends"] = [{"name": names[f], "you": f == fan, **({"option": made[f]} if f == fan or not hidden else {})} for f in names if f in made]
@@ -709,17 +766,18 @@ def forget(db: Session, fan: str) -> None:
 
 def numbers(db: Session) -> dict[str, int]:
     """How it's doing, for the admin panel: leagues and those of three or more, invites shared and opened, fans who
-    picked and their picks, and those who picked on two game days or more (they came back for another game)."""
+    picked and their picks, and those who picked on two game days or more (they came back for another game). Of the
+    picks that count (Pick.counted): fans a request made up aren't fans who came."""
     sizes = select(LeagueMember.league_id, func.count().label("n")).group_by(LeagueMember.league_id).subquery()
     leagues, shared, opened = db.execute(select(func.count(), func.coalesce(func.sum(League.shared), 0), func.coalesce(func.sum(League.opened), 0)).select_from(League)).one()
     days = select(Pick.fan_id, func.count(func.distinct(func.date(func.coalesce(Question.locks_at, Question.closed_at, Pick.created_at)))).label("d")) \
-        .join(Question, Question.id == Pick.question_id).group_by(Pick.fan_id).subquery()
+        .join(Question, Question.id == Pick.question_id).where(Pick.counted).group_by(Pick.fan_id).subquery()
     return {
         "leagues": int(leagues),
         "leagues_3": int(db.scalar(select(func.count()).select_from(sizes).where(sizes.c.n >= 3)) or 0),
         "invites_shared": int(shared),
         "invites_opened": int(opened),
-        "pickers": int(db.scalar(select(func.count(func.distinct(Pick.fan_id)))) or 0),
-        "picks": int(db.scalar(select(func.count()).select_from(Pick)) or 0),
+        "pickers": int(db.scalar(select(func.count(func.distinct(Pick.fan_id))).where(Pick.counted)) or 0),
+        "picks": int(db.scalar(select(func.count()).select_from(Pick).where(Pick.counted)) or 0),
         "game_day_returns": int(db.scalar(select(func.count()).select_from(days).where(days.c.d >= 2)) or 0),
     }

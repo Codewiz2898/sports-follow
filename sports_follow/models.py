@@ -779,6 +779,10 @@ class Question(Base):
     # When its pushes went (predictions_push.py): "Make your pick" before its game, how each pick went after.
     reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     told_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Its split as fans see it while it's open: the counted picks of each answer when it was last refreshed, which is
+    # only once enough more have picked that a friend's one pick isn't told by it (predictions.pick). None till
+    # predictions.SPLIT_FROM have.
+    split: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = _now()
 
 
@@ -794,6 +798,10 @@ class Pick(Base):
     fan_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
     option: Mapped[str] = mapped_column(String(64))
     points: Mapped[int | None] = mapped_column(Integer)
+    # Whether it counts in its question's split and in what right picks score: an account's, or a fan's whose cookie
+    # came with it. Not one from a fan the request itself made up, which is theirs and scored, but moves nobody
+    # else's numbers: a script with no cookies can't stuff a split (predictions.pick).
+    counted: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     created_at: Mapped[datetime] = _now()
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
