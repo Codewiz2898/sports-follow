@@ -59,7 +59,10 @@ RECENT = timedelta(days=14)  # PUBG keeps matches this long
 # minutes with 16 teams and at most 12 finishes for anyone; these bounds keep those and drop the rest.
 MIN_MINUTES, MIN_TEAMS, MAX_FINISHES = 22, 8, 25
 LOBBY_GAP = timedelta(hours=4)  # a longer break between matches starts a new lobby
-OVER_AFTER = timedelta(minutes=90)  # no new match this long after the last one ended: the lobby is over
+# No new match this long after the last one ended: the lobby is over. Not before a match that began within LOBBY_GAP
+# of the last one (and so would join it) has been played and listed: a lobby called over during a long break (a
+# technical delay, a stage change) and then joined by the day's later matches kept its earlier standings for good.
+OVER_AFTER = LOBBY_GAP + timedelta(minutes=30)
 
 
 def _time(raw: str | None) -> datetime | None:

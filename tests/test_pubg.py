@@ -99,13 +99,29 @@ def test_a_lobby_on_now_and_over_later():
     line = live.lines[PRO]  # TGLTN's own numbers over the lobby, beside 4AM's standing
     assert line.headline == "7 finishes · 702 dmg"  # 602.4 and 100.4 damage, each rounded
     assert line.stats[:4] == [{"label": "Team place", "value": "2nd"}, {"label": "Team points", "value": "21"}, {"label": "Assists", "value": "2"}, {"label": "Knocks", "value": "2"}]
-    over = pe.parse_lobby(lobby, T0 + timedelta(hours=5))  # no new match for 90 minutes after the last ended
+    over = pe.parse_lobby(lobby, T0 + timedelta(hours=6))  # no new match for OVER_AFTER (4.5 h) after the last ended
     assert (over.status, over.score_label, over.clock_label) == ("final", "DNS win · 27 pts", "Final standings")
-    f = pe.parse_fixture(lobby, T0 + timedelta(hours=5))
+    f = pe.parse_fixture(lobby, T0 + timedelta(hours=6))
     assert (f.source_id, f.title, f.competition, f.status, f.locator) == ("as-pgsc4t:2026-10-13:1", "PUBG Global Series · Day 1", "PUBG Global Series", "final", {"tournament": "as-pgsc4t", "day": "2026-10-13", "n": 1})
     assert f.sport == "" and pe.PubgEsports().sports == ("pubg",)  # its source's one sport: PUBG
     assert pe.PubgEsports().result_label(f, ["4AM"]) == "2nd of 8 · 21 pts"
     assert len(f"pubg_esports:{f.source_id}") <= 64
+
+
+def test_a_long_break_on_a_match_day_doesnt_end_the_lobby():
+    # BUG-130: a break of 90 minutes to 4 hours called the lobby over, with its final standings and alerts, and the
+    # matches after it joined that same lobby, which the poller no longer read: the rest of the day never reached fans.
+    lobby = _lobby(GAME1, GAME2)  # match 2 began at 7:10 and ended at 7:40
+    during = T0 + timedelta(hours=3, minutes=30)  # over two hours into a break
+    assert pe.parse_lobby(lobby, during).status == "live" and pe.parse_fixture(lobby, during).result is None
+    # The latest a match can begin and still be one of this lobby's (LOBBY_GAP after the last began), played and listed.
+    joins = T0 + timedelta(minutes=40) + pe.LOBBY_GAP - timedelta(minutes=1)
+    third = _doc("m3", joins, GAME1_PLACES, GAME1_KILLS, duration=35 * 60)
+    [later] = pe.group_lobbies("as-pgsc4t", [pe.summarize_match(d) for d in (GAME1, GAME2, third)])
+    assert pe.lobby_key(later) == pe.lobby_key(lobby) and len(later["matches"]) == 3
+    listed = joins + timedelta(minutes=35 + 15)
+    assert pe.parse_lobby(lobby, listed).status == "live"  # it was still on when its third match came in
+    assert pe.parse_lobby(later, listed + pe.OVER_AFTER).status == "final"
 
 
 def test_tournament_names_from_their_ids():
@@ -128,7 +144,7 @@ def test_a_chicken_dinner_and_the_lobby_result_reach_the_player():
 
     found = moments.detect("PUBG", "TGLTN", PRO, seen(one), seen(two))
     assert [(f.kind, f.title) for f in found] == [("game", "TGLTN: 4AM 4th in match 2")]
-    over = pe.parse_lobby(_lobby(GAME1, GAME2), T0 + timedelta(hours=5))
+    over = pe.parse_lobby(_lobby(GAME1, GAME2), T0 + timedelta(hours=6))
     [final] = moments.detect("PUBG", "TGLTN", PRO, seen(two), seen(over))
     assert final.title == "TGLTN: 4AM finish 2nd · 21 pts"
 
