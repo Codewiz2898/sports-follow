@@ -305,7 +305,10 @@ def follow(db: Session, fan: str, team_id: int) -> Team:
     db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"team-follow:{fan}", 0))))
     if db.scalar(select(TeamFollow.id).where(TeamFollow.fan_id == fan, TeamFollow.team_id == team.id)) is not None:
         return team
-    if counted(db, fan) >= MAX:
+    n = counted(db, fan)
+    if n > MAX:  # a sport turned back on (counted)
+        raise Refused(429, f"You follow {n} teams, more than the {MAX} you can: unfollow {n - MAX + 1} to follow this.")
+    if n == MAX:
         raise Refused(429, f"You follow {MAX} teams already: unfollow one to follow this.")
     db.execute(insert(TeamFollow).values(fan_id=fan, team_id=team.id, alert_rules={}).on_conflict_do_nothing())
     return team
@@ -313,7 +316,9 @@ def follow(db: Session, fan: str, team_id: int) -> Team:
 
 def counted(db: Session, fan: str) -> int:
     """The teams a fan follows that count toward MAX: those of the sports that run. A turned-off sport's stay
-    followed, out of sight (mine), and the fan can't unfollow them to make room."""
+    followed, out of sight (mine), and the fan can't unfollow them to make room. So a sport turned back on can leave a
+    fan over MAX (BUG-295): they keep every team, and follow another once they're under it again (follow says how
+    many to unfollow)."""
     return db.scalar(select(func.count()).select_from(TeamFollow).join(Team, Team.id == TeamFollow.team_id)
                      .where(TeamFollow.fan_id == fan, Team.sport.in_(sports.running_keys()))) or 0
 

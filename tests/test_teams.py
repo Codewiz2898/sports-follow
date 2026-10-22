@@ -902,7 +902,8 @@ def test_a_turned_off_sports_hidden_players_take_none_of_the_fans_room(db, monke
 
     monkeypatch.setitem(server.state, "redis", Cards())
     people = [Player(id=i, slug=f"p{i}", name=name, sport=sport) for i, (name, sport) in enumerate([("Magnus Carlsen", "Chess"), ("Gukesh D", "Chess"),
-                                                                                                    ("Bukayo Saka", "Football"), ("Cole Palmer", "Football")], 1)]
+                                                                                                    ("Bukayo Saka", "Football"), ("Cole Palmer", "Football"),
+                                                                                                    ("Declan Rice", "Football")], 1)]
     db.add_all(people)
     db.flush()
     db.add_all([PlayerCard(player_id=p.id, status="ready", card={"player_id": p.id, "player": {"name": p.name, "sport": p.sport}}) for p in people])
@@ -914,6 +915,10 @@ def test_a_turned_off_sports_hidden_players_take_none_of_the_fans_room(db, monke
     monkeypatch.setattr(sports, "ENABLED", sports.ALL)
     assert follows.counted(db, "fan") == 4
     assert asyncio.run(server.follow(None, {"player_id": 4}, "fan"))["player_id"] == 4  # pyright: ignore[reportArgumentType]: one followed already
+    # BUG-295: over the cap, the fan is told how many to unfollow for another.
+    with pytest.raises(server.HTTPException) as over:
+        asyncio.run(server.follow(None, {"player_id": 5}, "fan"))  # pyright: ignore[reportArgumentType]
+    assert (over.value.status_code, over.value.detail) == (429, "You follow 4 players, more than the 2 you can: unfollow 3 to follow another.")
 
 
 @needs_db
@@ -1023,3 +1028,14 @@ def test_a_devices_teams_of_a_sport_turned_off_come_into_the_account_without_tak
     assert teams.merge(db, "phone", "account") == 0
     db.commit()
     assert set(db.scalars(select(TeamFollow.team_id).where(TeamFollow.fan_id == "account"))) == {team(db, ARS).id, team(db, CHE).id, lakers.id}
+    # BUG-295: back on, the account follows more than MAX. It keeps them all, and is told how many to unfollow for another.
+    monkeypatch.setattr(sports, "ENABLED", sports.ALL)
+    assert teams.counted(db, "account") == 3
+    with pytest.raises(teams.Refused) as over:
+        teams.follow(db, "account", team(db, TOT).id)
+    assert (over.value.status, over.value.message) == (429, "You follow 3 teams, more than the 2 you can: unfollow 2 to follow this.")
+    db.rollback()
+    teams.unfollow(db, "account", lakers.id)
+    with pytest.raises(teams.Refused) as full:
+        teams.follow(db, "account", team(db, TOT).id)
+    assert (full.value.status, full.value.message) == (429, "You follow 2 teams already: unfollow one to follow this.")

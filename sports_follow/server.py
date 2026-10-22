@@ -1425,7 +1425,10 @@ def _room_to_follow(db: Session, fan: str, player_id: int | None = None) -> None
         db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(f"follow:{fan}", 0))))
         if db.scalar(select(Follow.id).where(Follow.fan_id == fan, Follow.player_id == player_id)) is not None:
             return
-    if follows.counted(db, fan) >= follows.MAX:
+    n = follows.counted(db, fan)
+    if n > follows.MAX:  # a sport turned back on (follows.py)
+        raise HTTPException(429, f"You follow {n} players, more than the {follows.MAX} you can: unfollow {n - follows.MAX + 1} to follow another.")
+    if n == follows.MAX:
         raise HTTPException(429, f"You follow {follows.MAX} players already: unfollow one to follow another.")
 
 
