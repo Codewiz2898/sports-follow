@@ -37,7 +37,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, case, delete, exists, func, or_, select, union, update
+from sqlalchemy import ColumnElement, and_, case, delete, exists, func, or_, select, union, update
 from sqlalchemy.dialects.postgresql import array, insert
 from sqlalchemy.orm import Session, aliased
 
@@ -366,7 +366,7 @@ def moved(db: Session, event: Event, start: datetime | None, status: str | None 
         db.execute(update(Question).where(theirs, Question.status == OPEN, Question.locks_at > start).values(locks_at=start))
 
 
-def _shut() -> Any:
+def _shut() -> ColumnElement[bool]:
     """A question shut with nothing to show for it: closed, or voided by the sweep (its answer left empty), and
     picked by nobody, so closing it showed no friend's pick and no split. Shut by its start time though the game
     didn't start then (put back with no word in time, or a big game nobody picked, which has no event to be held by),
@@ -480,7 +480,9 @@ def _to_come(db: Session, q: Question) -> bool:
 def _counts(db: Session, ids: list[int], unleagued: bool = False, every: bool = False) -> dict[int, dict[str, int]]:
     """How many picks that count (Pick.counted) each answer of these questions has; `unleagued`, only those of fans
     in no league (an open question's split: _refresh); `every`, those that don't count too (score)."""
-    where = [Pick.question_id.in_(ids)] if every else [Pick.question_id.in_(ids), Pick.counted]
+    where: list[ColumnElement[bool]] = [Pick.question_id.in_(ids)]
+    if not every:
+        where.append(Pick.counted.is_(True))
     if unleagued:
         where.append(~exists().where(LeagueMember.fan_id == Pick.fan_id))
     out: dict[int, dict[str, int]] = {}
