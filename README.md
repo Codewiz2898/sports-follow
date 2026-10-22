@@ -734,8 +734,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   filters (embeddable, public, not age-restricted, not made for kids (`status.madeForKids`: YouTube's III.E.4.j),
   playing in India (`SPORTS_FOLLOW_FEED_COUNTRY`), not live, 1 to 20 minutes)
   in `feed_candidates`, one row per player and video, which goes with the player. A day later each is read
-  again for its pace, and every stored video is read again weekly and dropped once removed, private, no
-  longer embeddable, age-restricted, made for kids or blocked in India; while one is under two days old it's read again every six hours.
+  again for its pace, and every stored video of a followed or pool player is read again weekly and dropped once
+  removed, private, no longer embeddable, age-restricted, made for kids or blocked in India; while one is under two
+  days old it's read again every six hours. A player nobody follows any more and the pool has left isn't offered in
+  For you, and their videos, unread, go within a month.
   Some still won't play inside the app: a Content ID owner (LaLiga's, say) keeps them off other sites, which
   the Data API doesn't say (embeddable, no region rule). Only the player knows: YouTube's IFrame Player API
   says so (error 101 or 150, or 100 for one gone), and the apps then show "This one plays only on YouTube"

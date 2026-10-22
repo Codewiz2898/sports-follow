@@ -17,8 +17,9 @@ among its channel's latest.
 
 A day after a video is kept, its views and likes are read again (second_reads), so its pace can be told from the
 two reads; the curator reads them again every few hours while it's under two days old (fresh_reads), for the
-ranking (rank.py). Every stored video is read again once a week (check), and dropped once it's gone: removed, made
-private, no longer embeddable, age-restricted, made for kids, or no longer playing in FEED_COUNTRY.
+ranking (rank.py). Every stored video of a followed or pool player is read again once a week (check), and dropped
+once it's gone: removed, made private, no longer embeddable, age-restricted, made for kids, or no longer playing in
+FEED_COUNTRY. One nobody follows any more and the pool has left is never read again, and goes within a month.
 
 A candidate is one row per player and video, so it goes with the player (ON DELETE CASCADE).
 """
@@ -694,10 +695,12 @@ def fresh_reads(now: datetime | None = None) -> dict[str, int]:
 
 
 def check(now: datetime | None = None) -> dict[str, int]:
-    """Read again every stored video not read for RECHECK_AFTER, for each running video source, and drop those
-    gone (removed, private, no longer embeddable, age-restricted, made for kids, or blocked in FEED_COUNTRY). Run daily, so each video is read
-    once a week, and a run cut short is taken up the next day. A row no check has read for STALE_AFTER goes
-    too, whatever its source's state."""
+    """Read again every stored video not read for RECHECK_AFTER of a player someone follows or the pool holds
+    (feedpool.ids), for each running video source, and drop those gone (removed, private, no longer embeddable,
+    age-restricted, made for kids, or blocked in FEED_COUNTRY). Run daily, so each video is read once a week, and a
+    run cut short is taken up the next day. A row no check has read for STALE_AFTER goes too, whatever its source's
+    state: so a player nobody follows any more and the pool has left (whose videos aren't fetched either) has
+    theirs go within a month, unread."""
     now = now or datetime.now(timezone.utc)
     totals = {"read": 0, "dropped": 0}
     # Rows no check could read for a month (their source turned off, or without its key) go: what's shown must
@@ -709,9 +712,10 @@ def check(now: datetime | None = None) -> dict[str, int]:
     if stale:
         log.info("feed: dropped %d candidate(s) no check has read for %d days", len(stale), STALE_AFTER.days)
         totals["dropped"] += len(stale)
+    pool = feedpool.ids()
     for source in videos():
         with db.session() as session:
-            ids = _stale(session, source, now)
+            ids = _stale(session, source, now, pool)
         counts = _again(source, ids, now)
         totals["read"] += counts["read"]
         totals["dropped"] += counts["dropped"]
@@ -719,9 +723,11 @@ def check(now: datetime | None = None) -> dict[str, int]:
     return totals
 
 
-def _stale(session: Session, source: VideoSource, now: datetime) -> list[str]:
-    """The source's stored videos not read for RECHECK_AFTER, least lately read first."""
+def _stale(session: Session, source: VideoSource, now: datetime, pool: Iterable[int] = ()) -> list[str]:
+    """The source's stored videos not read for RECHECK_AFTER, least lately read first, of a player someone follows or
+    in the pool (these ids)."""
     oldest = func.min(FeedCandidate.checked_at)
+    wanted = or_(exists().where(Follow.player_id == FeedCandidate.player_id), FeedCandidate.player_id.in_(list(pool)))
     return list(session.scalars(
-        select(FeedCandidate.external_id).where(FeedCandidate.source == source.system).group_by(FeedCandidate.external_id)
+        select(FeedCandidate.external_id).where(FeedCandidate.source == source.system, wanted).group_by(FeedCandidate.external_id)
         .having(oldest <= now - RECHECK_AFTER).order_by(oldest).limit(READS_PER_RUN)))

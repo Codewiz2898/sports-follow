@@ -525,7 +525,8 @@ def layout() -> str:
 
 def others(db: Session, followed: Sequence[int], now: datetime) -> dict[int, int]:
     """The players For you mixes in for a fan who follows these, OTHERS at most, each with its tier, in order: of the
-    players the Feed serves a video of, in a sport that runs, those the fan doesn't follow; the fan's sports first
+    players the Feed serves a video of, in a sport that runs, followed by someone or in the pool now (feedpool.ids:
+    one who left it isn't read again, candidates.check, and soon goes), those the fan doesn't follow; the fan's sports first
     (every sport alike for one who follows nobody), then those with a big moment in the last BIG_FOR (a key one of
     BIG_MOMENT or more, not taken back), then the most followed on the app (by signed-in fans, then by anyone:
     models.followers), then by the pool's order (feedpool.ids:
@@ -543,7 +544,7 @@ def others(db: Session, followed: Sequence[int], now: datetime) -> dict[int, int
                                                         Moment.created_at <= now, Moment.kind.not_in(rank.NOT_A_HEAD), Moment.id.not_in(taken_back))))  # fmt: skip
     place = {pid: i for i, pid in enumerate(feedpool.ids())}
     pool = [(2 * (bool(theirs) and sports.family(sport) not in theirs) + (pid not in big), -accounts, -follows, place.get(pid, len(place)), pid)
-            for pid, sport, accounts, follows in rows if pid not in mine and sports.on(sport)]  # fmt: skip
+            for pid, sport, accounts, follows in rows if pid not in mine and sports.on(sport) and (follows or pid in place)]  # fmt: skip
     return {pid: tier for tier, *_, pid in sorted(pool)[:OTHERS]}
 
 

@@ -161,6 +161,24 @@ def test_for_yous_others_are_the_fans_sports_first_then_a_big_moment_today_then_
 
 
 @needs_db
+def test_for_yous_others_are_followed_by_someone_or_in_the_pool_now(db, monkeypatch):  # noqa: F811
+    # BUG-127: a pool player who left the pool, whom nobody follows, was offered in For you for as long as a row of
+    # theirs was served, though their videos are no longer read again (candidates.check) and go within a month.
+    from sqlalchemy import text
+
+    from sports_follow import feedpool
+
+    db.execute(text("TRUNCATE feed_candidates RESTART IDENTITY CASCADE"))
+    followed = made_player(db, "Virat Kohli", followers=1)
+    pooled = made_player(db, "Smriti Mandhana")
+    left = made_player(db, "Rohit Sharma")
+    monkeypatch.setattr(feedpool, "ids", lambda: [pooled])
+    assert set(feed.others(db, [], NOW)) == {followed, pooled}
+    monkeypatch.setattr(feedpool, "ids", lambda: [pooled, left])
+    assert set(feed.others(db, [], NOW)) == {followed, pooled, left}
+
+
+@needs_db
 def test_for_yous_most_followed_are_counted_by_signed_in_fans_and_anyones_follows_only_break_a_tie(db):  # noqa: F811
     # Nine cookies' follows (one script's) put a player into every fan's For you ahead of one a signed-in fan follows
     # (BUG-293). Accounts an admin hasn't blocked count, as starters count them; anyone's follows break a tie.
