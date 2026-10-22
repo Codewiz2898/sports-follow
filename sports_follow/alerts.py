@@ -43,7 +43,8 @@ phone, notifications should feel like one sports app, not a feed of every poll:
   fan's level now: one who has since set the player to results only or off isn't sent the correction.
   The moment leaves the story underneath.
 
-Quiet hours are per device, so notify.py applies them after this.
+Quiet hours are per device, so notify.py applies them after this; a push that arrived silent on every device in them is
+logged as silent, so it leaves the hour's sound and the game's to the pushes after it.
 """
 
 from __future__ import annotations

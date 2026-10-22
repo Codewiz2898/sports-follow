@@ -563,14 +563,18 @@ def _plan(db: Session, items: list[alerts.Item], now: datetime, taken_back: set[
     for fan, fan_devices in devices.items():
         heard = [told[m] for s in sent.get(fan, []) if s.event_id in games.get(fan, {}) or s.event_id in on_board for m in s.moment_ids if m in told]
         left: list[alerts.Item] = []
+        hushed = [quiet(d.timezone, d.quiet_start, d.quiet_end, now) for d in fan_devices]  # each device's quiet hours
         for p in alerts.plan(items, levels.get(fan, {}), muted.get(fan, set()), sent.get(fan, []), now, taken_back, games.get(fan, {}), heard, left):
-            row = Notification(fan_id=fan, event_id=p.event_id, player_id=p.player_id, moment_ids=p.moment_ids, kind=p.kind, lines=p.lines, loud=p.loud, devices=len(fan_devices), delivered=0, created_at=now)
+            # Logged as loud only where it makes a sound on a device: one that arrives silent in quiet hours on all of
+            # them leaves the hour's sound (alerts.LOUD_PER_HOUR) and the game's to the pushes after it (BUG-242).
+            row = Notification(fan_id=fan, event_id=p.event_id, player_id=p.player_id, moment_ids=p.moment_ids, kind=p.kind, lines=p.lines, loud=p.loud and not all(hushed),
+                               devices=len(fan_devices), delivered=0, created_at=now)
             db.add(row)
             db.flush()
             payload = {"id": row.id, "title": p.title, "body": p.body, "url": p.url, "tag": p.tag, "event_id": p.event_id, "player_id": p.player_id, "kind": p.kind, "loud": p.loud}
             android = {**payload, **_scorecard_or_none(p, drawn)}
-            for d in fan_devices:
-                jobs.append((row.id, (d.id, d.transport, d.endpoint, d.p256dh, d.auth), {**(android if d.transport == "fcm" else payload), "quiet": quiet(d.timezone, d.quiet_start, d.quiet_end, now)}, p.ttl, p.tag))
+            for d, hush in zip(fan_devices, hushed):
+                jobs.append((row.id, (d.id, d.transport, d.endpoint, d.p256dh, d.auth), {**(android if d.transport == "fcm" else payload), "quiet": hush}, p.ttl, p.tag))
         for item in left:
             held.setdefault(item.id, (item, set()))[1].add(fan)
     if not _hold(held):

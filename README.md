@@ -516,7 +516,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   the Android app, `fcm.py`), and the tick sweeps up any batch a restart dropped. Devices that took their last
   push go by threads of their own, apart from new and failing ones, and each push service gets 2 s to connect, so
   a device that never answers holds up no other fan's alerts; push addresses must be a known service's own, and
-  one network turns notifications on for only so many new devices a day. Quiet hours are per device and make notifications arrive without a sound or vibration (on Android still on the lock screen, so a phone set to wake its screen for notifications may light it).
+  one network turns notifications on for only so many new devices a day. Quiet hours are per device and make notifications arrive without a sound or vibration (on Android still on the lock screen, so a phone set to wake its screen for notifications may light it); one that arrived silent on every device doesn't count toward the hour's sound.
   With the app open and in front, a moment shows as an in-app toast instead. The Alerts tab's Latest
   list shows every moment of a fan's players, pushed or not, with what's new counted on the tab.
   `python -m sports_follow.notify stats` shows what was sent and how much was opened, by kind.

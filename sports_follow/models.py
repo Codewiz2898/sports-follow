@@ -650,7 +650,7 @@ class Notification(Base):
     moment_ids: Mapped[list] = mapped_column(JSONB, default=list)
     kind: Mapped[str] = mapped_column(String(30))  # the lead moment's
     lines: Mapped[list] = mapped_column(JSONB, default=list)  # every moment's title, lead first
-    loud: Mapped[bool] = mapped_column(Boolean)  # with sound (before each device's quiet hours)
+    loud: Mapped[bool] = mapped_column(Boolean)  # with sound: a moment's, on one of its devices at least, outside its quiet hours
     devices: Mapped[int] = mapped_column(Integer, default=0)
     delivered: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = _now()
