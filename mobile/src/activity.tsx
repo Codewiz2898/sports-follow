@@ -4,6 +4,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { AppState } from 'react-native'
 import { followsKey } from '../../web/src/alerts'
 import { ACTIVITY, refetcher, type Refetcher } from '../../web/src/refetch'
 import StannNotifications from '../modules/stann-notifications'
@@ -72,10 +73,12 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
   // New moments, when there may be some (following.tsx's heard): the follow list came back changed, a followed
   // game's status or score moved on, a notification came, or the app came back to the front. Asked after a wait
   // of this phone's own (web/src/refetch.ts): every phone that got the same goal's notification hears it at once.
+  // Not while the app is away: coming back says there's news, and asks.
   const later = useRef<Refetcher | null>(null)
   useEffect(() => {
     let stale = false
     const r = refetcher(ACTIVITY, () => {
+      if (AppState.currentState !== 'active') return // nobody's looking; coming back asks
       api.activity().then((res) => {
         if (stale) return
         setItems((prev) => {
@@ -85,7 +88,9 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
       }).catch(() => {})
     })
     later.current = r
-    return () => { stale = true; r.stop() }
+    // Back in front: a wait begun while away (React Native held its timer) goes, as coming back's news starts one.
+    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') r.stop() })
+    return () => { stale = true; r.stop(); sub.remove() }
   }, [epoch])
   useEffect(() => { if (heard) later.current?.heard() }, [heard])
 
