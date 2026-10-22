@@ -55,9 +55,11 @@ def kept(path: str, name: str) -> str:
 
 def test_every_key_a_device_keeps_of_its_fan_is_forgotten_as_it_becomes_another():
     found = run()
-    # The fan's last look at Alerts, at the Feed tab and at each player's circle, and the address a code went to.
+    # The fan's last look at Alerts, at the Feed tab and at each player's circle, and the address a code went to; on
+    # the web too, the save nudge they put away and the link they came by, told (BUG-281): the next fan on the device
+    # is offered the nudge, and where they came from is counted.
     assert set(found["web"]) == {kept("web/src/activity.tsx", "SEEN"), kept("web/src/feedSeen.ts", "OPENED"), kept("web/src/feedSeen.ts", "SEEN"),
-                                 kept("web/src/pages/AccountPage.tsx", "PENDING")}
+                                 kept("web/src/pages/AccountPage.tsx", "PENDING"), kept("web/src/pages/TodayPage.tsx", "NUDGE"), kept("web/src/visit.ts", "NOTED")}
     assert set(found["phone"]) == {kept("mobile/src/activity.tsx", "SEEN"), kept("mobile/src/feedSeen.ts", "OPENED"), kept("mobile/src/feedSeen.ts", "SEEN"),
                                    kept("mobile/src/app/account.tsx", "PENDING")}
     # Both apps forget them all as they start over, not one of them.

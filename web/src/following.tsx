@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useAccount } from './account'
 import { api, subscribe, type AlertLevel, type Card, type FollowedMatch, type FollowedTeam, type FollowTarget, type PlayerMoment, type StreamEvent } from './api'
 import { wanted } from './notifications'
-import { listed, withFollowed } from './resync'
+import { listed, saveLevel, withFollowed, type LevelSaves } from './resync'
 
 interface FollowingState {
   cards: Card[]
@@ -144,11 +144,14 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const loadedRef = useRef(loaded)
   loadedRef.current = loaded
   const listeners = useRef(new Set<(e: StreamEvent) => void>())
-  const alertWrites = useRef(new Map<number, { latest: number; saved: AlertLevel; queue: Promise<void> }>())
+  // The levels being changed here, a player's, a team's or a game's, each saved one at a time (saveLevel): a list the
+  // server sends meanwhile leaves each as shown.
+  const alertWrites = useRef(new Map<number, LevelSaves>())
+  const teamLevels = useRef(new Map<number, LevelSaves>())
+  const gameLevels = useRef(new Map<number, LevelSaves>())
   // This app's follows and unfollows under way, and when the last one ended: a list the server sends meanwhile may
   // be from before one, so it's taken as the list (BUG-165) only once they're settled.
   const following = useRef({ busy: 0, ended: 0 })
-  const teamLevels = useRef(new Set<number>())  // the teams whose level this app is changing
   const settled = () => following.current.busy === 0 && Date.now() - following.current.ended > SETTLE_MS
   /** The fan's players from a list the server sent: the list itself once this app's own changes have settled (a
    * player followed or dropped on another device comes or goes), else the cards shown kept and brought up to date. */
@@ -166,7 +169,10 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const reloadRef = useRef(reload)
   reloadRef.current = reload
 
-  const reloadMatches = useCallback(() => api.matches().then((r) => setMatches(r.matches), () => {}).finally(() => setMatchesLoaded(true)), [])
+  /** The games the fan follows as the server sends them, a level being changed here as shown till the server has it. */
+  const withShownLevels = useCallback((games: FollowedMatch[]) => setMatches((prev) => games.map((g) => (gameLevels.current.has(g.event_id)
+    ? { ...g, alerts: prev.find((x) => x.event_id === g.event_id)?.alerts ?? g.alerts } : g))), [])
+  const reloadMatches = useCallback(() => api.matches().then((r) => withShownLevels(r.matches), () => {}).finally(() => setMatchesLoaded(true)), [withShownLevels])
   useEffect(() => { reloadMatches() }, [reloadMatches])
 
   /** The fan's sports as the server has them now; true once it has said them (a list asked for before a save of this
@@ -249,7 +255,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
         setFailed(false)
       } else setCards((prev) => fromServer(e.players, prev, refreshed))
       setProgress((p) => ({ ...p, ...Object.fromEntries(e.players.filter((c) => c.status !== 'building').map((c) => [c.player_id, []])) }))
-      if (e.matches) { setMatches(e.matches); setMatchesLoaded(true) }
+      if (e.matches) { withShownLevels(e.matches); setMatchesLoaded(true) }
       // The teams as the server has them now, as Following's list brings them (reload); a level being changed here
       // as shown till the server has it.
       if (e.teams) {
@@ -311,7 +317,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
       }))
     }
     for (const onEvent of listeners.current) onEvent(e)
-  }, [fromServer])
+  }, [fromServer, withShownLevels])
 
   const listen = useCallback((onEvent: (e: StreamEvent) => void) => {
     listeners.current.add(onEvent)
@@ -334,12 +340,11 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     await reloadMatches()
   }, [reloadMatches])
 
-  const setMatchAlerts = useCallback(async (eventId: number, level: AlertLevel) => {
-    const was = matchesRef.current.find((m) => m.event_id === eventId)?.alerts ?? 'key'
-    const show = (value: AlertLevel) => setMatches((prev) => prev.map((m) => (m.event_id === eventId ? { ...m, alerts: value } : m)))
-    show(level)
-    try { await api.setMatchAlerts(eventId, level) } catch (e) { show(was); throw e }
-  }, [])
+  // A game's level and a team's, as a player's (setAlerts): shown at once, saved one at a time, the last tap last.
+  const setMatchAlerts = useCallback((eventId: number, level: AlertLevel) => saveLevel(gameLevels.current, eventId, level,
+    () => matchesRef.current.find((m) => m.event_id === eventId)?.alerts ?? 'key',
+    (value) => setMatches((prev) => prev.map((m) => (m.event_id === eventId ? { ...m, alerts: value } : m))),
+    (value) => api.setMatchAlerts(eventId, value)), [])
 
   const followTeam = useCallback(async (teamId: number, on: boolean) => {
     await api.followTeam(teamId, on)
@@ -347,13 +352,10 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     await reload()
   }, [reload])
 
-  const setTeamAlerts = useCallback(async (teamId: number, level: AlertLevel) => {
-    const was = teamsRef.current.find((t) => t.team_id === teamId)?.alerts ?? 'key'
-    const show = (value: AlertLevel) => setTeams((prev) => prev.map((t) => (t.team_id === teamId ? { ...t, alerts: value } : t)))
-    show(level)
-    teamLevels.current.add(teamId)
-    try { await api.setTeamAlerts(teamId, level) } catch (e) { show(was); throw e } finally { teamLevels.current.delete(teamId) }
-  }, [])
+  const setTeamAlerts = useCallback((teamId: number, level: AlertLevel) => saveLevel(teamLevels.current, teamId, level,
+    () => teamsRef.current.find((t) => t.team_id === teamId)?.alerts ?? 'key',
+    (value) => setTeams((prev) => prev.map((t) => (t.team_id === teamId ? { ...t, alerts: value } : t))),
+    (value) => api.setTeamAlerts(teamId, value)), [])
 
   /** A follow or unfollow of this app's, counted while it's on its way (`following`). */
   const changing = useCallback(async <T,>(work: () => Promise<T>): Promise<T> => {
@@ -375,27 +377,10 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   // A level shows the moment it's tapped. Its PUTs go one at a time per player, and one already
   // replaced by a newer tap isn't sent, so fast taps can't land out of order: the server ends on the
   // last one. If that fails, the level goes back to the last one saved, and the error is the caller's.
-  const setAlerts = useCallback((playerId: number, level: AlertLevel) => {
-    const show = (value: AlertLevel) => setCards((prev) => prev.map((c) => (c.player_id === playerId ? { ...c, alerts: value } : c)))
-    const writes = alertWrites.current.get(playerId) ?? { latest: 0, saved: cardsRef.current.find((c) => c.player_id === playerId)?.alerts ?? 'key', queue: Promise.resolve() }
-    alertWrites.current.set(playerId, writes)
-    const n = ++writes.latest
-    show(level)
-    const done = writes.queue.then(async () => {
-      if (n !== writes.latest) return
-      try {
-        await api.setAlerts(playerId, level)
-        writes.saved = level
-      } catch (e) {
-        if (n === writes.latest) show(writes.saved)
-        throw e
-      } finally {
-        if (n === writes.latest) alertWrites.current.delete(playerId)
-      }
-    })
-    writes.queue = done.catch(() => {})
-    return done
-  }, [])
+  const setAlerts = useCallback((playerId: number, level: AlertLevel) => saveLevel(alertWrites.current, playerId, level,
+    () => cardsRef.current.find((c) => c.player_id === playerId)?.alerts ?? 'key',
+    (value) => setCards((prev) => prev.map((c) => (c.player_id === playerId ? { ...c, alerts: value } : c))),
+    (value) => api.setAlerts(playerId, value)), [])
 
   const dismissMoment = useCallback((id: number) => setMoments((m) => m.filter((x) => x.id !== id)), [])
 

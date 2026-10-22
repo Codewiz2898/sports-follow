@@ -286,10 +286,23 @@ async def warm_sources(ctx) -> None:
 
 async def adopt_stragglers(ctx, anon: str, account_id: int, session_id: int) -> None:
     """A minute after a sign-in: whatever a request already under way wrote to the device's anonymous
-    fan after its things moved into the account (accounts.adopt_later)."""
+    fan after its things moved into the account (accounts.adopt_later). Then a word on the account's own
+    channel, as a follow says: its apps open on its devices send for their list again and show it (BUG-165)."""
     moved = await on_thread(accounts.adopt_later, anon, account_id, session_id)
     if moved:
         log.info("accounts: %d more player(s) moved into account %d after sign-in", moved, account_id)
+    fan = await on_thread(_fan_of, account_id)
+    try:
+        if fan:
+            await ctx["redis"].publish(bus.follows_channel(fan), "{}")
+    except Exception as exc:  # noqa: BLE001 — what moved stays moved; the apps catch up as their streams connect
+        log.warning("accounts: couldn't tell account %d's open apps what moved in: %s", account_id, exc)
+
+
+def _fan_of(account_id: int) -> str | None:
+    """The account's fan id (accounts.fan_of), or None if it's gone."""
+    with db.session() as s:
+        return accounts.fan_of(s, account_id)
 
 
 STARTERS_DONE = "starters:refreshed"  # set once a refresh finishes; a worker starting without it queues one
