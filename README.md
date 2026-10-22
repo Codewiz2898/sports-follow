@@ -137,12 +137,20 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   The page is live in about a second and its profile follows from Wikidata and Wikipedia. An athlete no
   live source has can't be followed, unless `SPORTS_FOLLOW_RESEARCH=1`: then the agent builds their page
   (counted as an AI research).
-  `GET /api/athletes/{system}/{id}` and `/api/athletes/wikidata/{qid}` preview before following.
+  `GET /api/athletes/{system}/{id}` and `/api/athletes/wikidata/{qid}` preview before following (a preview is
+  kept 10 minutes, by the athlete, whatever `league` the link names). A fan follows at most 100 players
+  (`server.PLAYERS_MAX`). Previews and follows that ask a source for an athlete not on the app yet (a whole
+  team's follow on a campaign page asks once for each such player) are limited to 30 a minute a fan and 120 a
+  client address (`SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_MINUTE`, `SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_ADDRESS`), past
+  which they're a 429; a player already here costs nothing.
 - **AI research is capped** (only with `SPORTS_FOLLOW_RESEARCH=1`). A name no source knows goes to the research agent, 3 per fan per UTC day
   (`search.RESEARCH_PER_DAY`, counted in Redis), 10 per client address per day and 10 an hour across all
   fans (`SPORTS_FOLLOW_RESEARCH_PER_ADDRESS`, `SPORTS_FOLLOW_RESEARCH_PER_HOUR`). Following a player
   already here, or a search result with a live source, doesn't count. The gateway's per-app budget is
-  the hard ceiling behind it.
+  the hard ceiling behind it. The backgrounds the agent writes for players a live source has and Wikipedia
+  doesn't are capped too, whoever made the player: 6 an hour across all players
+  (`SPORTS_FOLLOW_BACKGROUNDS_PER_HOUR`); past it a page is whole from its source without one, and a fan
+  opening it in a later hour sends the agent.
 - **Names converge.** "Kohli" and "Virat Kohli" end up on the same player: every typed name becomes an
   alias, and when a build discovers the athlete already exists, the rows are merged. A player bound to a
   source is never renamed or merged by an agent report, and keeps the source's sections when a typed
@@ -612,14 +620,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   its provider's name or an API it reads, or its URL.
 - **One rate-limit layer for every source** (`sports_follow/adapters/budget.py`). Each source's client
   declares a `BUDGET`: requests a window (an hour, a minute, a day, several at once), a margin never
-  spent, a reserve kept for live games, and, for a scarce one, fans' own share. Its provider lists it
+  spent, a reserve kept for live games, and, for one with a reserve or a scarce one, fans' own share (fewer than
+  the reserve: `tests/test_budget.py` holds every source to it). Its provider lists it
   (`Provider.budgets`), so the usage report finds it through `adapters.KNOWN`. Before each request it
   sends it takes one; it reports what the source says is left and its 429s, which pause every process.
   The research agent's `fetch_url` spends the same budget when it reads a source's API (`Budget.urls`).
   Counts are kept in Redis, so the API and the worker spend from one allowance. Every request is in a
   lane, set once where the work starts: `live` (polls), `fan` (every API request: search, previews,
-  following), `refresh`, `history`, `import` and `feed` (the curator's). The background lanes stop at the reserve; a fan loop on
-  Liquipedia or PUBG stops at its share and is logged. `python -m sports_follow.usage` shows each
+  following), `refresh`, `history`, `import` and `feed` (the curator's). The background lanes stop at the reserve; a fan loop
+  stops at its share and is logged, so live games keep the rest of the reserve. `python -m sports_follow.usage` shows each
   source's spend this hour and today, by lane.
 - **One cache for every source** (`sports_follow/adapters/cache.py`). Each client reads through a `Cache`
   named after its budget: this process's copy, then Redis, then the source, and only a request sent is
@@ -1063,6 +1072,9 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_SPORTS` | every sport | the sports that may run, e.g. `football,cricket,chess`: a sport left out isn't searched, imported or polled, its sources don't run (a source of several esports games reads only those left in), and its followed players' pages stay as they are. Each esports game is a sport (`valorant,cs2,lol,dota2,bgmi,freefire,pubgmobile,pubg,mlbb,hok,r6siege,overwatch,apex,rocketleague,cod,wildrift`), and `esports` stands for every game. The admin panel turns these off and on while the app runs |
 | `SPORTS_FOLLOW_SOURCES` | every source | the sources that may run; a public build lists only licensed ones, e.g. `lichess_chess,sportmonks_football,sportmonks_cricket`; ESPN's unofficial endpoints are for development only. The admin panel turns these off and on while the app runs, never one left out here |
 | `SPORTS_FOLLOW_RESEARCH_PER_HOUR` | `10` | AI researches an hour across all fans |
+| `SPORTS_FOLLOW_BACKGROUNDS_PER_HOUR` | `6` | backgrounds the research agent writes an hour across all players (a player a live source has and Wikipedia has no article on, new or a month old); past it a page waits for a fan to open it in a later hour |
+| `SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_MINUTE` | `30` | previews and follows a minute from one fan that ask a live source for an athlete not on the app yet |
+| `SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_ADDRESS` | `120` | the same from one client address (an IPv6 /64), higher since many fans can share one; not counted for private addresses |
 | `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY` | `India` | whose athletes count double among the best-known starters new fans are offered (empty: nobody's) |
 | `SPORTS_FOLLOW_FEED_MOMENT_SEARCHES` | `40` | moment searches in any 24 hours (`searches.py`), each run counted (a moment's search runs twice; each 1 of YouTube's 100 searches a day); the biggest moments first; `0` turns them off |
 | `SPORTS_FOLLOW_FEED_GAP_SEARCHES` | `20` | gap searches in any 24 hours (`sweeps.py`): a followed player with nothing to watch this week, the most followed first; each 1 of YouTube's 100 searches a day; `0` turns them off |

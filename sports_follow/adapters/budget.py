@@ -17,9 +17,10 @@ request) and carried into the threads it uses (carry):
     feed     videos and posts about players, for the feed (curator.py)
 
 The background lanes (refresh, history, import, feed) stop while a window's allowance is down to the source's
-reserve, which is kept for live games and fans. A scarce source gives fans a share of their own (fan: at
-most that many fan requests a window): one fan following a pro is a request, but searches or previews in
-a loop would spend what live games need, so past the share they're refused, and logged.
+reserve, which is kept for live games and fans. A source with a reserve, or a scarce one, gives fans a share of
+their own (fan: at most that many fan requests a window, fewer than the reserve): one fan following a pro is a
+request, but searches or previews in a loop would spend what live games need, so past the share they're
+refused, and logged. The fan lane leaves nothing else, so live games keep at least the reserve less that share.
 
     .venv/bin/python -m sports_follow.usage     # each source's spend this hour and today, by lane
 
@@ -96,7 +97,7 @@ class Budget:
     name: str  # its Redis keys: "sportmonks"
     windows: tuple[Window, ...] = ()  # none: no published limit (counted, never refused)
     reserve: int = 0  # requests of each window kept for live games and fans: background lanes stop there
-    fan: int | None = None  # the most fan requests a (first) window may take, for a scarce source; None: no cap of its own
+    fan: int | None = None  # the most fan requests a (first) window may take, fewer than the reserve, or for a scarce source; None: no cap of its own
     pause: int = 60  # seconds every lane waits after the source says slow down (429)
     urls: tuple[str, ...] = ()  # where its requests go: a page the research agent fetches there spends it too
 

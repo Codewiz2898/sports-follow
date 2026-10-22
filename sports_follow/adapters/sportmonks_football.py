@@ -494,9 +494,12 @@ class SportmonksFootball(Adapter):
                 data = self._player(athlete_id)
             except sportmonks.RateLimited:
                 raise
-            except AdapterError:
+            except AdapterError as exc:
                 # Who they are doesn't hang on their numbers: a read with the statistics that fails (a plan without
-                # them, a timeout) is asked again without, or a fan's search result would be "no such athlete".
+                # them, a timeout) is asked again without, or a fan's search result would be "no such athlete". An
+                # id Sportmonks has no player by (its 404) is no one either way: not asked twice.
+                if "HTTP 404" in str(exc):
+                    raise
                 data = sportmonks.get_json(f"/football/players/{athlete_id}", ttl=PLAYER_TTL, include=PLAYER_INCLUDE)
         except AdapterError:
             return None

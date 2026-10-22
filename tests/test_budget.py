@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from sports_follow import controls, history, pipeline, registry, search, server, structured, tools, worker
-from sports_follow.adapters import ADAPTERS, PlayerRef, budget, lichess_chess, liquipedia, pubg
+from sports_follow.adapters import ADAPTERS, PlayerRef, budget, lichess_chess, liquipedia, pandascore, pubg, sportmonks
 
 from .test_api import api  # noqa: F401  (the fixture)
 
@@ -54,6 +54,32 @@ def test_a_scarce_sources_fans_get_their_share_and_no_more(caplog):
             budget.take(scarce, lane_name="fan")
         budget.take(scarce, lane_name="live")  # live games still go
     assert "a fan request refused" in caplog.text
+
+
+def test_every_source_with_a_live_reserve_gives_fans_a_share_smaller_than_it():
+    # BUG-128: the fan lane leaves no reserve of its own, so without a share a loop of previews of made-up ids
+    # spent what live series, matches and boards are kept (PandaScore, Sportmonks, Lichess's chess searches).
+    for b in budget.known():
+        if b.reserve:
+            assert b.fan is not None and b.fan < b.reserve, b.name
+
+
+@pytest.mark.parametrize("scarce", [pandascore.BUDGET, sportmonks.BUDGET, lichess_chess.BUDGET], ids=lambda b: b.name)
+def test_fans_in_a_loop_never_spend_what_live_games_keep(scarce):
+    # The background spends all it may (down to the reserve), then a fan loop: refused past the fans' share, and
+    # live games still get the rest of what was kept.
+    while budget.spare(scarce, "x", lane_name="refresh"):
+        budget.take(scarce, "x", lane_name="refresh")
+    fans = 0
+    with pytest.raises(budget.RateLimited, match="fans' share"):
+        for _ in range(scarce.reserve + 1):
+            budget.take(scarce, "x", lane_name="fan")
+            fans += 1
+    assert fans == scarce.fan
+    for _ in range(scarce.reserve - scarce.fan):
+        budget.take(scarce, "x", lane_name="live")
+    with pytest.raises(budget.RateLimited):
+        budget.take(scarce, "x", lane_name="live")  # the margin, never spent
 
 
 def test_a_source_saying_slow_down_pauses_every_lane():

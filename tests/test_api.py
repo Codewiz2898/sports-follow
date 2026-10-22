@@ -22,6 +22,7 @@ import errno
 import json
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
@@ -402,6 +403,107 @@ def test_searches_that_reach_the_live_sources_are_limited_per_fan_and_per_addres
     searching("new-cookie", PUBLIC)
     searching("someone-else", "81.2.69.143")
     assert allowed[4:] == [False, True]
+
+
+@pytest.fixture
+def a_source(api, monkeypatch):
+    """ESPN soccer has every athlete id; the ids it was asked for. A pick makes a new player each time."""
+    asked = []
+    adapter = ADAPTERS["espn_soccer"]
+    monkeypatch.setattr(adapter, "player", lambda athlete_id, league=None: asked.append(athlete_id) or PlayerRef(adapter.system, athlete_id, "Someone", [], []))
+    made = iter(range(100, 200))
+    monkeypatch.setattr(pipeline, "start_from_pick", lambda adapter, ref: (next(made), True))
+    return asked
+
+
+def test_follows_that_ask_a_source_are_limited_per_fan_and_per_address(api, a_source, monkeypatch):
+    # BUG-090: a script walking a source's ids made a player polled every half hour for each, with no limit.
+    monkeypatch.setattr(server, "SOURCE_LOOKUPS_PER_MINUTE", 3, raising=False)
+    monkeypatch.setattr(server, "SOURCE_LOOKUPS_PER_ADDRESS", 5, raising=False)
+
+    def follow(fan, address, athlete_id):
+        return api.call("POST", "/api/follows", fan=fan, address=address, body={"system": "espn_soccer", "athlete_id": athlete_id})
+
+    answers = [follow("script", PUBLIC, str(n)) for n in range(4)]
+    assert [r.status_code for r in answers] == [200, 200, 200, 429]
+    assert answers[-1].json()["detail"] == "You've looked up a lot of new athletes this minute. Try again in a minute."
+    assert a_source == ["0", "1", "2"]
+    # New cookies from the same address stop at the address's limit; another address isn't held up.
+    assert [follow(f"cookie-{n}", PUBLIC, str(10 + n)).status_code for n in range(3)] == [200, 200, 429]
+    assert follow("someone-else", "81.2.69.143", "20").status_code == 200
+    # Following by registry id when no player holds them yet looks them up in the source too: counted the same.
+    person = registry.Person("Q99", "football", "Some One", [], date(2000, 1, 1), [], None, {})
+    monkeypatch.setattr(server, "_registry_athlete", lambda db, body: person)
+
+    async def resolve(person):
+        return pytest.fail("the source was asked")
+
+    monkeypatch.setattr(server, "_resolve", resolve)
+    assert api.call("POST", "/api/follows", fan="script", address=PUBLIC, body={"qid": "Q99", "sport": "football"}).status_code == 429
+    # A player already here asks no source: never counted.
+    assert api.call("POST", "/api/follows", fan="script", address=PUBLIC, body={"player_id": 1}).status_code == 200
+
+
+def test_previews_that_ask_a_source_are_limited_per_fan_and_per_address(api, previews, monkeypatch):
+    # BUG-128: previews of made-up ids, with no cookie, spent a paid source's allowance for the hour.
+    monkeypatch.setattr(server, "SOURCE_LOOKUPS_PER_MINUTE", 3, raising=False)
+    monkeypatch.setattr(server, "SOURCE_LOOKUPS_PER_ADDRESS", 5, raising=False)
+
+    def preview(athlete_id, fan=None, address=PUBLIC):
+        return api.call("GET", f"/api/athletes/espn_soccer/{athlete_id}", fan=fan, address=address).status_code
+
+    assert [preview(str(999_000 + n), "script") for n in range(4)] == [404, 404, 404, 429]
+    assert [preview(str(999_100 + n)) for n in range(3)] == [404, 404, 429]  # no cookie: a new fan each time, the same address
+    assert len(previews) == 5
+    assert preview("231388", address="81.2.69.143") == 200
+    # A preview kept from a moment ago asks no source: never counted.
+    monkeypatch.setitem(server.player_search._previews, "espn_soccer:231388", (time.time(), {"name": "Someone"}))
+    assert preview("231388", "script") == 200
+    # A registry athlete's preview looks them up in their source by name: counted the same.
+    person = registry.Person("Q99", "football", "Some One", [], date(2000, 1, 1), [], None, {})
+    monkeypatch.setattr(server, "_registry_athlete", lambda db, body: person)
+
+    async def resolve(person):
+        return pytest.fail("the source was asked")
+
+    monkeypatch.setattr(server, "_resolve", resolve)
+    assert api.call("GET", "/api/athletes/wikidata/Q99", fan="script", address=PUBLIC).status_code == 429
+
+
+def test_a_previews_league_doesnt_make_it_a_new_one(monkeypatch):
+    # BUG-128: any well-formed ?league= was a new key, so the same athlete was read again for each.
+    reads = []
+    adapter = SimpleNamespace(preview_fixtures=False, player=lambda athlete_id, league: reads.append(league) or PlayerRef("espn_soccer", athlete_id, "Someone", [], [], league=league),
+                              stats=lambda ref, recent: ([], ""))
+    monkeypatch.setitem(ADAPTERS, "espn_soccer", adapter)
+    monkeypatch.setattr(server.player_search, "_previews", {})
+    monkeypatch.setattr(structured, "sport_name", lambda adapter, ref: "Football")
+    for named in (None, "eng.1", "a1", "a2"):
+        assert server.player_search.preview("espn_soccer", "231388", named)["name"] == "Someone"
+    assert reads == [None]
+    assert server.player_search.previewed("espn_soccer", "231388")
+
+
+def test_a_fan_follows_at_most_so_many_players(api, a_source, monkeypatch):
+    # BUG-090: one fan could follow every athlete a source has, each polled every half hour for good.
+    monkeypatch.setattr(server, "PLAYERS_MAX", 2, raising=False)
+    plain = Db.scalar
+
+    def scalar(self, stmt):  # how many players a fan follows
+        if stmt.column_descriptions[0]["name"] == "count":
+            return sum(fan == _param(stmt, "fan_id") for fan, _ in api.follows)
+        return plain(self, stmt)
+
+    monkeypatch.setattr(Db, "scalar", scalar)
+    api.follows |= {("fan", 1), ("fan", 2)}
+    refused = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"system": "espn_soccer", "athlete_id": "231388"})
+    assert (refused.status_code, refused.json()["detail"]) == (429, "You follow 2 players already: unfollow one to follow another.")
+    assert a_source == []  # refused before the source was asked
+    typed = api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"query": "Brand New Name"})
+    assert typed.status_code == 429 and api.redis.data[server.player_search.research_key("fan")] == 0  # its research given back
+    assert api.call("POST", "/api/follows", fan="fan", address=PUBLIC, body={"player_id": 1}).status_code == 200  # one followed already: no new follow
+    assert api.call("POST", "/api/follows", fan="another", address=PUBLIC, body={"player_id": 1}).status_code == 200
+    assert not [s for s in api.statements if isinstance(s, Insert) and s.table.name == "follow" and _param(s, "fan_id") == "fan" and _param(s, "player_id") != 1]
 
 
 def test_limits_count_the_public_address_a_client_comes_from():
@@ -1567,6 +1669,20 @@ def test_following_a_whole_team_follows_each_player_on_its_roster_with_key_alert
     assert api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={}).status_code == 400
     assert api.call("POST", "/api/campaigns/nope/follow", fan="fan", body={"players": True}).status_code == 404
     assert api.call("POST", "/api/campaigns/worlds/follow", fan="fan", body={"players": True}).json() == {"player_ids": [], "failed": 0}  # no players of its own
+
+
+def test_following_a_whole_team_over_and_over_without_a_cookie_stops_asking_its_source(api, monkeypatch):
+    # BUG-128 (H13): each tap asked the source for every roster player not on the app yet, with no cookie and no limit.
+    from sports_follow import campaigns
+
+    monkeypatch.setattr(campaigns, "page", lambda db, slug, fan: WORLDS if slug == "worlds" else None)
+    monkeypatch.setattr(server, "SOURCE_LOOKUPS_PER_ADDRESS", 5, raising=False)
+    asked = []
+    monkeypatch.setitem(ADAPTERS, "pandascore_esports", KNOWN["pandascore_esports"])  # PandaScore runs only with its token
+    monkeypatch.setattr(ADAPTERS["pandascore_esports"], "player", lambda athlete_id, league=None: asked.append(athlete_id))  # none of them is there any more
+    answers = [api.call("POST", "/api/campaigns/worlds/follow", address=PUBLIC, body={"team": "126061"}).json() for _ in range(3)]
+    assert len(asked) == 5  # Oner, Gone and Broken, then two more: the address's minute
+    assert answers[-1] == {"player_ids": [3, 4], "failed": 3}
 
 
 def test_a_fans_first_links_tags_are_kept_once_and_only_in_their_shape(api):

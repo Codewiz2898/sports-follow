@@ -34,10 +34,14 @@ MAX_PAGES = 8  # 25 rows a page; a year of one team's fixtures is two or three
 # Requests kept back for live matches, of each hour's 2,000: background reads (refreshes, history.py)
 # stop when the allowance live polls draw on falls this low, and start again when the hour resets.
 LIVE_RESERVE = int(os.environ.get("SPORTS_FOLLOW_SPORTMONKS_RESERVE", 1000))
+# Requests of each entity or endpoint an hour fans' searches, previews and follows may take: one follow is a few,
+# but a loop of previews of made-up ids would spend what live matches need. Half the reserve, so live matches keep
+# the rest whatever fans do.
+FANS = 500
 CRICKET_MATCH = "Cricket fixtures/{id}"  # a cricket match's own endpoint: scorecards, and live matches livescores leaves out
 FIXTURES = "Fixture"  # the football entity live matches are polled on
 TEAMS = "Team"  # the football entity a season's teams, and who of theirs is out, are read under
-BUDGET = budget.Budget("sportmonks", windows=(budget.Window(3600, 2000),), reserve=LIVE_RESERVE, urls=(BASE + "/",))
+BUDGET = budget.Budget("sportmonks", windows=(budget.Window(3600, 2000),), reserve=LIVE_RESERVE, fan=FANS, urls=(BASE + "/",))
 
 _client = httpx.Client(headers={"user-agent": USER_AGENT, "accept": "application/json"}, timeout=20)
 _cache = cache.Cache(BUDGET.name)

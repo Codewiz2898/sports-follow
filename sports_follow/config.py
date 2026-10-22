@@ -82,6 +82,16 @@ RESEARCH_PER_ADDRESS = int(os.environ.get("SPORTS_FOLLOW_RESEARCH_PER_ADDRESS", 
 # Searches a minute, from one fan and from one client address, that may go on to the sources' own searches
 # (adapters.base.LiveSearch): a source may take one request at a time, with its live games in the same line.
 SOURCE_SEARCHES_PER_MINUTE = int(os.environ.get("SPORTS_FOLLOW_SOURCE_SEARCHES_PER_MINUTE", 20))
+# Previews and follows a minute that ask a live source for an athlete not on the app yet, from one fan and from
+# one client address: a script walking a source's ids would otherwise spend fans' share of its allowance, and
+# make a player polled every half hour for each. Following a whole team is one for each player it asks for. An
+# address gets more than a fan: many fans can share one (a carrier's, an office's).
+SOURCE_LOOKUPS_PER_MINUTE = int(os.environ.get("SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_MINUTE", 30))
+SOURCE_LOOKUPS_PER_ADDRESS = int(os.environ.get("SPORTS_FOLLOW_SOURCE_LOOKUPS_PER_ADDRESS", 120))
+# Backgrounds the research agent writes an hour, across all players: who a player is, for one a live source has
+# and Wikipedia has no article on (pipeline.needs_agent), new or a month old. Past it, a page goes without one
+# until a fan opens it in a later hour, so following a source's ids one by one can't spend the day's model budget.
+BACKGROUNDS_PER_HOUR = int(os.environ.get("SPORTS_FOLLOW_BACKGROUNDS_PER_HOUR", 6))
 
 # The country whose athletes count double among the best-known players new fans are offered (starters.py),
 # as the registry writes it ("India"). Empty: nobody counts double.
