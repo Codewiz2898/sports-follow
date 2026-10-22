@@ -29,7 +29,7 @@ from typing import Any
 from sqlalchemy import Select, and_, exists, or_, select, tuple_
 from sqlalchemy.orm import Session, aliased
 
-from . import rank, registry, sports
+from . import news, rank, registry, sports
 from .adapters import ADAPTERS, NEWS, source_name
 from .moments import Found
 from .models import Event, EventPlayer, FeedCandidate, Follow, Moment, NewsItem, Player, PlayerIdentity, PlayerLine, Sidelined
@@ -260,22 +260,32 @@ def _news(db: Session, fan: str, now: datetime) -> list[Row]:
 
 def _stories(db: Session, fan: str, now: datetime) -> tuple[list[tuple[datetime, int, dict[str, Any]]], set[str]]:
     """Each of the fan's players' best story of the last NEWS_DAYS that the curator served (news.py), and their
-    addresses. Rows are dated when the story reached us, as the agent's are."""
+    addresses: a story naming two of them once, with the first, and the other's next best in its place. Rows are
+    dated when the story was published, or reached us if that's earlier, as the agent's are: one linked to a player
+    only when a fan followed them, days after it ran, is as old as it is."""
+    since = now - timedelta(days=NEWS_DAYS)
     rows = db.execute(
         select(FeedCandidate, Player)
         .join(Follow, and_(Follow.player_id == FeedCandidate.player_id, Follow.fan_id == fan))
         .join(Player, Player.id == FeedCandidate.player_id)
-        .where(FeedCandidate.source.in_(list(NEWS)), FeedCandidate.served(), FeedCandidate.fetched_at >= now - timedelta(days=NEWS_DAYS))
+        # A story reaches us once it's published (news.AHEAD: or a little before), so none older is found later than this.
+        .where(FeedCandidate.source.in_(list(NEWS)), FeedCandidate.served(), FeedCandidate.fetched_at >= since - news.AHEAD)
         .order_by(FeedCandidate.score.desc(), FeedCandidate.id.desc())
     ).all()  # fmt: skip
     found: list[tuple[datetime, int, dict[str, Any]]] = []
     told: set[int] = set()
+    urls: set[str] = set()
     for row, player in rows:
         kept, verdict = row.candidate or {}, row.verdict or {}
-        if player.id in told or verdict.get("kind") in NOT_ON_THE_WIRE or not kept.get("title") or not sports.on(player.sport):
+        if player.id in told or row.url in urls or verdict.get("kind") in NOT_ON_THE_WIRE or not kept.get("title") or not sports.on(player.sport):
+            continue
+        published = rank.when(kept.get("published"))
+        at = min(published, row.fetched_at) if published else row.fetched_at
+        if at < since:
             continue
         told.add(player.id)
-        found.append((row.fetched_at, row.id, {
+        urls.add(row.url)
+        found.append((at, row.id, {
             "id": f"s{row.id}", "player_id": player.id, "player": player.name, "sport": player.sport, "yours": True,
             "tag": rank.tag(verdict, story=True), "text": _plain(str(kept["title"])), "source": str(kept.get("channel") or "") or None, "url": row.url,
         }))  # fmt: skip

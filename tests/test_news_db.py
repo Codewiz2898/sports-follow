@@ -383,3 +383,25 @@ def test_a_sport_turned_off_has_its_players_stories_and_line_ups_off_the_wire(wo
         assert week.wire(s, "fan", NOW) == []
     finally:
         s.close()
+
+
+def test_the_wire_dates_a_story_by_when_it_was_published_and_tells_one_naming_two_of_the_fans_players_once(world):
+    # BUG-253: a story linked to a player only when a fan followed them was dated then (a days-old story read "today")
+    # and kept past the Wire's window; and one naming two of the fan's players was two of the Wire's six rows.
+    maker, _ = world
+    asha, kiran, dev, mia = (player(n, ["Riverside XI"]) for n in ("Asha Verma", "Kiran Rao", "Dev Smith", "Mia Khan"))
+    served(asha, "https://wicket.example.com/squad", "Verma and Rao named in squad", 3, 3, score=0.95)
+    served(kiran, "https://wicket.example.com/squad", "Verma and Rao named in squad", 3, 3, score=0.95)
+    served(asha, "https://wicket.example.com/verma", "Verma fit for the opener", 5, 5, score=0.5)  # told in its place
+    served(dev, "https://wicket.example.com/smith", "Smith's knock remembered", 60, 1)  # linked an hour ago: followed just now
+    served(mia, "https://wicket.example.com/khan", "Khan's story of last week", 80, 10)  # past the window, however lately linked
+    s = maker()
+    try:
+        wire = week.wire(s, "fan", NOW)
+    finally:
+        s.close()
+    assert [(r["player_id"], r["text"], r["at"]) for r in wire] == [
+        (kiran, "Verma and Rao named in squad", (NOW - timedelta(hours=3)).isoformat()),  # with one of them: the first
+        (asha, "Verma fit for the opener", (NOW - timedelta(hours=5)).isoformat()),
+        (dev, "Smith's knock remembered", (NOW - timedelta(hours=60)).isoformat()),
+    ]

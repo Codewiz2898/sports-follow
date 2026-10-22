@@ -52,6 +52,7 @@ from .models import Athlete, FeedCandidate
 log = logging.getLogger("sports_follow.news")
 
 KEEP_FOR = timedelta(days=3)  # a story published longer ago than this isn't kept: a feed's archive isn't news
+AHEAD = timedelta(hours=1)  # nor one dated further ahead than this (a feed's clock or time zone a little off)
 PRUNE_AFTER = timedelta(days=30)  # stories older than this go, weekly, but an admin's evergreen ones
 EVERGREEN = ("approved", "pinned")  # an admin's word that keeps a story past PRUNE_AFTER (rank.REVIEWS)
 COMMON = 3  # a surname this many of the sport's athletes in the registry share names a player only with their side
@@ -370,7 +371,7 @@ def poll(now: datetime | None = None) -> dict[str, dict[str, int]]:
                 log.info("feed: %s feed %s not read: %s", source.system, url, exc)
                 continue
             counts["feeds"] += 1
-            fresh = [a for a in stories if a.published is not None and now - KEEP_FOR <= a.published <= now + timedelta(hours=1)]
+            fresh = [a for a in stories if a.published is not None and now - KEEP_FOR <= a.published <= now + AHEAD]
             counts["read"] += len(fresh)
             found = link(fresh, *by_sports[frozenset(listed.sports)])
             counts["matched"] += len(found)

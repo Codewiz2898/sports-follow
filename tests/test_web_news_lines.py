@@ -80,3 +80,28 @@ def test_a_tile_shows_only_a_recent_headline_and_a_page_none_of_the_agents_old_n
     # The publishers' stories are the server's to keep or take off (news.prune, rank.cards): the page shows them as
     # they come; the tile still only a recent one.
     assert found["servedPage"] == ["A publisher story of last week"] and found["servedTile"] == "Cricket"
+
+
+TODAY = LINES.parent / "today.ts"
+
+WIRE = """
+import { register } from 'node:module'
+register(%(hook)s)
+const { wireText } = await import(%(module)s)
+const row = (player, text) => ({ id: 's1', player_id: 1, player, sport: 'basketball', tag: 'News', text, source: 'Somewhere', url: 'https://example.com/1', yours: true, at: '' })
+console.log(JSON.stringify([
+  wireText(row('Nikola Jokić', 'Jokic drops 40 as Denver win')),
+  wireText(row('Nikola Jokić', 'Jokić drops 40 as Denver win')),
+  wireText(row('Nikola Jokić', 'Denver win at the buzzer')),
+]))
+"""
+
+
+def test_a_wire_rows_line_names_the_player_first_only_when_it_doesnt_already_however_its_accents_are_written(tmp_path):
+    # BUG-253: a headline writing "Jokic" got "Jokić: " put in front of it, as if it didn't name him.
+    hook = tmp_path / "resolve.mjs"
+    hook.write_text(RESOLVE)
+    script = WIRE % {"hook": json.dumps(hook.as_uri()), "module": json.dumps(TODAY.as_uri())}
+    done = subprocess.run([NODE or "node", "--experimental-strip-types", "--no-warnings", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout) == ["Jokic drops 40 as Denver win", "Jokić drops 40 as Denver win", "Jokić: Denver win at the buzzer"]
