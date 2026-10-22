@@ -256,6 +256,23 @@ def test_teams_wikidata_no_longer_lists_leave_the_page(monkeypatch, redis):
     assert page.player.teams == [] and page.published[7]["player"]["teams"] == []
 
 
+def test_a_player_bound_to_a_live_source_after_wikidata_gave_their_teams_keeps_them(monkeypatch, redis):
+    # BUG-246: a player built before a live source knew them took Wikidata's teams; bound since, the monthly read
+    # took them all away for good (the source never writes player.teams), and with them their results' side.
+    page = _page(monkeypatch, bound=False, qid="Q1", card={"status": "ready", "player": {"name": "Asha Rao"}}, status="ready", profile=PROFILE)
+    pipeline.refresh_profile(7)
+    assert page.player.teams == ["India", "Mumbai Indians"] and "teams" in page.published[7]["player"]["profile_from"]
+    monkeypatch.setattr(structured, "binding", lambda db, player_id: SimpleNamespace(adapter="sportmonks_cricket"))
+    for _ in range(2):  # the monthly read, and every one after it
+        pipeline.refresh_profile(7)
+        card = page.published[7]["player"]
+        assert page.player.teams == card["teams"] == ["India", "Mumbai Indians"] and "teams" not in card["profile_from"]
+    # Bound, Wikidata listing none changes nothing either: their teams are the source's business.
+    monkeypatch.setattr(wiki, "read", lambda q, sport, ttl=wiki.MAX_AGE: wiki.Profile(qid="Q1", born="1994-03-09"))
+    pipeline.refresh_profile(7)
+    assert page.player.teams == page.published[7]["player"]["teams"] == ["India", "Mumbai Indians"]
+
+
 # ---------------------------------------------------------------- precedence (pipeline.merge_profile, keep_profile)
 
 
