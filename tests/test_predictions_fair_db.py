@@ -218,6 +218,35 @@ def test_cookies_from_one_address_count_only_a_few_picks_a_question_however_they
     assert db.scalar(select(Pick.counted).where(Pick.question_id == other.id))
 
 
+def test_an_ipv6_48s_64s_together_count_only_so_many_picks_a_question(db, redis, monkeypatch):  # noqa: F811
+    """BUG-106, reopened: the few fans counted on a question from one address were counted per /64, and one /48 (a
+    free tunnel, many fibre plans) holds 65,536 of them, so a split was stuffed without limit from one. Its /64s
+    together count only so many now (COUNTED_PER_IPV6_48, several /64s' worth); another /48 has its own."""
+    monkeypatch.setitem(server.state, "redis", ApiRedis())
+    monkeypatch.setattr(server, "cookie_key", lambda: KEY)
+    monkeypatch.setattr(server, "COUNTED_PER_ADDRESS", 2)
+    monkeypatch.setattr(server, "COUNTED_PER_IPV6_48", 4, raising=False)
+    q = open_question(db, datetime.now(timezone.utc) + timedelta(hours=3))
+
+    def put(option: str, fan: str, address: str) -> None:
+        async def go() -> httpx.Response:
+            transport = httpx.ASGITransport(app=server.app, client=(address, 50000))
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                return await client.put(f"/api/predictions/{q.id}/pick", json={"option": option}, headers={"Cookie": f"{FAN_COOKIE}={server.sign_fan(fan)}"})
+
+        assert asyncio.run(go()).status_code == 200
+
+    for fan in ("home-0", "home-1", "home-2"):
+        put("b", fan, "2a00:1450:4009:1::1")  # one /64: its two
+    for i in range(2, 6):
+        put("b", f"tunnel-{i}", f"2a00:1450:4009:{i:x}::1")  # the /48's other /64s: two more, then its four are counted
+    put("b", "elsewhere", "2a00:1450:400a:1::1")  # another /48
+    put("w", "home-0", "2a00:1450:4009:1::1")  # a counted fan changing their pick
+    db.expire_all()
+    counted = {fan for fan, c in db.execute(select(Pick.fan_id, Pick.counted).where(Pick.question_id == q.id)) if c}
+    assert counted == {"home-0", "home-1", "tunnel-2", "tunnel-3", "elsewhere"}
+
+
 # ---------------------------------------------------------------- BUG-107
 
 

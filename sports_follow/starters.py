@@ -10,7 +10,8 @@ Every running sport offers a mix of four pools, worked out the same way for each
   current by the worker while anyone follows them, is live or starts within SOON; and the top players whose next
   game, read with the top pool, is that close by the clock.
 - followed: the players on Sports Follow the most signed-in fans follow, at least FOLLOWED_MIN of them, counted
-  as asked. An anonymous fan is a cookie, which a script makes any number of, so their follows don't count.
+  as asked. An anonymous fan is a cookie, which a script makes any number of, so their follows don't count; nor
+  does an inbox count twice for its plus-addresses' accounts.
 - top: the sport's best-known current athletes (Wikipedia editions; the home country's, a setting, count
   double), found in the source they're followed through and kept only if it has them playing lately or
   soon (a game in the last RECENT_DAYS or the next TOP_DAYS), so none is an empty card: a star the plan
@@ -35,7 +36,7 @@ from sqlalchemy import case, delete, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from . import bus, registry, search, shutdown, sports
+from . import accounts, bus, registry, search, shutdown, sports
 from .adapters import AdapterError, Fixture, SearchResult
 from .adapters.budget import RateLimited
 from .config import STARTERS_HOME_COUNTRY
@@ -230,9 +231,10 @@ def _on(start: datetime | None, now: datetime) -> str | None:
 def _most_followed(db: Session, sport: sports.Sport) -> list[Player]:
     """The sport's players on Sports Follow by how many signed-in fans follow them, most first, of those at least
     FOLLOWED_MIN follow. Only accounts an admin hasn't blocked count: anonymous fans' follows are their own (a
-    new cookie is free), as their words about the Feed are (rank.py)."""
+    new cookie is free), as their words about the Feed are (rank.py). A fan is an inbox (accounts.inbox_of): me+1@
+    and me+2@ are one person's two accounts (BUG-296)."""
     names = sports.names_of(sport)
-    n = func.count(Follow.id)
+    n = func.count(accounts.inbox_of(Account.email).distinct())
     rows = db.execute(
         select(Player, n.label("n"))
         .join(Follow, Follow.player_id == Player.id)

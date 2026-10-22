@@ -608,6 +608,27 @@ def test_search_ranks_players_by_their_signed_in_fans_and_anyones_follows_only_b
     assert "follows" not in search.public(ranked[0])  # what breaks a tie isn't said
 
 
+def test_one_inbox_is_one_fan_however_many_accounts_its_plus_addresses_made(db, pools):
+    """BUG-296: two signed-in fans following a page made it a starter for every new fan, and me+1@ and me+2@ reach one
+    inbox: one person's two accounts were two fans. Followers are counted by inbox now (accounts.inbox_of)."""
+    system = chess_starters(db)
+    emails = ["me+1@gmail.com", "m.e@googlemail.com", "me+2@gmail.com", "you@example.com"]
+    db.add_all([Account(email=e, fan_id=f"acct-{i}") for i, e in enumerate(emails)])
+    db.flush()
+
+    def page(pid: int, name: str, followers: list[int]) -> None:
+        db.add(Player(id=pid, slug=f"p{pid}", name=name, sport="Chess"))
+        db.flush()
+        db.add_all([PlayerCard(player_id=pid, status="ready", card={}), PlayerIdentity(player_id=pid, system=system, external_id=f"x{pid}", confidence=1.0),
+                    *[Follow(fan_id=f"acct-{i}", player_id=pid, alert_rules={}) for i in followers]])
+
+    page(1, "One Inbox", [0, 1, 2])  # three accounts, one inbox
+    page(2, "Two Fans", [2, 3])
+    db.commit()
+    [offer] = starters.offer(db, "someone new", NOW)
+    assert [(r["name"], r["why"]) for r in offer["players"] if r["why"] == "followed"] == [("Two Fans", "followed")]
+
+
 def test_with_nobody_followed_or_pinned_the_best_known_are_offered(db, pools):
     chess_starters(db)
     pools.top["chess"] = [{"qid": "Q11", "start_utc": (NOW + timedelta(days=3)).isoformat(), "title": "Cup", "competition": "Cup"}]

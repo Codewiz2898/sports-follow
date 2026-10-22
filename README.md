@@ -195,7 +195,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   its own at `poll_event`'s pace: at once when livescores drops it, every round while it's in play and
   changing, otherwise once a minute.
 - **One stream per fan.** The app holds one SSE connection for all of a fan's players; a player's page
-  listens on it too, and opens that player's own stream only for someone the fan doesn't follow.
+  listens on it too, and opens that player's own stream only for someone the fan doesn't follow. An API process
+  holds so many streams at once (`server.STREAMS_PER_PROCESS`): so many a fan, a client address, and an IPv4 /24's or
+  an IPv6 /48's addresses together; a player's stream with neither a fan's cookie nor a session takes one of the few
+  kept for those (`STREAMS_WITHOUT_FAN`), so the rest stay fans'.
 - **A page for every game.** Every game on Today opens its match page, `/match/<source>/<game id>`
   (`sports_follow/match.py`, `GET /api/match/...`), live, over or to come: the fan's live boards, results
   and games to come, the big results and big games coming up, and Live now's games; so does a game on a
@@ -322,7 +325,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   cookie is a new fan, whose pick is theirs and scored but moves nobody else's numbers. Picks on questions still
   open move into an account on sign-in, those already under way stay the device's (no calling a game three ways and
   signing in on the right browser). A game
-  whose source is off asks nothing, and picks are limited per address. In the app: "Call it" on a match page (beside the
+  whose source is off asks nothing, and picks are limited per address (an IPv6 client's /64, its /48's /64s together
+  having a ceiling of their own, as every per-address limit does). In the app: "Call it" on a match page (beside the
   game on a wide screen, in the side column) and on a campaign page (its players' games); on Today and in the side
   column, a game's card says "Call it" until the fan has, then their pick, then "You called it · +38" or what they said
   (`GET /api/me/predictions`, `web/src/components/Calls.tsx`); `/me/leagues`, `/league/<code>` and the invite `/j/<code>`, whose sign-in comes back
@@ -1004,7 +1008,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
 - **Starter players**, who a new fan is offered in each sport (the welcome, an empty Today, search's
   "Try"), find themselves, the same way for every sport (`sports_follow/starters.py`): who's playing
   now or soon, worked out as asked from the live cards; the most followed by signed-in fans (at least two:
-  a cookie's follow is its own), counted as asked; and the
+  a cookie's follow is its own, and an inbox is one fan however many plus-addresses' accounts it has made), counted as asked; and the
   best known (Wikipedia editions, the home country's counting double: `SPORTS_FOLLOW_STARTERS_HOME_COUNTRY`)
   with a game soon, which the worker finds in their sources once a day. The operator can pin a few
   ahead of them with `players starter add <registry id>` (it checks the source has them, and keeps
@@ -1143,7 +1147,7 @@ that build too: turn them on under Alerts. Always pass
 | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | every trace | e.g. `parentbased_traceidratio` and `0.2` to keep a fifth; a job keeps its request's choice |
 | `OTEL_SERVICE_NAME` | `sports-follow-api`, `sports-follow-worker` | the process's name in the traces (`OTEL_RESOURCE_ATTRIBUTES` adds more, e.g. `deployment.environment.name=production`) |
 | `SPORTS_FOLLOW_MAIL_LOG` | `0` | `1` logs sign-in codes instead of emailing them, for development; never over HTTPS |
-| `SPORTS_FOLLOW_MAIL_CODES_PER_DAY` | `100` | sign-in codes a UTC day to everyone, the mail plan's daily allowance (Resend's free plan: 100); one network gets at most 20 a day |
+| `SPORTS_FOLLOW_MAIL_CODES_PER_DAY` | `100` | sign-in codes a UTC day to everyone, the mail plan's daily allowance (Resend's free plan: 100); one client address (an IPv4 address, an IPv6 /64) gets at most 20 a day and an IPv6 /48's /64s together 200; 30% is kept for accounts at least a day old; an inbox (plus-addresses together) gets 5 an hour |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_ID` | none | the Google OAuth web client for "Continue with Google"; redirect URI `<origin>/api/auth/google/callback` (locally `http://localhost:5173/...`) |
 | `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET` | from `SPORTS_FOLLOW_GOOGLE_CLIENT_SECRET_FILE`, else `~/.config/sports-follow/google-client-secret` | that client's secret; without it the Google button is hidden |
 | `SPORTS_FOLLOW_ADMIN_PASSWORD_FILE` | `~/.config/sports-follow/admin-password` | the admin panel's password hash and authenticator key, written by `python -m sports_follow.admin password` and `code`; without it there's no panel |
@@ -1185,7 +1189,7 @@ that build too: turn them on under Alerts. Always pass
 | `SPORTS_FOLLOW_CLIPS_PUBLIC_BASE` | none | where fans fetch clips from: the CDN domain on the bucket (`https://clips.example.com`) |
 | `SPORTS_FOLLOW_CLIPS_KEY_FILE` | `~/.config/sports-follow/clips-key` | the bucket's access key id, then its secret, a line each |
 | `SPORTS_FOLLOW_CLIPS_REGION` | `auto` | the region the bucket's URLs are signed for: R2's `auto`, or an AWS region |
-| `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64); not counted for private addresses |
+| `SPORTS_FOLLOW_RESEARCH_PER_ADDRESS` | `10` | AI researches a UTC day from one client address (an IPv6 /64; an IPv6 /48's /64s together get four times it); not counted for private addresses |
 | `SPORTS_FOLLOW_AGENT` | `1` | `0` runs without the research agent, as with no OpenRouter key: fans follow athletes their sources have (from the registry and search), those pages come from the sources (scores, games, stats, live and alerts) with their profile from Wikidata and Wikipedia and no news, nothing offers AI research, and pages the agent built before stay as they were, no longer updated |
 | `SPORTS_FOLLOW_RESEARCH` | `0` | `1` gives players no live source has a page the research agent writes whole: a typed name no source knows, a registry athlete no source has, offered as "AI research" (3 a fan a day). Off, they can't be followed, search doesn't list them, and nothing offers AI research; the agent only writes the background of a player Wikipedia has no article on |
 | `SPORTS_FOLLOW_AGENT_LIVE` | `0` | `1` lets the AI agent check live scores for sports no source covers (costs model calls every minute of a game); only with `SPORTS_FOLLOW_RESEARCH=1` |

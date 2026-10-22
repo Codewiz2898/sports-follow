@@ -38,12 +38,14 @@ class Accounts:
         self.bumped = False
         self.blocked_ids: set[int] = set()  # blocked by an admin (admin.py)
         self.dropped = 0  # the device's teams that don't fit in the account (teams.merge)
+        self.fresh: set[int] = set()  # accounts made today; the rest stood a day before (accounts.standing)
 
     def find_or_create(self, db, email):
         found = next((i for i, e in self.emails.items() if e == email), None)
         if found is None:
             found = len(self.emails) + 1
             self.emails[found] = email
+            self.fresh.add(found)
         return found
 
     def sign_in(self, db, account_id, anon, ending=None):
@@ -88,8 +90,8 @@ class Accounts:
             del self.sessions[h]
         return ended
 
-    def known(self, db, email):
-        return email in self.emails.values()
+    def standing(self, db, email):
+        return any(e == email and i not in self.fresh for i, e in self.emails.items())
 
     def delete_account(self, db, account_id):
         hashes = self.end_sessions(db, account_id)
@@ -102,7 +104,7 @@ class Accounts:
 @pytest.fixture
 def store(api, monkeypatch):
     fake = Accounts()
-    for name in ("find_or_create", "find_or_create_google", "sign_in", "session_for", "describe", "bump", "end_sessions", "delete_account", "blocked", "known",
+    for name in ("find_or_create", "find_or_create_google", "sign_in", "session_for", "describe", "bump", "end_sessions", "delete_account", "blocked", "standing",
                  "fan_of"):
         monkeypatch.setattr(accounts, name, getattr(fake, name))
     return fake
@@ -338,13 +340,99 @@ def test_made_up_addresses_cant_spend_the_days_codes_kept_for_fans_with_accounts
     assert [start(f"fan{i}@example.com", 20 + i) for i in range(4)] == [200, 200, 200, 429]  # then the whole day's are spent
 
 
-def test_one_ipv6_site_gets_forty_codes_a_day_whichever_of_its_64s_ask(api, store, outbox):
-    """BUG-093 (BHA-415): a client's limits went by its /64, and a site (a home, an office, a server) holds 65,536 of
-    them: its /48 has a day's limit too."""
-    start = lambda i, site="2a01:4f8:c0c": api.call(  # noqa: E731
-        "POST", "/api/auth/email/start", body={"email": f"fan{i}@example.com"}, address=f"{site}:{i:x}::1").status_code
-    assert [start(i) for i in range(server.CODES_PER_NETWORK_DAY + 1)] == [200] * server.CODES_PER_NETWORK_DAY + [429]
-    assert start(99, site="2a01:4f8:c0d") == 200  # another site
+def test_accounts_made_today_cant_spend_the_codes_kept_for_fans_with_accounts(api, store, outbox, monkeypatch):
+    """BUG-093, reopened: the codes kept for fans with accounts could be spent by accounts made for it minutes before,
+    since any account counted. They're kept for accounts that have stood a day (accounts.standing): a newer one asks
+    from the rest of the day's, as a new address does."""
+    monkeypatch.setattr(server, "MAIL_CODES_PER_DAY", 10)
+    store.emails.update({1: "fan@example.com", 2: "made-today@example.com", 3: "made-today-too@example.com"})
+    store.fresh.update({2, 3})
+    start = lambda email, i: api.call("POST", "/api/auth/email/start", body={"email": email}, address=f"81.2.69.{10 + i}").status_code  # noqa: E731
+    assert [start(f"made-up{i}@example.com", i) for i in range(7)] == [200] * 7  # all the day's codes but the three kept
+    assert [start("made-today@example.com", 7), start("made-today-too@example.com", 8)] == [429, 429]
+    assert start("fan@example.com", 9) == 200  # an account that has stood a day still gets one
+
+
+def test_plus_addresses_of_one_inbox_share_its_codes_an_hour(api, store, outbox):
+    """BUG-296: me+1@ and me+2@ reach one inbox, and each was an address of its own, with an address's codes an hour:
+    one inbox made any number of accounts, and their codes could spend those kept for fans with accounts (BUG-093).
+    An address's codes an hour are its inbox's now (accounts.inbox: its +tag dropped, and Gmail's dots)."""
+    addresses = ["me+1@gmail.com", "me+2@gmail.com", "m.e@gmail.com", "me+spurs@googlemail.com", "me@googlemail.com", "m.e+x@gmail.com"]
+    store.emails.update({i + 1: e for i, e in enumerate(addresses)})  # accounts that have stood a day
+    answers = [api.call("POST", "/api/auth/email/start", body={"email": e}, address=f"81.2.69.{10 + i}") for i, e in enumerate(addresses)]
+    assert [a.status_code for a in answers] == [200] * server.CODES_PER_EMAIL + [429]
+    assert answers[-1].json()["detail"] == "That's a lot of codes for one address. Try again in an hour."
+    assert api.call("POST", "/api/auth/email/start", body={"email": "you+1@gmail.com"}, address="81.2.69.30").status_code == 200  # another inbox
+    # Each address is still its own account: its code signs in to it.
+    answer = api.call("POST", "/api/auth/email/verify", body={"email": "me+2@gmail.com", "code": outbox["me+2@gmail.com"]}, address="81.2.69.11")
+    assert answer.status_code == 200 and answer.json()["email"] == "me+2@gmail.com"
+
+
+def test_an_inbox_is_an_address_without_its_tag_and_gmails_dots_and_an_account_is_still_its_address():
+    """BUG-296: what counts accounts counts inboxes (accounts.inbox); who an account is stays its whole address, so an
+    account made with a +tag signs in as itself, as it always has."""
+    assert accounts.normal_email(" Me+Spurs@Gmail.com ") == "me+spurs@gmail.com"
+    assert {accounts.inbox(e) for e in ("me+spurs@gmail.com", "m.e@gmail.com", "me@googlemail.com", "m.e+1@googlemail.com", "me@gmail.com")} == {"me@gmail.com"}
+    assert accounts.inbox("first.last+news@example.com") == "first.last@example.com"  # dots are Gmail's alone to drop
+    assert accounts.inbox("+only@example.com") == "+only@example.com"  # nothing before the tag: the address as it is
+
+
+CARRIER = "2405:201:ab00"  # an IPv6 /48 of a phone network's: its subscribers each have a /64 in it
+
+
+def carrier(i: int, site: str = CARRIER) -> str:
+    """An address in the i-th /64 of a /48."""
+    return f"{site}:{i:x}::10"
+
+
+def test_each_ipv6_64_has_its_own_codes_a_day_and_its_48_a_much_larger_ceiling(api, store, outbox, monkeypatch, caplog):
+    """BUG-326: an IPv6 client's codes a day were capped by its /48, at forty, and a phone network or an ISP shares a
+    /48 among many subscribers: after forty codes nobody there could sign in that day. A /64 (a household's, or a
+    phone's) has its own day now, as an IPv4 address has, and a /48's /64s together a ceiling many times larger, so a
+    /48 still can't take 65,536 /64s' worth (BUG-093). A /48 at its ceiling is logged, once."""
+    caplog.set_level(logging.WARNING, "sports_follow.limits")
+    monkeypatch.setattr(server, "_ceilings_logged", {}, raising=False)
+    start = lambda i, site=CARRIER: api.call(  # noqa: E731
+        "POST", "/api/auth/email/start", body={"email": f"fan{i}@example.com"}, address=carrier(i, site)).status_code
+    assert [start(i) for i in range(41)] == [200] * 41  # forty-one subscribers, a /64 each
+    monkeypatch.setattr(server, "CODES_PER_NETWORK_DAY", 43)  # the /48's ceiling, made small
+    assert [start(i) for i in range(41, 45)] == [200, 200, 429, 429]
+    assert start(99, site="2405:201:ab01") == 200  # another /48
+    assert [r.getMessage() for r in caplog.records if r.name == "sports_follow.limits"] == [
+        f"limits: a /48 reached its ceiling for auth-address-day ({hashlib.sha256(b'2405:201:ab00::/48').hexdigest()[:12]})"]
+
+    def from_one_64(i):
+        for key in [k for k in api.redis.data if k.startswith("auth-address:")]:
+            del api.redis.data[key]  # another hour
+        return api.call("POST", "/api/auth/email/start", body={"email": f"home{i}@example.com"}, address=carrier(7, "2405:201:ab02"))
+
+    assert [from_one_64(i).status_code for i in range(server.CODES_PER_ADDRESS_DAY)] == [200] * server.CODES_PER_ADDRESS_DAY
+    assert from_one_64(99).json()["detail"] == "Your network has asked for a lot of codes today. Try again tomorrow."  # a /64's day, as an IPv4 address's
+
+
+def test_a_subscriber_sharing_the_fans_48_can_neither_end_their_code_nor_shut_them_out_for_the_day(api, store, outbox):
+    """BUG-092 on phone networks (BUG-326): wrong codes were counted by the /48 they came from, which a phone network
+    shares among its subscribers, so another subscriber who knew a fan's address could end the code in their inbox,
+    and with twenty in a day shut them out of signing in until UTC midnight. A /64's wrong codes are its own now, as
+    an IPv4 address's are."""
+    fan, other = carrier(1), carrier(0x9F)
+    assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=fan).status_code == 200
+    code = outbox.pop("fan@example.com")
+    assert [verify(api, wrong_to(code), other).status_code for _ in range(server.CODE_TRIES + 1)] == [400] * server.CODE_TRIES + [429]
+    assert verify(api, code, fan).status_code == 200  # the fan's code still works where they asked for it
+
+    # The rest of a day's wrong codes from the other subscriber, to codes asked for there (and sent to the fan).
+    who = accounts.email_key("fan@example.com")
+    for _ in range(server.FAILS_PER_DAY // server.CODE_TRIES - 1):
+        for key in [k for k in api.redis.data if k.startswith(("auth-wait:", "auth-email:"))]:
+            del api.redis.data[key]  # a minute, and an hour, later
+        assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=other).status_code == 200
+        right = outbox.pop("fan@example.com")
+        assert all(verify(api, wrong_to(right), other).status_code == 400 for _ in range(server.CODE_TRIES))
+    api.redis.data.pop(f"auth-wait:{who}")
+    assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=other).status_code == 429
+    assert api.call("POST", "/api/auth/email/start", body={"email": EMAIL}, address=fan).status_code == 200  # but not the fan
+    assert verify(api, outbox["fan@example.com"], fan).status_code == 200
 
 
 def test_a_code_that_couldnt_be_sent_can_be_asked_for_again_at_once(api, store, monkeypatch):
