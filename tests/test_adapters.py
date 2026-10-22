@@ -359,6 +359,22 @@ def test_soccer_shootouts_say_who_won_on_penalties():
     assert (football.result_label(unflagged, [BURNLEY]), football.result_label(unflagged, ["374"])) == ("Won 2–1", "Lost 1–2")
 
 
+@pytest.mark.parametrize("name, description", [("STATUS_ABANDONED", "Abandoned"), ("STATUS_FORFEIT", "Forfeit")])
+def test_a_soccer_match_called_off_after_kick_off_is_no_result(name, description):
+    # BUG-137: ESPN marks an abandoned (or forfeited) match "post", and it was stored as a full-time result with the
+    # score it was stopped at: Norway 1–2 Portugal "Portugal won", a W in form. Off, as Sportmonks has an abandoned one.
+    called_off = {"id": "5", "name": name, "state": "post", "completed": True, "description": description, "detail": "Abd", "shortDetail": "Abd"}
+    data = load("soccer-summary-final")
+    data["header"]["competitions"][0]["status"]["type"] = called_off
+    snap = espn_soccer.parse_summary(data, "uefa.nations")
+    assert (snap.status, snap.state["cancelled"]) == ("postponed", True)  # a prediction on it is voided all the same
+    assert football.SPORT.answer("result", snap.status, snap.state) == "void"
+    schedule = load("soccer-schedule-results")
+    for event in schedule["events"]:
+        event["competitions"][0]["status"]["type"] = called_off
+    assert {(f.status, f.result) for f in espn_soccer.parse_schedule(schedule)} == {("postponed", None)}
+
+
 def test_soccer_season_stats():
     stats, note = espn_soccer.parse_season_stats(load("soccer-athlete-stats"))
     values = {s["label"]: s["value"] for s in stats}
