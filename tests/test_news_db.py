@@ -16,7 +16,7 @@ from sqlalchemy import create_engine, delete, select, text, update
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import bus, candidates, controls, curate, db as db_module, feed, news, rank, registry, week
-from sports_follow.adapters import publisher_rss
+from sports_follow.adapters import Article, publisher_rss
 from sports_follow.models import Athlete, Event, FeedCandidate, Follow, Moment, NewsItem, Player, PlayerCard, SourceBinding
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
@@ -101,13 +101,20 @@ def test_a_common_surname_in_the_registry_names_a_player_only_with_their_side(wo
 
 
 def test_a_handle_two_of_the_registrys_pros_go_by_is_one_a_shared_feed_needs_more_for(world):
-    # BUG-252: the registry knows a handle is another game's pro's too.
+    # BUG-252: the registry knows a handle is another game's pro's too. Its pros are each under their game, as the
+    # rosters write them ("lol", "cs2"; "esports" for one whose game can't be told), never all under "esports": the
+    # registry was asked for "esports" alone, found nobody, and HLTV's Zeus still went to the LoL one.
     with db_module.session() as s:
-        s.add_all(Athlete(qid=f"pandascore:{i}", sport="esports", name=n, league=game, search_text=registry.search_text(n, [])) for i, (n, game) in
-                  enumerate([("Zeus", "league-of-legends"), ("Zeus", "cs-go"), ("Boaster", "valorant")]))  # fmt: skip
-        group = [candidates.Followed(41, "lol", "Zeus"), candidates.Followed(42, "valorant", "Boaster")]
-        usual = news.common(s, group, news.names(group))
-        assert ("lol", "zeus") in usual and {w for _, w in usual} == {"zeus"}  # Boaster is the only one
+        s.add_all(Athlete(qid=f"pandascore:{i}", sport=game, name=n, search_text=registry.search_text(n, [])) for i, (n, game) in
+                  enumerate([("Zeus", "lol"), ("Zeus", "cs2"), ("Boaster", "valorant"), ("Dev Park", "lol"), ("Ann Park", "cs2"), ("Joe Park", "esports")]))  # fmt: skip
+        group = [candidates.Followed(41, "lol", "Zeus", teams=["Hanwha Life Esports"]), candidates.Followed(42, "valorant", "Boaster"),
+                 candidates.Followed(43, "lol", "Dev Park", teams=["T1"])]  # fmt: skip
+        found = news.names(group)
+        usual = news.common(s, group, found)
+    assert {("lol", "zeus"), ("lol", "park")} <= usual and "boaster" not in {w for _, w in usual}  # three pros of any game are Parks
+    hltv = Article(url="https://hltv.example.com/1", title="Zeus returns to coach Natus Vincere", description="The Ukrainian legend is back.",
+                   published=NOW, outlet="HLTV", feed="https://hltv.example.com/rss", image=None)
+    assert news.link([hltv], group, found, usual, shared=True) == []
 
 
 def test_a_surname_the_registry_writes_with_accents_is_as_common_as_it_is(world):
@@ -333,6 +340,39 @@ def test_a_story_an_admin_hid_is_kept_hidden_for_a_player_found_in_it_later(worl
     assert news.poll(NOW + timedelta(minutes=20))["cricket"]["kept"] == 1
     with db_module.session() as s:
         assert {pid: review for pid, review in s.execute(select(FeedCandidate.player_id, FeedCandidate.review))} == {asha: "hidden", rao: "hidden"}
+
+
+def test_an_admins_hide_takes_the_story_off_every_card_it_was_on_at_once(world, monkeypatch):
+    # BUG-286: Hide reranked the story's rows but left it on the players' cards (their page's news, Today's tile) until
+    # the curator's next run, up to half an hour on.
+    from sports_follow import admin
+
+    _, feeds = world
+    asha, kiran = player("Asha Verma", ["Riverside XI"], card=CARD), player("Kiran Rao", ["Eastern Stars"], card=CARD)
+    other = player("Dev Smith", ["Riverside XI"], card=CARD)
+    feeds[WICKET] = rss(("Asha Verma and Kiran Rao in a row over a no-ball", "https://wicket.example.com/r/1", "Words after the game.", 2),
+                        ("Dev Smith hits a fifty", "https://wicket.example.com/r/2", "His first of the season.", 2))  # fmt: skip
+    feeds[GAZETTE] = rss()
+    news.poll(NOW)
+    monkeypatch.setattr(curate, "judge_many", lambda cands: [curate.Verdict.model_validate(said()) for _ in cands])
+    rank.judge(NOW)
+    rank.rescore(NOW)
+    sent: dict[int, dict] = {}
+    monkeypatch.setattr(bus, "store_card", sent.__setitem__)
+    assert rank.cards(NOW) == {"cards": 3}
+
+    def stories(pid: int) -> list[str]:
+        with db_module.session() as s:
+            card = s.get(PlayerCard, pid)
+            return [st["url"] for st in (card.card if card else {}).get("stories", [])]
+
+    with db_module.session() as s:
+        row = s.scalar(select(FeedCandidate.id).where(FeedCandidate.player_id == asha))
+    sent.clear()
+    assert admin.review_candidate(row, "hidden")  # whoever's row it's hidden on, it's every player's
+    assert stories(asha) == stories(kiran) == [] and set(sent) == {asha, kiran} and all("stories" not in c for c in sent.values())
+    assert stories(other) == ["https://wicket.example.com/r/2"]  # another's card is left as it was
+    assert admin.review_candidate(row, None) and stories(asha) == stories(kiran) == ["https://wicket.example.com/r/1"]  # taken back: on them again
 
 
 def test_a_bound_players_card_loses_the_agents_old_news_at_the_curators_next_run(world, monkeypatch):

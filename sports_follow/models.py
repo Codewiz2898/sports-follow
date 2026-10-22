@@ -141,8 +141,10 @@ class AthleteOverride(Base):
     name: Mapped[str] = mapped_column(String(200))  # who, as they were called then
     ids: Mapped[dict] = mapped_column(JSONB, default=dict)  # their ids in the sources: {"espn_cricket": "253802"}
     # A removed athlete's, as the registry had it: a pick with their name and birth date is them, in a source
-    # whose id for them nobody knew when they were removed (registry.removed).
+    # whose id for them nobody knew when they were removed (registry.removed); with how precisely it was known
+    # (Athlete.birth_precision; None for a row written before it was kept).
     birth_date: Mapped[date | None] = mapped_column(Date)
+    birth_precision: Mapped[int | None] = mapped_column(Integer)
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = _now()
 

@@ -144,6 +144,20 @@ def test_english_aliases_come_first_and_a_spelling_search_cant_tell_apart_takes_
     assert rao["aliases"] == ["A.Rao", *(f"Nickname {i}" for i in range(registry.MAX_ALIASES - 1))]
 
 
+def test_a_sentence_someone_wrote_in_as_an_alias_isnt_kept():
+    # BUG-294: anyone can add an alias on Wikidata. "next virat kholi best Australian batter" showed as Sam Konstas's
+    # "aka", and put him fourth when a fan searched "virat".
+    said = ["next virat kholi best Australian batter", "the kid from sydney", "Samuel Konstas", "Sam K", "baby goat", "Samuel Konstas Of Sydney Thunder FC"]
+    names = [{"p": WD + "Q9", "n": "Sam Konstas", "kind": "label", "lang": "en"}, *({"p": WD + "Q9", "n": n, "kind": "alias", "lang": "mul"} for n in said)]
+    [sam] = registry.build("cricket", [{"p": WD + "Q9", "id_espn_cricket": "9"}], names, [], TODAY)
+    assert sam["aliases"] == ["Samuel Konstas", "Sam K", "baby goat"] and "virat" not in sam["search_text"]
+    # A long name written as one is a name: a Brazilian's in full, with its "da" and "dos".
+    full = ["Neymar da Silva Santos Júnior", "Ricardo Izecson dos Santos Leite", "Mahendra Singh Dhoni"]
+    names = [{"p": WD + "Q8", "n": "Neymar", "kind": "label", "lang": "en"}, *({"p": WD + "Q8", "n": n, "kind": "alias", "lang": "mul"} for n in full)]
+    [neymar] = registry.build("football", [{"p": WD + "Q8", "id_transfermarkt": "8"}], names, [], TODAY)
+    assert neymar["aliases"] == full
+
+
 def test_words_and_search_text_fold_names():
     assert registry.words("A'ja Wilson") == ["aja", "wilson"]
     assert registry.words("Magnus Øen Carlsen") == ["magnus", "oen", "carlsen"]

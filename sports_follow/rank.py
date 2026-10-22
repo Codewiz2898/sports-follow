@@ -601,14 +601,14 @@ def _stories(session: Session, rows: Sequence[Any], published: dict[int, datetim
     return out
 
 
-def cards(now: datetime | None = None) -> dict[str, int]:
+def cards(now: datetime | None = None, players: Iterable[int] | None = None) -> dict[str, int]:
     """After ranking: each player's served stories (news.py) onto their card as "stories" (feed.news_for), so every
     card that leaves the server carries them, a page's, a stream's or the Android app's, beside the research agent's
     news, which stays under "news"; taken off once none is served. A player a live source has has the publishers'
     news alone (BHA-334): the agent's that a build before they were bound left on the card goes here too, without
     waiting for an agent run that never comes for them (pipeline.agent_due). A card is written only where it
     changes, under its row's lock, its version moved on, and published as any card is; one another writer replaced
-    meanwhile is put right at the next run."""
+    meanwhile is put right at the next run. Given players, only theirs (an admin's word on a story: admin.py)."""
     from . import bus
     from .feed import news_for  # feed.py reads this module's helpers; this one of its, here only
 
@@ -620,6 +620,9 @@ def cards(now: datetime | None = None) -> dict[str, int]:
             select(PlayerCard.player_id).join(SourceBinding, SourceBinding.player_id == PlayerCard.player_id)
             .where(SourceBinding.purpose == "fixtures", SourceBinding.adapter.in_(list(ADAPTERS)), PlayerCard.card["news"] != literal([], JSONB))
         ))  # fmt: skip
+        if players is not None:
+            only = set(players)
+            ids, bound = ids & only, bound & only
         served = news_for(session, sorted(ids), now, strict=True)  # a failed read is an error, not every story gone
         for pid in sorted(ids | bound):
             row = session.get(PlayerCard, pid, with_for_update=True)

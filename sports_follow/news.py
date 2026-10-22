@@ -187,7 +187,8 @@ def common(session: Session, players: Sequence[Followed], found: dict[int, Names
     """The (sport, surname) pairs of these players' surnames that COMMON or more of the sport's athletes in the
     registry share, however their names are accented ("Giménez" and "Gimenez" are one); and of their own one-word
     names or handles (Names.own) that HANDLES or more go by, as their name or another of theirs (two games' "Zeus").
-    One query a sport, over the registry's names as search reads them (Athlete.search_text, plain words)."""
+    One query a sport, or a group's (every esports game's pros, each kept under their game: sports.within), over the
+    registry's names as search reads them (Athlete.search_text, plain words)."""
     wanted: dict[str, set[str]] = {}
     handles: dict[str, set[str]] = {}
     for p in players:
@@ -204,7 +205,7 @@ def common(session: Session, players: Sequence[Followed], found: dict[int, Names
         # A name ending in the surname; a whole name or another of theirs that's the handle (registry.search_text).
         either = [*(Athlete.search_text.like(f"% {w} |%") for w in sorted(words)),
                   *(Athlete.search_text.like(f"{at} {w} |%") for w in sorted(mine) for at in ("", "%|"))]  # fmt: skip
-        for name, text in session.execute(select(Athlete.name, Athlete.search_text).where(Athlete.sport == registry, or_(*either))):
+        for name, text in session.execute(select(Athlete.name, Athlete.search_text).where(Athlete.sport.in_(sports.within(registry)), or_(*either))):
             last = naming.words(name)[-1:]
             if last and last[0] in words:
                 surnames[last[0]] = surnames.get(last[0], 0) + 1
