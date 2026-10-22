@@ -2648,8 +2648,14 @@ async def feed_unplayable(player_id: RowId, item_id: str, request: Request, body
         return answer
     await redis.expire(votes, feed.UNPLAYABLE_VOTES_FOR)
     # One check for the reports that pass the count together, and none again while its mark lasts (feed.check_unplayable).
-    if await redis.scard(votes) >= feed.UNPLAYABLE_VOTES and await redis.set(feed.unplayable_check_key(video), "1", nx=True, ex=feed.UNPLAYABLE_CHECK_EVERY):
-        await enqueue("check_unplayable", video, _job_id=f"check-unplayable:{video}")
+    # Held here only as long as a check that can't say holds it, so a job that never ran doesn't hold it for a day.
+    check = feed.unplayable_check_key(video)
+    if await redis.scard(votes) >= feed.UNPLAYABLE_VOTES and await redis.set(check, "1", nx=True, ex=feed.UNPLAYABLE_UNCHECKED_AGAIN):
+        try:
+            await enqueue("check_unplayable", video, _job_id=f"check-unplayable:{video}")
+        except Exception:
+            await redis.delete(check)
+            raise
     return answer
 
 

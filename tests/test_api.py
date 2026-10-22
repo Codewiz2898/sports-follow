@@ -2016,6 +2016,41 @@ def test_a_burst_of_wont_play_reports_at_once_cant_pass_an_addresss_limit(api, m
     assert api.redis.data[key] == feed.UNPLAYABLE_PER_ADDRESS
 
 
+def test_queueing_a_videos_check_holds_it_only_an_hour_and_a_check_that_couldnt_be_queued_holds_nothing(api, monkeypatch):
+    """BUG-100's check: queued, it holds the video from another check only as long as a check that can't say would
+    (feed.UNPLAYABLE_UNCHECKED_AGAIN): the check, once it has asked, holds it the day (feed.UNPLAYABLE_CHECK_EVERY).
+    A job lost before it ran would otherwise keep the video from being asked about for a day. And a check the queue
+    refused holds nothing: the next network's report queues it."""
+    monkeypatch.setattr(feed, "said_unplayable", lambda db, fan, player_id, item: "youtube:abcdefghijk", raising=False)
+    check = "feed:unplayable:check:youtube:abcdefghijk"
+    held: list[object] = []
+    keep = api.redis.set
+
+    async def set(key, value, nx=False, ex=None):
+        if key == check:
+            held.append(ex)
+        return await keep(key, value, nx=nx, ex=ex)
+
+    monkeypatch.setattr(api.redis, "set", set)
+    queue = api.queue.enqueue_job
+
+    async def down(name, *args, **options):
+        raise ConnectionError("the queue didn't answer")
+
+    def say(n: int) -> httpx.Response:
+        return api.call("POST", "/api/players/7/feed/0123456789abcdef/unplayable", fan=f"net-{n}", address=f"81.2.70.{n + 1}", body={"timezone": "Asia/Kolkata"})
+
+    for n in range(feed.UNPLAYABLE_VOTES - 1):
+        say(n)
+    monkeypatch.setattr(api.queue, "enqueue_job", down)
+    assert say(feed.UNPLAYABLE_VOTES - 1).status_code == 500
+    assert check not in api.redis.data and api.queue.jobs == []  # nothing held
+    monkeypatch.setattr(api.queue, "enqueue_job", queue)
+    assert say(feed.UNPLAYABLE_VOTES).status_code == 200  # the next network's report queues it
+    assert api.queue.jobs == [("check_unplayable", "youtube:abcdefghijk")]
+    assert held == [feed.UNPLAYABLE_UNCHECKED_AGAIN, feed.UNPLAYABLE_UNCHECKED_AGAIN]
+
+
 def test_reports_from_many_networks_at_once_that_a_video_wont_play_queue_one_check_of_it_and_take_it_from_nobody(api, monkeypatch):
     """BUG-100: no number of networks saying a video won't play takes it from anyone else's Feed: once
     feed.UNPLAYABLE_VOTES have, the worker asks its source (feed.check_unplayable). Reports arriving together queue
