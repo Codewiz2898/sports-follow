@@ -240,7 +240,12 @@ def test_a_failed_sign_in_pauses_android_pushes_rather_than_each_asking_again(fa
 
 def test_a_failed_sign_in_or_revoked_key_isnt_counted_against_the_device():
     device = SimpleNamespace(failures=0)
-    db = SimpleNamespace(get=lambda model, key: device, delete=lambda row: None, execute=lambda statement: None)
+
+    def failed(statement) -> int:  # the failure added to the count, in the database
+        device.failures += 1
+        return device.failures
+
+    db = SimpleNamespace(scalar=failed, execute=lambda statement: None)
     notify._health(db, 7, fcm.OURS)
     assert device.failures == 0  # five of these would remove every Android device
     notify._health(db, 7, 500)

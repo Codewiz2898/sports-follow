@@ -1,10 +1,12 @@
 """The noise rules (alerts.py) down a moment's real path (notify.record, notify.send): what a fan hears when quiet hours
-end. ON CONFLICT and the push log need Postgres itself, so these run against a throwaway database at alembic head and are
+end, and how a device's health is counted. ON CONFLICT and the push log need Postgres itself, so these run against a throwaway database at alembic head and are
 skipped without one (see tests/test_corrections_db.py for setting it up). Every test empties the tables first."""
 
 from __future__ import annotations
 
 import os
+import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -120,3 +122,55 @@ def test_a_push_counts_as_loud_where_one_of_the_fans_devices_made_a_sound(db, pu
     notify.send(ids)
     assert sorted(p["quiet"] for _, p in pushed) == [False, True]
     assert db.scalars(select(Notification.loud)).one() is True
+
+
+# ---------------------------------------------------------------- a device's health (BUG-187)
+
+
+def test_two_batches_failing_on_one_device_at_once_both_count(db, monkeypatch):
+    # Each batch writes back what its pushes' services said: two at once, each read the device's failures as 0 and wrote
+    # 1, so a device that kept failing was never removed. A thread stands for each batch, the second writing back while
+    # the first's isn't committed.
+    device(db, "fan")
+    device_id = db.scalars(select(PushSubscription.id)).one()
+    engine = db.get_bind()
+    made = sessionmaker(bind=engine)
+    first_wrote, go_on = threading.Event(), threading.Event()
+
+    def first() -> None:
+        with made() as s:
+            notify._health(s, device_id, 500)
+            first_wrote.set()
+            go_on.wait(5)
+            s.commit()
+
+    def second() -> None:
+        first_wrote.wait(5)
+        with made() as s:
+            notify._health(s, device_id, 500)  # waits for the first's commit, where the count is added to
+            s.commit()
+
+    threads = [threading.Thread(target=first), threading.Thread(target=second)]
+    for t in threads:
+        t.start()
+    time.sleep(0.5)
+    go_on.set()
+    for t in threads:
+        t.join(10)
+    db.expire_all()
+    assert db.scalars(select(PushSubscription.failures)).one() == 2
+
+
+def test_a_device_the_push_service_is_throttling_isnt_counted_as_failing(db):
+    # FCM answers 429 for a device sent more than its quota (a busy fan's goals on a Saturday afternoon), as a push
+    # service may: not the device's fault, so five of them don't remove it, as a failing device's do.
+    device(db, "fan")
+    device_id = db.scalars(select(PushSubscription.id)).one()
+    for _ in range(notify.MAX_FAILURES):
+        notify._health(db, device_id, 429)
+    db.commit()
+    assert db.scalars(select(PushSubscription.failures)).one() == 0
+    for _ in range(notify.MAX_FAILURES):
+        notify._health(db, device_id, 500)
+    db.commit()
+    assert db.scalars(select(PushSubscription.id)).all() == []  # one that keeps failing is removed

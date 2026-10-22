@@ -665,19 +665,19 @@ def _settle(results: list[tuple[int, int, int | str | None]]) -> None:
 def _health(db: Session, device_id: int, error: int | str | None) -> None:
     """A device the push service says is gone (404, 410) is removed; one that keeps failing is removed after MAX_FAILURES.
     A message too big for the push service (413) isn't counted against the device, nor a refusal of this
-    server's own key (401: an FCM key that's wrong or revoked would otherwise remove every Android device)."""
+    server's own key (401: an FCM key that's wrong or revoked would otherwise remove every Android device), nor the
+    push service holding back a device sent more than its quota (429: FCM's for a busy fan's phone). A failure is
+    added to the count in the database, so batches writing back at once each count theirs (BUG-187)."""
     if error is None:
         db.execute(update(PushSubscription).where(PushSubscription.id == device_id).values(last_ok_at=datetime.now(timezone.utc), failures=0))
     elif error in (404, 410):
         db.execute(delete(PushSubscription).where(PushSubscription.id == device_id))
-    elif error in (401, 413):
-        return  # this server's key, or a message too big for the push service: not the device's fault
+    elif error in (401, 413, 429):
+        return  # this server's key, a message too big for the push service, or one holding pushes back: not the device's fault
     else:
-        row = db.get(PushSubscription, device_id)
-        if row is not None:
-            row.failures += 1
-            if row.failures >= MAX_FAILURES:
-                db.delete(row)
+        failures = db.scalar(update(PushSubscription).where(PushSubscription.id == device_id).values(failures=PushSubscription.failures + 1).returning(PushSubscription.failures))
+        if failures is not None and failures >= MAX_FAILURES:
+            db.execute(delete(PushSubscription).where(PushSubscription.id == device_id))
 
 
 def transports() -> tuple[str, ...]:

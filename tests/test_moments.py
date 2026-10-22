@@ -475,7 +475,12 @@ def test_a_long_push_is_cut_to_fit_and_written_as_utf8(monkeypatch):
 
 def test_a_push_too_big_for_the_service_isnt_the_devices_fault():
     device = SimpleNamespace(failures=0)
-    db = SimpleNamespace(get=lambda model, key: device, delete=lambda row: None, execute=lambda statement: None)
+
+    def failed(statement) -> int:  # the failure added to the count, in the database
+        device.failures += 1
+        return device.failures
+
+    db = SimpleNamespace(scalar=failed, execute=lambda statement: None)
     notify._health(db, 7, 413)
     assert device.failures == 0  # five of these deleted a healthy device
     notify._health(db, 7, 500)
