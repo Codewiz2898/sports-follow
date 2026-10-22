@@ -230,19 +230,22 @@ def item_id(url: str) -> str:
 def judged(db: Session, player_ids: Sequence[int], now: datetime | None = None, strict: bool = False) -> dict[int, list[Candidate]]:
     """The judge's kept items for each player, best first: the rows the curator scored and nobody hid (rank.py),
     their score faded by age, a video's title tidied (titles.tidy, keeping these players' names and its sport's
-    words as written). {} if they can't be read: a feed is then the news alone, and never an error; with strict,
-    the error is raised instead (the curator mustn't take a failed read for nothing served)."""
+    words as written). None for a player whose sport is turned off: their rows stay, served again once it's back on.
+    {} if they can't be read: a feed is then the news alone, and never an error; with strict, the error is raised
+    instead (the curator mustn't take a failed read for nothing served)."""
     if not player_ids:
         return {}
     now = now or datetime.now(timezone.utc)
     try:
         with db.begin_nested():
+            players = db.execute(select(Player.id, Player.name, Player.sport).where(Player.id.in_(sorted(set(player_ids))))).all()
+            running = sorted(pid for pid, _, sport in players if sports.on(sport))
             rows = db.execute(
                 select(FeedCandidate.player_id, FeedCandidate.source, FeedCandidate.external_id, FeedCandidate.url, FeedCandidate.candidate, FeedCandidate.features, FeedCandidate.verdict,
                        FeedCandidate.score, FeedCandidate.moment_id, FeedCandidate.review, FeedCandidate.judged_at, FeedCandidate.fetched_at)
-                .where(FeedCandidate.player_id.in_(sorted(set(player_ids))), FeedCandidate.served())
-            ).all()  # fmt: skip
-            names = tuple(n for n in db.scalars(select(Player.name).where(Player.id.in_(sorted(set(player_ids))))) if n)
+                .where(FeedCandidate.player_id.in_(running), FeedCandidate.served())
+            ).all() if running else []  # fmt: skip
+            names = tuple(name for _, name, _ in players if name)
         out: dict[int, list[Candidate]] = {}
         for r in rows:
             known = feed_source(r.source)

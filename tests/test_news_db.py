@@ -15,9 +15,9 @@ import pytest
 from sqlalchemy import create_engine, delete, select, text, update
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import bus, candidates, curate, db as db_module, feed, news, rank, week
+from sports_follow import bus, candidates, controls, curate, db as db_module, feed, news, rank, week
 from sports_follow.adapters import publisher_rss
-from sports_follow.models import Athlete, FeedCandidate, Follow, Moment, NewsItem, Player, PlayerCard, SourceBinding
+from sports_follow.models import Athlete, Event, FeedCandidate, Follow, Moment, NewsItem, Player, PlayerCard, SourceBinding
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -353,3 +353,33 @@ def test_removing_a_player_takes_their_stories_and_the_prune_keeps_only_the_ever
         s.execute(update(FeedCandidate).where(FeedCandidate.url == "https://gazette.example.org/p/3").values(review="pinned"))
     assert news.prune(NOW) == {"pruned": 1}
     assert stories() == [(asha, "https://gazette.example.org/p/3", "Cricket Gazette")]
+
+
+def served(pid: int, url: str, title: str, published: float, fetched: float, score: float = 0.5) -> None:
+    """A story the curator served for a player: published that many hours ago, first linked to them that many ago."""
+    with db_module.session() as s:
+        s.add(FeedCandidate(player_id=pid, source="publisher_rss", external_id=news.external_id(url), url=url, features={"outlets": 1}, verdict=said(), score=score,
+                            candidate={"title": title, "description": "", "channel": "Daily Wicket", "channel_id": WICKET, "sport": "cricket",
+                                       "published": (NOW - timedelta(hours=published)).isoformat()},
+                            fetched_at=NOW - timedelta(hours=fetched), checked_at=NOW, judged_at=NOW))  # fmt: skip
+
+
+def test_a_sport_turned_off_has_its_players_stories_and_line_ups_off_the_wire(world):
+    # BUG-125 (H14): the Wire kept a turned-off sport's stories and line-ups for days.
+    maker, _ = world
+    with db_module.session() as s:
+        s.execute(text("TRUNCATE event RESTART IDENTITY CASCADE"))  # its moments and their candidates too: before any
+    asha = player("Asha Verma", ["Riverside XI"])
+    served(asha, "https://wicket.example.com/w/1", "Verma named captain", 2, 2)
+    with db_module.session() as s:
+        game = Event(key="riverside-v-eastern", sport="cricket", title="Riverside XI v Eastern Stars", status="scheduled")
+        s.add(game)
+        s.flush()
+        s.add(Moment(key="lineup", player_id=asha, event_id=game.id, kind="lineup", level="key", title="Asha Verma starts", url="/", created_at=NOW - timedelta(hours=1)))
+    s = maker()
+    try:
+        assert {r["text"] for r in week.wire(s, "fan", NOW)} == {"Verma named captain", "Asha Verma starts v Eastern Stars"}
+        controls.turn_sport("cricket", False)
+        assert week.wire(s, "fan", NOW) == []
+    finally:
+        s.close()

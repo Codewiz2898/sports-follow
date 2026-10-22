@@ -216,8 +216,8 @@ def wire(db: Session, fan: str, now: datetime | None = None) -> list[dict[str, A
 
 
 def _news(db: Session, fan: str, now: datetime) -> list[Row]:
-    """The fan's players' line-ups and stories, newest first. A player's line-up for a game is its latest (a
-    late change: "now on the bench"), and a story about two of the fan's players is one row."""
+    """The fan's players' line-ups and stories, newest first, none of a sport turned off. A player's line-up for a
+    game is its latest (a late change: "now on the bench"), and a story about two of the fan's players is one row."""
     rows = db.execute(
         select(Moment, Player, Event.title)
         .join(Follow, and_(Follow.player_id == Moment.player_id, Follow.fan_id == fan))
@@ -234,6 +234,8 @@ def _news(db: Session, fan: str, now: datetime) -> list[Row]:
     stories = {n.id: n for n in db.scalars(select(NewsItem).where(NewsItem.id.in_(ids)))} if ids else {}
     told: set[tuple[str, int | None, int | None]] = set()  # line-ups by player and game, stories by id: newest first
     for moment, player, title in rows:
+        if not sports.on(player.sport):
+            continue  # a sport turned off isn't on the Wire
         row = {"id": f"m{moment.id}", "player_id": moment.player_id, "player": player.name, "sport": player.sport, "yours": True}
         if moment.kind == "lineup":
             if ("lineup", moment.player_id, moment.event_id) in told:
@@ -270,7 +272,7 @@ def _stories(db: Session, fan: str, now: datetime) -> tuple[list[tuple[datetime,
     told: set[int] = set()
     for row, player in rows:
         kept, verdict = row.candidate or {}, row.verdict or {}
-        if player.id in told or verdict.get("kind") in NOT_ON_THE_WIRE or not kept.get("title"):
+        if player.id in told or verdict.get("kind") in NOT_ON_THE_WIRE or not kept.get("title") or not sports.on(player.sport):
             continue
         told.add(player.id)
         found.append((row.fetched_at, row.id, {

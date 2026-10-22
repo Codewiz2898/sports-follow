@@ -301,3 +301,22 @@ def test_for_you_shows_a_video_a_followed_player_holds_as_theirs_in_its_place_no
     follow(db, "fan", kohli)
     mixed = feed.page(db, "fan", now=NOW, limit=50, tab=feed.FOR_YOU)
     assert [(e.item.title, e.player.id, e.following) for e in mixed.items] == [("k0", kohli, True), ("both", kohli, True), ("r1", rohit, False)]
+
+
+@needs_db
+def test_a_sport_turned_off_has_its_players_videos_served_nowhere(db):  # noqa: F811
+    # BUG-125: a turned-off sport's videos stayed in Following and on its players' pages (For you already left them out).
+    from sqlalchemy import text
+
+    db.execute(text("TRUNCATE feed_candidates RESTART IDENTITY CASCADE"))
+    gukesh = made_player(db, "Gukesh D", sport="chess")
+    kohli = made_player(db, "Virat Kohli")
+    follow(db, "fan", gukesh, kohli)
+    assert set(feed.judged(db, [gukesh, kohli], NOW)) == {gukesh, kohli}
+    controls.turn_sport("chess", False)
+    assert set(feed.judged(db, [gukesh, kohli], NOW)) == {kohli}
+    assert {e.player.id for e in feed.page(db, "fan", now=NOW).items} == {kohli}
+    page = feed.feed_for(db, gukesh, "fan", NOW)
+    assert page is not None and page.count == 0
+    controls.turn_sport("chess", True)  # back on: served again, nothing lost
+    assert set(feed.judged(db, [gukesh, kohli], NOW)) == {gukesh, kohli}
