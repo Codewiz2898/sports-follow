@@ -27,8 +27,9 @@ story known by its address written one way (NewsSource articles' url), so two fe
 
 A story is never kept whole: its headline, its link, when it was published and the feed's own short description,
 which the Feed shows as they are, crediting the publisher; as the publisher changes them at the same address (a
-corrected headline), so does the row (changed). Stories about the same thing (clusters, read by rank.py) are one
-item in the Feed with the number of outlets that ran it.
+corrected headline), so does every row of it (changed), and one for a player the new words don't name goes back to
+the judge. Stories about the same thing (clusters, read by rank.py) are one item in the Feed with the number of
+outlets that ran it.
 
 A candidate goes with the player (ON DELETE CASCADE). The curator's weekly prune drops stories older than
 PRUNE_AFTER, but those an admin approved or pinned (evergreen).
@@ -359,9 +360,11 @@ def candidate(found: Linked) -> dict[str, Any]:
 CHANGES = ("title", "description", "image", "published")
 
 
-def keep(source: NewsSource, found: list[Linked], now: datetime) -> int:
+def keep(source: NewsSource, found: list[Linked], now: datetime, read: Iterable[Article] = ()) -> int:
     """Store what's new of what was found, one row per player and story; returns how many. A story kept before that
-    its publisher has changed at the same address (a corrected headline, a new picture) takes the change (changed).
+    its publisher has changed at the same address (a corrected headline, a new picture) takes the change (changed),
+    for every player it was kept for: of the stories read (read: those link() was given), one kept for a player it
+    wasn't found for this time takes it too, the words no longer theirs ("Kohli ruled out" corrected to "Rohit").
     One an admin hid for one player is stored hidden for another found in it later: the Hide is on the story."""
     kept = 0
     with db.session() as session:
@@ -382,14 +385,32 @@ def keep(source: NewsSource, found: list[Linked], now: datetime) -> int:
                         changed(session, f)
             except Exception as exc:  # noqa: BLE001
                 log.info("feed: story %s for player %s not kept: %s", f.article.url, f.player_id, type(exc).__name__)
+        stories = {(external_id(a.url), a.feed): a for a in read}
+        named = {(f.player_id, external_id(f.article.url)) for f in found}
+        for row in session.execute(select(FeedCandidate.player_id, FeedCandidate.external_id, FeedCandidate.candidate).where(
+                FeedCandidate.source == source.system, FeedCandidate.external_id.in_({e for e, _ in stories}),
+                FeedCandidate.candidate["channel_id"].astext.in_({f for _, f in stories}))).all():  # fmt: skip
+            was = row.candidate or {}
+            article = stories.get((row.external_id, str(was.get("channel_id") or "")))
+            if article is None or (row.player_id, row.external_id) in named:
+                continue
+            unnamed = Linked(row.player_id, str(was.get("sport") or ""), article, str(was.get("named") or ""), str(was.get("where") or ""))
+            if all(was.get(k) == v for k, v in candidate(unnamed).items() if k in CHANGES):
+                continue
+            try:
+                with session.begin_nested():
+                    changed(session, unnamed, named=False)
+            except Exception as exc:  # noqa: BLE001
+                log.info("feed: story %s for player %s not changed: %s", article.url, row.player_id, type(exc).__name__)
     return kept
 
 
-def changed(session: Session, found: Linked) -> bool:
+def changed(session: Session, found: Linked, named: bool = True) -> bool:
     """Give a kept story what its feed says of it now, where that changed (CHANGES): fans read a publisher's
     correction, not the first wording for good. Only from the feed it was kept from: another feed's copy of it,
-    worded its own way, isn't the publisher's change. Words that now tell another story (same_story) go back to
-    the judge, the story unserved until it has said again; a smaller change keeps its verdict. Whether it changed."""
+    worded its own way, isn't the publisher's change. Words that now tell another story (same_story), or that no
+    longer name the player (named: link() found them in it again), go back to the judge, the story unserved until
+    it has said again; a smaller change keeps its verdict. Whether it changed."""
     row = session.execute(select(FeedCandidate.id, FeedCandidate.candidate).where(FeedCandidate.player_id == found.player_id,
                           FeedCandidate.external_id == external_id(found.article.url)).with_for_update()).first()  # fmt: skip
     kept = (row.candidate or {}) if row is not None else {}
@@ -398,7 +419,7 @@ def changed(session: Session, found: Linked) -> bool:
         return False
     values: dict[str, Any] = {"candidate": {**kept, **{k: now[k] for k in CHANGES}}}
     before = story(row.id, None, str(kept.get("title") or ""), str(kept.get("description") or ""), [found.name])
-    again = not same_story(before, story(row.id, None, str(now["title"] or ""), str(now["description"] or ""), [found.name]))
+    again = not named or not same_story(before, story(row.id, None, str(now["title"] or ""), str(now["description"] or ""), [found.name]))
     if again:  # SQL's NULL, not JSON's null: the judge asks for rows with no verdict
         values |= {"verdict": null(), "judged_at": None, "score": None, "judge_tries": 0, "judge_error": None, "judge_after": None}
     session.execute(update(FeedCandidate).where(FeedCandidate.id == row.id).values(**values))
@@ -442,7 +463,7 @@ def poll(now: datetime | None = None) -> dict[str, dict[str, int]]:
             counts["read"] += len(fresh)
             found = link(fresh, *by_sports[frozenset(listed.sports)], shared=listed.shared)
             counts["matched"] += len(found)
-            counts["kept"] += keep(source, found, now)
+            counts["kept"] += keep(source, found, now, fresh)
     metrics.feed("kept", sum(c["kept"] for c in done.values()))
     return done
 
