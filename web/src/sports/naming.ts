@@ -17,6 +17,9 @@ export interface Sports {
   name(sport?: string | null): string
   /** The sports this build runs, in the order the app lists them: the search filters. */
   running(): SportInfo[]
+  /** Every sport the app lists, in its order, then the groups that stand for several of them (an esports pro whose
+   * game can't be told is esports'): Today's game chips, of the ones on it (filter.ts). */
+  listed(): SportInfo[]
 }
 
 export function sportsOf(catalog: SportCatalog): Sports {
@@ -51,7 +54,7 @@ export function sportsOf(catalog: SportCatalog): Sports {
     return i.group || i.key
   }
 
-  return { catalog, info, drawn, name, running: () => catalog.sports.filter((s) => s.on) }
+  return { catalog, info, drawn, name, running: () => catalog.sports.filter((s) => s.on), listed: () => [...all] }
 }
 
 /** Before the server has answered: no sports, and any name is "other". */
