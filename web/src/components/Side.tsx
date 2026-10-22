@@ -1,4 +1,4 @@
-import { createContext, useContext, useSyncExternalStore, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useLocation } from 'react-router-dom'
 import type { LiveGame } from '../api'
@@ -42,6 +42,34 @@ export function InSide({ children }: { children: ReactNode }) {
   return slot ? createPortal(children, slot) : <>{children}</>
 }
 
+// The game a page is narrowed to (Today's chips): the column's scores and games starting soon are narrowed to it
+// too. The column stands beside the page, not in it, so the page says it here (useNarrowSide).
+let sideGame: string | null = null
+const sideGameHeard = new Set<() => void>()
+const hearSideGame = (changed: () => void) => {
+  sideGameHeard.add(changed)
+  return () => { sideGameHeard.delete(changed) }
+}
+
+function setSideGame(key: string | null) {
+  if (key === sideGame) return
+  sideGame = key
+  for (const changed of sideGameHeard) changed()
+}
+
+/** The page's game (a sport's key) for the side column too, while the page is shown; none: every game. */
+export function useNarrowSide(key: string | null) {
+  useEffect(() => {
+    setSideGame(key)
+    return () => setSideGame(null)
+  }, [key])
+}
+
+/** The game the page has the side column narrowed to, or null. */
+function useSideGame(): string | null {
+  return useSyncExternalStore(hearSideGame, () => sideGame)
+}
+
 /** One line of the column: the game's sport as a dot (red while it's on), what it is, and under it its score or
  * when it starts; at its end, its call (Calls.tsx). It opens the game's match page, where it has one. */
 function Row({ to, sport, live = false, title, line, end }: { to?: string | null; sport: string; live?: boolean; title: string; line: string; end?: ReactNode }) {
@@ -68,12 +96,14 @@ function scoreOf(game: LiveGame): string {
 }
 
 /** The games on now, whoever follows them (useLive: one look with Today's), each with its score; then the latest
- * big results (useLeague). Nothing when there's neither. */
+ * big results (useLeague); the page's game's alone (useNarrowSide). Nothing when there's neither. */
 function Scores() {
   const sports = useLive()
   const league = useLeague()
-  const on = sports.flatMap((s) => s.games.map((game) => ({ game, sport: s.key })))
-  const done = (league?.results.games ?? []).slice(0, RESULTS)
+  const picked = useSideGame()
+  const of = (sport: string) => !picked || sport === picked
+  const on = sports.flatMap((s) => s.games.map((g) => ({ game: g, sport: sportKey(s.key) }))).filter((x) => of(x.sport))
+  const done = (league?.results.games ?? []).filter((g) => of(sportKey(g.sport))).slice(0, RESULTS)
   if (!on.length && !done.length) return null
   return (
     <section className="section" aria-label="Scores">
@@ -98,19 +128,21 @@ function Scores() {
 }
 
 /** The games starting next: the fan's own (their players', teams' and games they follow), then the big ones,
- * soonest first; each with the countdown within a day, else the day, and its call where they have one. */
+ * soonest first, the page's game's alone (useNarrowSide); each with the countdown within a day, else the day, and
+ * its call where they have one. */
 function StartingSoon() {
   const { cards, teams, matches } = useFollowing()
   const league = useLeague()
   const calls = useCalls()
   const now = useNow()
+  const picked = useSideGame()
   const theirs = new Set([...theirEvents(cards, teams), ...matches.map((m) => m.event_id)])
   const games = [
     ...comingUp(cards, now, matches, teams).map((g) => ({ key: g.key, title: g.event.title, competition: g.event.competition, start: g.event.start_utc, match: g.event.match, sport: sportKey(g.sport ?? g.players[0]?.player.sport) })),
     ...leagueComingUp(league?.coming.games ?? [], theirs, now).map((g) => ({ key: g.key, title: g.title, competition: g.competition, start: g.start_utc, match: g.match, sport: sportKey(g.sport) })),
   ]
   const at = (s?: string | null) => parseDate(s)?.getTime() ?? Infinity
-  const soonest = games.sort((a, b) => at(a.start) - at(b.start)).slice(0, SOON)
+  const soonest = games.filter((g) => !picked || g.sport === picked).sort((a, b) => at(a.start) - at(b.start)).slice(0, SOON)
   if (!soonest.length) return null
   return (
     <section className="section" aria-label="Starting soon">

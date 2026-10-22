@@ -94,22 +94,33 @@ export function theirGames(blocks: TodayBlocks, keyOf: KeyOf): Set<string> {
   return gamesIn(blocks, ['cards', 'teams', 'live', 'followed', 'teamGames', 'results', 'coming'], keyOf)
 }
 
+/** Today's game filter: a chip of each of the fan's own games (`chips`), and the rest a search away (`more`). */
+export interface GameRow { chips: SportInfo[]; more: SportInfo[] }
+
 /**
- * Today's chips after All: each game with something on it (`here`, gamesOnToday), the fan's own first (`theirs`,
- * theirGames), each lot in the order the sports list (`sports`: GET /api/sports's sports, then its groups) gives
- * them; the big games' and the Wire's after, so a cricket fan's Cricket isn't behind every esports final on. None
- * while it holds one game or none. A sport no module knows ("other": golf, from an AI-built page), or one turned
- * off (not `on`), has no chip, and shows under All alone.
+ * Today's game filter, of the games with something on it (`here`, gamesOnToday): after All, a chip of each of the
+ * fan's own (`theirs`, theirGames), and the others (the big games', the Wire's) behind a search, so a cricket fan's
+ * row isn't every esports final on; each lot in the order the sports list (`sports`: GET /api/sports's sports,
+ * then its groups) gives them. Nothing while Today holds one game or none. A sport no module knows ("other": golf,
+ * from an AI-built page), or one turned off (not `on`), is neither, and shows under All alone.
  */
-export function gameChips(sports: SportInfo[], here: Set<string>, theirs: Set<string> = new Set()): SportInfo[] {
-  const chips = sports.filter((s) => s.on && here.has(s.key))
-  if (chips.length < 2) return []
-  return [...chips.filter((s) => theirs.has(s.key)), ...chips.filter((s) => !theirs.has(s.key))]
+export function gameRow(sports: SportInfo[], here: Set<string>, theirs: Set<string>): GameRow {
+  const on = sports.filter((s) => s.on && here.has(s.key))
+  if (on.length < 2) return { chips: [], more: [] }
+  return { chips: on.filter((s) => theirs.has(s.key)), more: on.filter((s) => !theirs.has(s.key)) }
 }
 
-/** The game picked (`?game=` on the web), while it has a chip; anything else is All (null). */
-export function pickedGame(key: string | null | undefined, chips: SportInfo[]): SportInfo | null {
-  return (key && chips.find((s) => s.key === key)) || null
+/** The game picked (`?game=` on the web), while it's one of the row's (`row`, its chips or behind its search);
+ * anything else is All (null). */
+export function pickedGame(key: string | null | undefined, row: GameRow): SportInfo | null {
+  return (key && [...row.chips, ...row.more].find((s) => s.key === key)) || null
+}
+
+/** The games behind the row's search that a fan's words (`words`) name: each whose name has them, any case; all of
+ * them for no words. */
+export function findGames(more: SportInfo[], words: string): SportInfo[] {
+  const q = words.trim().toLowerCase()
+  return q ? more.filter((s) => s.label.toLowerCase().includes(q) || s.key.includes(q)) : more
 }
 
 /** Whether Today shows nothing but who the fan follows (the strip): nothing on, nothing done or to come, nothing
