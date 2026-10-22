@@ -59,6 +59,14 @@ class Tennis(Sport):
         where = "Final" if status == "final" else f"Set {state['set']}" if state.get("set") else clock or ""
         return Glance(sides if len(sides) == 2 else [], where)
 
+    def outcome(self, result: str, teams: list[str], board: dict[str, Any] | None = None, side: str | None = None) -> str | None:
+        """As every sport's, but a result with no score wasn't played: a walkover kept before walkovers were told
+        apart ("Lost ", where it's "Lost (w/o)" now) is no more form than one kept since. A retirement counts."""
+        word, _, score = (result or "").strip().partition(" ")
+        if word in ("Won", "Lost") and not score.strip():
+            return None
+        return super().outcome(result, teams, board, side)
+
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
         winner = next((p for p in state.get("players") or [] if p.get("winner")), None)
         return f"{winner['name']} won" if winner and winner.get("name") else ""

@@ -140,6 +140,15 @@ def test_a_walkover_isnt_form():
     assert {s["label"]: s["value"] for s in tennis}["W–L"] == "1–0"
 
 
+def test_a_walkover_kept_before_walkovers_were_told_apart_isnt_form_either():
+    # BUG-141: Alcaraz's walkover in Barcelona was kept as "Lost " (no score) before BUG-040's fix, and counted as a
+    # loss in his W–L for good: a result with no score wasn't played. A retirement still counts.
+    tennis = sports.of("tennis")
+    assert [tennis.outcome(said, ["Carlos Alcaraz"]) for said in ("Lost ", "Won", "Lost 3-6 2-2 ret.", "Won 6-4 6-3")] == [None, None, "L", "W"]
+    stats, _ = form.summarize("Tennis", [(result("Lost "), line("Lost in 0 sets", Sets="0–0")), (result("Won 6-4 6-3"), line("Won in 2 sets", Sets="2–0"))], [])
+    assert {s["label"]: s["value"] for s in stats}["W–L"] == "1–0"
+
+
 # ---------------------------------------------------------------- won or lost, from the side the player played for (BUG-084)
 
 
