@@ -37,7 +37,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, case, delete, exists, func, literal, or_, select, union, update
+from sqlalchemy import and_, case, delete, exists, func, or_, select, union, update
 from sqlalchemy.dialects.postgresql import array, insert
 from sqlalchemy.orm import Session, aliased
 
@@ -846,13 +846,17 @@ def merge(db: Session, anon: str, fan: str) -> None:
     postponed = Question.event_id.in_(select(Event.id).where(Event.status == "postponed"))
     still = select(Question.id).where(Question.status == OPEN, or_(Question.locks_at.is_(None), Question.locks_at > func.now(), postponed))
     late = ~Pick.question_id.in_(still)
-    # An account's pick counts (Pick.counted): one still open does from now; one closed as it did, its split shown.
-    moved = insert(Pick).from_select(["question_id", "fan_id", "option", "points", "counted", "moved_late", "created_at", "updated_at"],
-                                     select(Pick.question_id, literal(fan), Pick.option, Pick.points, or_(Pick.counted, ~late), or_(Pick.moved_late, late),
-                                            Pick.created_at, Pick.updated_at)
-                                     .where(Pick.fan_id == anon))
-    came = list(db.scalars(moved.on_conflict_do_nothing().returning(Pick.question_id)))
-    db.execute(delete(Pick).where(Pick.fan_id == anon, or_(Pick.question_id.in_(still), Pick.question_id.in_(came))))
+    # Taken from the device, then given to the account, those taken and only those (BUG-327): a copy, then a delete,
+    # deleted a pick the device made between the two, never copied. One it makes after is the straggler job's
+    # (accounts.adopt_later). The device's on a question closed that the account picked too stays where it was.
+    account = aliased(Pick)
+    taken = db.execute(delete(Pick).where(Pick.fan_id == anon, or_(Pick.question_id.in_(still), ~exists().where(account.fan_id == fan, account.question_id == Pick.question_id)))
+                       .returning(Pick.question_id, Pick.option, Pick.points, Pick.counted, Pick.moved_late, Pick.created_at, Pick.updated_at, late)).all()
+    if taken:
+        # An account's pick counts (Pick.counted): one still open does from now; one closed as it did, its split shown.
+        db.execute(insert(Pick).values([{"question_id": qid, "fan_id": fan, "option": option, "points": points, "counted": counted or not after, "moved_late": moved_late or after,
+                                         "created_at": created_at, "updated_at": updated_at} for qid, option, points, counted, moved_late, created_at, updated_at, after in taken])
+                   .on_conflict_do_nothing())
 
 
 def forget(db: Session, fan: str) -> None:

@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.sql.dml import Delete
 
 from sports_follow import accounts, bus, engine, league, live, match, notify, pipeline, predictions, server, sports, structured
 from sports_follow.adapters import ADAPTERS, KNOWN, Fixture, LiveGame, lichess_chess, pandascore_esports as ps, sportmonks_cricket as sc, sportmonks_football as sm
@@ -1258,6 +1259,34 @@ def test_a_call_brought_in_while_its_match_is_postponed_counts_in_the_league(db,
     db.commit()
     table = predictions.table(db, db.get_one(League, gang.id))
     assert [(r["name"], r["points"], r["played"]) for r in table] == [("Asha", 100, 2), ("Ravi", 0, 2)]
+
+
+def test_a_pick_that_lands_while_signing_in_moves_the_devices_picks_is_moved_too(db, redis, monkeypatch):
+    """BUG-327: signing in copied the device's picks into the account, then deleted the device's, two statements apart:
+    a pick the device made in between (a request already under way) was deleted with them, never copied. The device's
+    picks are taken and given to the account in one go now; one that lands after that is the straggler job's
+    (accounts.adopt_later)."""
+    now = datetime.now(timezone.utc)
+    open_q = dict(ask="result", keys=[], sport="chess", title="Who wins?", options=[{"key": "w", "label": "w"}, {"key": "b", "label": "b"}], status="open", locks_at=now + timedelta(hours=2))
+    q1, q2 = Question(game="g:1", match="m/1", **open_q), Question(game="g:2", match="m/2", **open_q)
+    db.add_all([q1, q2])
+    db.flush()
+    db.add(Pick(question_id=q1.id, fan_id="device", option="w"))
+    db.commit()
+    real, landed = db.execute, []
+
+    def execute(statement, *args, **kwargs):
+        if isinstance(statement, Delete) and statement.table.name == "prediction_pick" and not landed:
+            with predictions.session() as other:  # the device's pick request, committed as the move runs
+                other.add(Pick(question_id=q2.id, fan_id="device", option="b"))
+            landed.append(q2.id)
+        return real(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db, "execute", execute)
+    predictions.merge(db, "device", "acct-sana")
+    db.commit()
+    assert landed == [q2.id]
+    assert {(p.question_id, p.fan_id, p.option) for p in db.scalars(select(Pick))} == {(q1.id, "acct-sana", "w"), (q2.id, "acct-sana", "b")}
 
 
 def test_the_admin_panel_counts_leagues_invites_and_fans_who_came_back(db, redis):
