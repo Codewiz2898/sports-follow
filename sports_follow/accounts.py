@@ -84,6 +84,11 @@ def find_or_create_google(db: Session, sub: str, email: str) -> int | None:
     return None
 
 
+def known(db: Session, email: str) -> bool:
+    """Whether this address has an account: part of the day's sign-in codes is kept for those (server.email_start)."""
+    return db.scalar(select(Account.id).where(Account.email == email)) is not None
+
+
 def blocked(db: Session, email: str | None = None, account_id: int | None = None) -> bool:
     """Whether an admin blocked this account (admin.py): it can't sign in."""
     where = Account.email == email if account_id is None else Account.id == account_id
