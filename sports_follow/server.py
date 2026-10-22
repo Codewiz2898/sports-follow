@@ -18,7 +18,7 @@ import re
 import secrets
 import time
 from collections import Counter
-from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, MutableMapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Annotated, Any, TypeVar, cast
 from urllib.parse import urlparse
 
+import anyio
 import redis.asyncio as aredis
 from arq import create_pool
 from arq.connections import ArqRedis, RedisSettings
@@ -2900,10 +2901,13 @@ async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[s
     """Every message on the channels, after `first()`: what they cover as it is now, read once
     subscribed so nothing published in between is missed. Each reconnect starts here, so it is how an
     app catches up; a word on the channel `again` sends `first()` again. Holds no database connection, and
-    one Redis connection, from the streams' own pool; its route takes its places first (_hold_streams)."""
+    one Redis connection, from the streams' own pool; its route takes its places first (_hold_streams).
+    A client going away cancels the stream, and cancels each wait in its cleanup too, so the connection's
+    return to the pool is shielded from it: unshielded, every stream that ended kept its connection, and a
+    process's thousandth got none (BUG-184's round-two reopen)."""
     pubsub = state["streams"].pubsub()
-    await pubsub.subscribe(*channels)
     try:
+        await pubsub.subscribe(*channels)
         for event in await first():
             yield f"data: {json.dumps(event, default=str)}\n\n"
         while not await request.is_disconnected():
@@ -2917,8 +2921,11 @@ async def _stream(channels: list[str], first: Callable[[], Awaitable[list[dict[s
                 continue
             yield f"data: {msg['data']}\n\n"
     finally:
-        await pubsub.unsubscribe()
-        await pubsub.aclose()
+        # The socket closed without waiting for it (it ends the subscriptions), then the connection given back.
+        with anyio.CancelScope(shield=True):
+            if pubsub.connection is not None:
+                await pubsub.connection.disconnect(nowait=True)
+            await pubsub.aclose()
 
 
 def _hold_streams(request: Request, fan: str | None) -> list[str]:
@@ -2942,18 +2949,24 @@ class _Stream(StreamingResponse):
     """A stream's answer, which gives back its places (_hold_streams) when it ends, however it ends: its
     client gone, the server stopping, or an error."""
 
-    def __init__(self, body: Any, places: list[str]) -> None:
+    def __init__(self, body: AsyncGenerator[str, None], places: list[str]) -> None:
         super().__init__(body, media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
         self.places = places
+        self.stream = body
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         try:
             await super().__call__(scope, receive, send)
         finally:
-            streaming.subtract(self.places)
-            for key in self.places:
-                if streaming[key] <= 0:
-                    del streaming[key]
+            try:
+                # A stream left at a yield (its client gone while a send waited) cleans up now, not when it's collected.
+                with anyio.CancelScope(shield=True):
+                    await self.stream.aclose()
+            finally:
+                streaming.subtract(self.places)
+                for key in self.places:
+                    if streaming[key] <= 0:
+                        del streaming[key]
 
 
 def _sse(body, places: list[str] | None = None) -> StreamingResponse:
