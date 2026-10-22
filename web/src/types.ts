@@ -360,6 +360,9 @@ export type StreamEvent =
   | { type: 'progress'; player_id: number; message: string }
   | { type: 'moved'; from: number; to: number }
   | { type: 'live_error'; player_id: number; message: string }
+  // The fan stream's last word when this device's session has ended elsewhere (signed out everywhere, the account
+  // deleted or blocked): who it is now is asked at once (BUG-162).
+  | { type: 'signed_out' }
 
 /** One credit on the Credits page (sports_follow/credits.py). */
 export interface Credit { name: string; url?: string; what?: string; licence?: string; licence_url?: string; note?: string }

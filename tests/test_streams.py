@@ -231,7 +231,7 @@ def test_a_follow_on_another_device_reaches_the_fans_open_streams(api, monkeypat
     module = sys.modules[__name__]
     monkeypatch.setattr(module, "FOLLOWS", before)
     monkeypatch.setattr(api.redis, "pubsub", lambda: Told(api.redis.log))
-    response = asyncio.run(server.my_stream(Request(), fan="fan"))
+    response = asyncio.run(server.my_stream(Request(), fan="fan", signed=None))
 
     def elsewhere():
         monkeypatch.setattr(module, "FOLLOWS", [(2, {"level": "off"})])
@@ -241,6 +241,39 @@ def test_a_follow_on_another_device_reaches_the_fans_open_streams(api, monkeypat
     assert [p["player_id"] for p in first["players"]] == [p for p, _ in before] and first["sports"] == []
     assert again == {"type": "following", "players": [{**again["players"][0], "player_id": 2, "alerts": "off"}], "matches": [], "teams": [], "sports": ["chess", "cricket"]}
     assert api.redis.log[0].startswith("subscribe") and api.redis.log[0].endswith("follows:fan")
+
+
+def to_the_end(response) -> list[dict]:
+    """Every event a stream sends till it ends; within seconds, or the test fails."""
+
+    async def read():
+        return [json.loads(frame.removeprefix("data: ")) async for frame in response.body_iterator if frame.startswith("data: ")]
+
+    return asyncio.run(asyncio.wait_for(read(), 5))
+
+
+def test_a_stream_whose_session_ended_tells_its_app_and_ends(api, monkeypatch):
+    """BUG-162, round two: an app left open in front, its device signed out elsewhere (everywhere from another device,
+    the account deleted or blocked), kept its stream, which kept the account it had connected as: the account's
+    moments kept coming, and the app, told nothing, kept showing the account. Ending sessions says so on the account's
+    own channel (tests/test_accounts.py); a stream hearing it asks for its session again, and if it has ended, tells its
+    app so (the app asks who it is now, and starts over) and ends, its connection back in the pool."""
+    sana = server.accounts.Signed(account_id=1, fan_id="fan", session_id=7)
+    sessions = {"sana": sana}
+
+    async def account_of(request):
+        return sessions.get("sana")
+
+    monkeypatch.setattr(server, "account_of", account_of)
+    monkeypatch.setattr(api.redis, "pubsub", lambda: Told(api.redis.log))
+    # Still signed in (a follow on another device, say): the list again.
+    first, again = frames(asyncio.run(server.my_stream(Request(), fan="fan", signed=sana)), 2, lambda: None)
+    assert first["type"] == again["type"] == "following"
+    # Signed out elsewhere: the app is told, and the stream ends.
+    sessions.clear()
+    said = to_the_end(asyncio.run(server.my_stream(Request(), fan="fan", signed=sana)))
+    assert [e["type"] for e in said] == ["following", "signed_out"]
+    assert api.redis.log[-1] == "close"  # its connection given back
 
 
 def test_the_player_stream_rebuilds_a_lost_hot_copy_without_holding_a_session(api):
