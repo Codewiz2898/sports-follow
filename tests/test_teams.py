@@ -8,9 +8,13 @@ side. Sources and Redis are made up here."""
 from __future__ import annotations
 
 import asyncio
+import gzip
+import json
 import os
+from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -18,7 +22,7 @@ from sqlalchemy import create_engine, func, select, text, update
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import accounts, bus, notify, pipeline, server, sports, structured, teams
-from sports_follow.adapters import ADAPTERS, KNOWN, Fixture, Line, PlayerRef, Provider, Snapshot, SourceTeam
+from sports_follow.adapters import ADAPTERS, KNOWN, Fixture, Line, PlayerRef, Provider, Snapshot, SourceTeam, espn_basketball, espn_cricket
 from sports_follow.adapters.base import DIGITS
 from sports_follow.alerts import Item, Watch, plan
 from sports_follow.models import (Account, Event, EventPlayer, EventState, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerIdentity,
@@ -606,3 +610,103 @@ def test_removing_a_team_takes_its_links_and_an_operator_can_add_one_the_lists_l
     assert (added.name, added.sport) == ("Arsenal Women", "football")
     teams.import_teams(source.fake, NOW + 2 * teams.STALE)
     assert db.scalar(select(Team.name).where(Team.external_id == "77")) == "Arsenal Women"
+
+
+# ---------------------------------------------------------------- every player's moments, and the whole of the list
+
+ESPN = Path(__file__).parent / "fixtures" / "espn"
+
+
+def recorded(name: str, parse: Callable[[dict], Snapshot]) -> Snapshot:
+    """A game as ESPN gave it (tests/fixtures/espn, recorded), read by its adapter."""
+    with gzip.open(ESPN / f"{name}.json.gz", "rt") as f:
+        return parse(json.load(f))
+
+
+def followed_game(db, monkeypatch, fixture_id: str, sport: str, title: str, side: Team, level: str = "key") -> Event:
+    """A game of `side`'s, followed by "game" by itself and by "team" through `side`, both at `level`, each with a
+    phone; polled all along, its pushes sent at once and dropped, so what each fan was sent is its notification rows,
+    and no live card goes anywhere."""
+    monkeypatch.setattr(structured, "_polled", lambda event_id, cadence: True)
+    monkeypatch.setattr(structured.livecards, "polled", lambda event, snap: None)
+    monkeypatch.setattr(notify, "dispatch", notify.send)
+    monkeypatch.setattr(notify, "push", lambda *args, **kwargs: None)
+    monkeypatch.setattr(notify.bus, "publish", lambda player_id, event: None)
+    monkeypatch.setattr(notify.bus, "publish_match", lambda event_id, event: None)
+    monkeypatch.setattr(structured.bus, "publish_match", lambda event_id, event: None)
+    event = Event(key=f"pitch:{fixture_id}", sport=sport, title=title, status="live", live_binding={"adapter": "pitch", "locator": {"fixture": fixture_id}, "cadence": 15})
+    db.add_all([side, event])
+    db.flush()
+    db.add_all([EventTeam(event_id=event.id, team_id=side.id), TeamFollow(fan_id="team", team_id=side.id, alert_rules={"level": level}),
+                MatchFollow(fan_id="game", event_id=event.id, alert_rules={"level": level}, keys=[event.key])])
+    db.add_all([PushSubscription(fan_id=f, endpoint=f"https://fcm.googleapis.com/fcm/send/{f}", p256dh="k", auth="a") for f in ("game", "team")])
+    db.commit()
+    return event
+
+
+def sent(db, fan: str) -> list[str]:
+    """Every line the fan's pushes said, oldest first."""
+    return [line for n in db.scalars(select(Notification).where(Notification.fan_id == fan).order_by(Notification.id)) for line in n.lines or []]
+
+
+def batting(runs: str, balls: int, out: str | None = None) -> Line:
+    return Line(headline=f"{runs} ({balls})", stats=[{"label": "Runs", "value": runs}, {"label": "Balls", "value": str(balls)}, *([{"label": "Out", "value": out}] if out else [])])
+
+
+def bowling(wickets: int, conceded: int, overs: str) -> Line:
+    return Line(headline=f"{wickets}/{conceded} ({overs} ov)", stats=[{"label": "Wickets", "value": str(wickets)}, {"label": "Overs", "value": overs}, {"label": "Runs conceded", "value": str(conceded)}])
+
+
+@needs_db
+def test_a_teams_and_a_games_fans_hear_every_wicket_fifty_and_haul_whoever_it_is(db, redis, source, monkeypatch):
+    # West Indies v India, an ODI as ESPN gave it at the end (India won by 8 wickets), India's players' lines alone,
+    # Prasidh Krishna with a third wicket: so two bowlers reach three in one poll, two batters are out a poll apart,
+    # and two reach fifty and a hundred in one.
+    final = recorded("cricket-summary-final", espn_cricket.parse_summary)
+    rohit, gill, kohli, kuldeep, prasidh = "34102", "1070173", "253802", "559235", "917159"
+    india = {a: line for a, line in final.lines.items() if a in {rohit, gill, kohli, kuldeep, prasidh, "1060380", "234675", "1287032", "1175496", "1287033"}}
+    india[prasidh] = bowling(3, 60, "10")
+    bowlers = {a: line for a, line in india.items() if a not in {rohit, gill, kohli, "1060380"}}
+    event = followed_game(db, monkeypatch, "700", "Cricket", "West Indies v India", Team(name="India", sport="cricket", system="pitch", external_id="6", search_text="india"))
+    live = {**final.state, "teams": [{k: v for k, v in t.items() if k != "winner"} for t in final.state["teams"]], "summary": ""}
+
+    def poll(status: str, score: str, lines: dict[str, Line]) -> None:
+        over = status == "final"
+        structured.apply_poll(event.id, event.live_binding, source.fake, [], Snapshot(status, score, final.clock_label if over else "", final.state if over else live, lines=lines, names=final.names))
+
+    poll("live", "WI 200/4 (40 ov)", {**bowlers, kuldeep: bowling(2, 30, "8"), prasidh: bowling(2, 45, "8")})  # a first look
+    poll("live", "WI 240/6 (45 ov)", {**bowlers, kuldeep: bowling(3, 34, "9"), prasidh: bowling(3, 50, "9")})
+    poll("live", "IND 60/1 (9 ov)", {**bowlers, rohit: batting("32", 35, "c Andrew b Joseph"), gill: batting("25*", 30), kohli: batting("3*", 4)})
+    poll("final", final.score_label, india)
+
+    said = ["India v West Indies: Kuldeep Yadav takes 3 wickets", "India v West Indies: Prasidh Krishna takes 3 wickets",
+            "India v West Indies: Kuldeep Yadav takes 4 wickets", "India v West Indies: Rohit Sharma out for 32",
+            "India v West Indies: Shubman Gill reaches 50", "India v West Indies: Shubman Gill reaches 100", "India v West Indies: Shubman Gill out for 110",
+            "India v West Indies: Virat Kohli reaches 50", "India v West Indies: Virat Kohli reaches 100"]
+    result, theirs = "India v West Indies: India won by 8 wkts (50b rem)", "India won by 8 wkts (50b rem) v West Indies"
+    for fan, told in (("game", result), ("team", theirs)):
+        assert sorted(sent(db, fan)) == sorted([*said, told])
+        assert sorted(i["title"] for i in server.activity(None, 50, fan, db)["items"]) == sorted([*said, told])
+
+
+@needs_db
+def test_a_basketball_teams_and_games_fans_hear_every_double_double(db, redis, source, monkeypatch):
+    # Indiana Fever at Las Vegas Aces as ESPN gave it at the end; a poll before, A'ja Wilson, Caitlin Clark and Jackie
+    # Young short of the double-doubles they finished with, and of the 20 points two of them passed.
+    final = recorded("basketball-summary-final", espn_basketball.parse_summary)
+    wilson, clark, young = "3149391", "4433403", "4065870"
+    event = followed_game(db, monkeypatch, "800", "Basketball", "Indiana Fever at Las Vegas Aces",
+                          Team(name="Las Vegas Aces", sport="basketball", system="pitch", external_id="17", search_text="las vegas aces"), "everything")
+    earlier = {wilson: "8 PTS · 6 REB · 2 AST", clark: "5 PTS · 3 REB · 4 AST", young: "9 PTS · 2 REB · 5 AST"}
+    live = {**final.state, **{side: {k: v for k, v in final.state[side].items() if k != "winner"} for side in ("home", "away")}, "detail": "5:00 - 3rd"}
+    before = {a: Line(headline=earlier[a], stats=line.stats) if a in earlier else line for a, line in final.lines.items()}
+    structured.apply_poll(event.id, event.live_binding, source.fake, [], Snapshot("live", "Indiana Fever 60 – 70 Las Vegas Aces", "5:00 - 3rd", live, lines=before, names=final.names))
+    structured.apply_poll(event.id, event.live_binding, source.fake, [], final)
+
+    game = "Indiana Fever at Las Vegas Aces"
+    said = [f"{game}: A'ja Wilson: 20 points", f"{game}: A'ja Wilson: 30 points", f"{game}: A'ja Wilson: double-double",
+            f"{game}: Caitlin Clark: double-double", f"{game}: Jackie Young: 20 points", f"{game}: Jackie Young: double-double"]
+    for fan, told in (("game", f"{game}: Las Vegas Aces won"), ("team", "Las Vegas Aces won 102–85 v Indiana Fever")):
+        assert sorted(sent(db, fan)) == sorted([*said, told])
+        assert sorted(i["title"] for i in server.activity(None, 50, fan, db)["items"]) == sorted([*said, told])
+

@@ -573,10 +573,12 @@ class Sport:
 
     def game_during(self, name: str, before: Played, now: Played, told: list[tuple[str, str]]) -> list[Found]:
         """By default, every named player's moments as the player rules find them (during: a fifty, out, a
-        wicket haul, 30 points), each about that player, in the same words and detail a fan of theirs gets. A
-        game whose earlier poll had no lines yet while it was live (the source's first lines) tells none: what
-        they say happened before. A sport whose moments are a side's, or the board's (football's goals, chess's
-        turning, esports' maps), overrides it."""
+        wicket haul, 30 points), each about that player, in the same words a fan of theirs gets, and their detail
+        led by the player's id ("253802:out", "253802:i2:100"; a correction's, the moment's it takes back): each
+        player's out is the game's own, not the first one's alone (alerts.same reads it without). A game whose
+        earlier poll had no lines yet while it was live (the source's first lines) tells none: what they say
+        happened before. A sport whose moments are a side's, or the board's (football's goals, chess's turning,
+        esports' maps), overrides it."""
         if before.status == "live" and not before.lines and now.lines:
             return []
         found = []
@@ -585,7 +587,8 @@ class Sport:
             if not who:
                 continue
             for f in self.during(who, athlete_id, before.seen(athlete_id), now.seen(athlete_id)):
-                f.title, f.about = f"{name}: {f.title}", (athlete_id,)
+                kind, said, detail = f.detail.partition(":") if f.kind == "correction" else ("", "", f.detail)
+                f.title, f.about, f.detail = f"{name}: {f.title}", (athlete_id,), f"{kind}{said}{athlete_id}:{detail}"
                 found.append(f)
         return found
 
