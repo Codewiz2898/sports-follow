@@ -96,6 +96,30 @@ def test_make_your_pick_goes_once_before_a_campaigns_game_to_who_should_hear_it(
     assert heard(pushed) == {}  # once a game
 
 
+def test_a_postponed_game_gets_no_reminder_till_its_back_on(db, redis, pushed):  # noqa: F811
+    """BUG-109: "Make your pick" went for a campaign's game its source had postponed (its date kept), and its call was
+    open. No reminder now while it's postponed, and none used up: back on, it's reminded, its time said truly (it said
+    "in 2 hours" at 90 minutes)."""
+    start = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=115)
+    chess_board(db, start)
+    carlsen(db)
+    campaign(db, start, players=["Q106807"])
+    db.add(Follow(fan_id="asha", player_id=1, alert_rules={"level": "key"}))
+    db.commit()
+    devices(db, "asha")
+    poll(1, board(status="*"))
+    db.execute(text("UPDATE event SET status = 'postponed'"))
+    db.commit()
+    predictions_push.run(start - timedelta(minutes=110))
+    assert heard(pushed) == {} and db.scalars(select(Question)).one().reminded_at is None
+    db.execute(text("UPDATE event SET status = 'scheduled'"))  # back on, at its time
+    db.commit()
+    predictions_push.run(start - timedelta(minutes=100))
+    assert heard(pushed)["asha"]["body"] == "Who wins? Picks close when it starts, in 1 hour 40 minutes."
+    assert predictions_push._until(start, start - timedelta(minutes=90)) == "1 hour 30 minutes"  # pyright: ignore[reportPrivateUsage]
+    assert predictions_push._until(start, start - timedelta(minutes=120)) == "2 hours"  # pyright: ignore[reportPrivateUsage]
+
+
 def test_a_campaigns_players_are_found_as_its_page_finds_them(db):  # noqa: F811
     """A campaign's players by their registry ids (BUG-190): one made from a source's pick holds theirs as a "wikidata"
     identity (Gukesh), one bound only by the id the registry has for them in the source (Sindarov), one the research

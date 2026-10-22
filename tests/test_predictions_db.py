@@ -362,6 +362,56 @@ def test_a_match_the_schedule_puts_back_keeps_its_question_till_its_new_date(db,
     assert shut.value.status == 409 and db.get(Question, moved.id).locks_at == kicked_off
 
 
+def test_a_match_postponed_before_its_start_waits_closed_to_picks_and_opens_at_its_new_date(db, redis):
+    """BUG-109: a match put back before it starts (ESPN and Sportmonks often keep its date) was closed by the sweep at
+    the old kick-off, though it never started, and stayed closed when its new date came: nobody could call it then.
+    Now, while it waits, it takes no picks and isn't closed (so friends' picks stay hidden, as they were), and its new
+    date opens it again, closing at the new kick-off."""
+    start = soon()
+    sportmonks = SimpleNamespace(system="sportmonks_football", live_cadence=10)
+
+    def schedule(at: datetime, status: str) -> None:
+        structured.upsert_game(db, sportmonks, "Football", Fixture("557", "Trabzonspor vs Galatasaray", "Super Lig", at, None, status, [str(HOME), str(AWAY)], {"fixture": "557"}))
+        db.commit()
+
+    schedule(start, "scheduled")
+    event_id = db.scalars(select(Event.id).where(Event.key == "sportmonks_football:557")).one()
+    poll(event_id, sm.parse_match({**football_match("NS", 0, 0), "id": 557}), "sportmonks_football")
+    q = db.scalars(select(Question)).one()
+    gang = predictions.create(db, "acct-asha", "Derby", "Asha")
+    predictions.join(db, "acct-ravi", gang.code, "Ravi")
+    predictions.pick(db, "acct-asha", q.id, str(HOME))
+    db.commit()
+    schedule(start, "postponed")  # called off for the day, its date kept
+    with pytest.raises(predictions.Refused) as waiting:
+        predictions.pick(db, "acct-ravi", q.id, str(AWAY))
+    assert (waiting.value.status, waiting.value.message) == (409, predictions.POSTPONED)
+    db.rollback()
+    # The old kick-off passes, the tick's sweep and a poll of it after: not closed, for it never started.
+    after = start + timedelta(minutes=1)
+    predictions.sweep(db, after)
+    predictions.settle(db, [db.get_one(Question, q.id)], sports.of("Football"), "postponed", sm.parse_match(football_match("POSTPONED", 0, 0)).state, after)
+    db.commit()
+    db.expire_all()
+    assert db.get_one(Question, q.id).status == "open"
+    # Shown as not open to picks, with Asha's pick still hidden from her friends and the split unshown.
+    [shown] = predictions.league(db, "acct-ravi", gang.code, now=start + timedelta(hours=1))["questions"]
+    assert shown["status"] == "closed" and shown["friends"] == [{"name": "Asha", "you": False}]
+    assert all("share" not in o and "picks" not in o for o in shown["options"])
+    # Its new date: open again, closing then.
+    later = start + timedelta(days=7)
+    schedule(later, "scheduled")
+    db.expire_all()
+    q = db.get_one(Question, q.id)
+    assert (q.status, q.locks_at, q.starts_at) == ("open", later, later)
+    predictions.pick(db, "acct-ravi", q.id, str(AWAY), now=start + timedelta(days=1))
+    db.commit()
+    predictions.sweep(db, later + timedelta(minutes=1))
+    db.commit()
+    db.expire_all()
+    assert db.get_one(Question, q.id).status == "closed"
+
+
 def test_a_later_map_takes_no_pick_once_the_series_is_under_way_and_its_board_is_stale(db, redis):
     began = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=5)  # the series' start time has come
     db.add(Event(id=5, key=SERIES, sport="Valorant", title="Sentinels vs NRG", start_utc=began, status="armed", live_binding={"adapter": "pandascore_esports", "locator": {"match": "777"}}))
@@ -688,8 +738,8 @@ def test_a_game_picked_from_its_match_page_is_read_again_till_it_starts(db, redi
     codes["1"] = "POSTPONED"  # postponed, its date kept for now: the sweep waits a month, not three days
     assert run(day) == [("pitch", "1")]
     assert (db.get_one(Event, event_id).status, db.get_one(Event, event_id).start_utc) == ("postponed", later)
-    predictions.sweep(db, later + predictions.STALE + timedelta(minutes=1))  # three days past its date: closed, not voided
-    assert db.scalar(select(Question.status).where(Question.id == q.id)) == "closed"
+    predictions.sweep(db, later + predictions.STALE + timedelta(minutes=1))  # three days past its date: not voided, nor closed (BUG-109)
+    assert db.scalar(select(Question.status).where(Question.id == q.id)) == "open"
     db.rollback()  # (back to before that sweep: the game's to come still)
 
     codes["1"], games["1"] = "NS", (sooner := start - timedelta(hours=1))  # on again, and sooner

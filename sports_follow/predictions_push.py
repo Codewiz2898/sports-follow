@@ -103,18 +103,27 @@ def _places(db: Session, fans: set[str]) -> dict[str, tuple[int, str]]:
 
 
 def _until(locks_at: datetime, now: datetime) -> str:
+    """How long till picks close: "80 minutes", "1 hour 40 minutes", "2 hours"."""
     minutes = max(1, round((locks_at - now).total_seconds() / 60))
-    return f"{minutes} minutes" if minutes < 90 else f"{round(minutes / 60)} hours"
+    if minutes < 90:
+        return f"{minutes} minutes"
+    hours, rest = divmod(minutes, 60)
+    whole = f"{hours} hour{'s' if hours > 1 else ''}"
+    return f"{whole} {rest} minute{'s' if rest > 1 else ''}" if rest else whole
 
 
 def remind(now: datetime) -> list[tuple]:
     """The reminders due now, logged: one job per device (see _jobs). Each question due is marked as reminded,
-    whoever heard."""
+    whoever heard; but not one whose game is postponed (predictions.held), which waits: back on at its time, it's
+    reminded then, and its new date reminds again anyway (predictions.moved)."""
     jobs: list[tuple] = []
     with session() as db:
         due = list(db.scalars(select(Question).where(Question.status == predictions.OPEN, Question.reminded_at.is_(None), Question.locks_at > now + LAST,
                                                      Question.locks_at <= now + LEAD).with_for_update(skip_locked=True)))
+        on_hold = predictions.held(db, due)
         for q in due:
+            if q.id in on_hold:
+                continue
             q.reminded_at = now
             ids = _events(db, q)
             theirs = campaigns.player_ids(db, q.locks_at or now)

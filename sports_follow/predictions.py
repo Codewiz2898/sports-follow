@@ -8,7 +8,8 @@ it (a chess board is one of each player's: Sport.board tells the game apart), an
 is seen before the start: a poll of a followed game (structured.apply_poll), a look at its match page (match.view),
 or the worker's read of a fan's game, or one of Today's big games, coming up (prepare, made); a game with no start
 time is asked nothing till it has one. It closes as the game, or its map, starts (a first question's start time
-closes it too, should a poll be late: sweep), and a pick after that is refused.
+closes it too, should a poll be late: sweep), and a pick after that is refused. A game postponed before it starts
+holds its questions, taking no picks and showing nothing closing would, till its new date opens them (held).
 
 A fan picks without an account: picks are kept under the fan id, as follows are, and move into the account they
 sign in to (merge). A league needs one. A game with a pick waiting on it is polled as a followed game is (watched)
@@ -71,6 +72,7 @@ OPENED_ONCE = 86400  # an invite opened again by the same fan within this many s
 SHUT = "Picks for this one are closed: it's started."
 STALE_BOARD = "This one's game is under way and its latest score hasn't come in: open the game and try again in a minute."
 NO_START = "This one's game has no start time yet: open the game and try again in a minute."
+POSTPONED = "This one's game has been postponed: picks open again once it has a new date."
 OFF = "Picks for this sport are off for now."
 NO_POLL = f"Picks aren't open for this game: {APP_NAME} can't follow it live."
 SIGN_IN = "Sign in to make or join a league."
@@ -289,7 +291,8 @@ def settle(db: Session, rows: list[Question], rules: sports.Sport, status: str |
         if q.status == VOIDED and q.answer != sports.VOID:
             continue  # voided by the sweep, long past its start: that's final
         answer = rules.answer(q.ask, status, state)
-        if q.status == OPEN and (answer is not None or rules.closed(q.ask, status, state) or (q.locks_at is not None and q.locks_at <= now)):
+        due = q.locks_at is not None and q.locks_at <= now and status != "postponed"  # put back, it didn't start then: it waits (sweep)
+        if q.status == OPEN and (answer is not None or rules.closed(q.ask, status, state) or due):
             q.status, q.closed_at = CLOSED, now
         if answer is None or answer == q.answer or (answer == sports.VOID and q.status == SETTLED):
             continue  # nothing new; or a board that lost an answer it gave doesn't take it back
@@ -333,11 +336,12 @@ def moved(db: Session, event: Event, start: datetime | None, now: datetime | Non
 
 def sweep(db: Session, now: datetime) -> None:
     """The tick (pipeline.due_work): first questions whose start time has come close, though no poll has seen the
-    game start; and a question still unanswered STALE past its game's start (or its making, with none) is voided, but
-    a postponed game's wait POSTPONED_KEEP for their new date."""
-    db.execute(update(Question).where(Question.status == OPEN, Question.locks_at <= now).values(status=CLOSED, closed_at=now))
-    since = func.coalesce(Question.starts_at, Question.created_at)
+    game start, but not a postponed game's (held: it didn't start, and its new date opens them again: moved); and a
+    question still unanswered STALE past its game's start (or its making, with none) is voided, but a postponed
+    game's wait POSTPONED_KEEP for their new date."""
     postponed = Question.event_id.in_(select(Event.id).where(Event.status == "postponed"))
+    db.execute(update(Question).where(Question.status == OPEN, Question.locks_at <= now, or_(Question.event_id.is_(None), ~postponed)).values(status=CLOSED, closed_at=now))
+    since = func.coalesce(Question.starts_at, Question.created_at)
     stale = (Question.status.in_(UNSETTLED), since < now - STALE, or_(~postponed, Question.event_id.is_(None), since < now - POSTPONED_KEEP))
     # Its answer left empty: a void of the sweep's is final, where one its board gave (VOID) can still be settled.
     db.execute(update(Question).where(*stale).values(status=VOIDED, answer=None, settled_at=now, closed_at=func.coalesce(Question.closed_at, now)))
@@ -364,6 +368,14 @@ def is_open(q: Question, now: datetime) -> bool:
     return q.status == OPEN and not (q.locks_at is not None and q.locks_at <= now)
 
 
+def held(db: Session, rows: list[Question]) -> set[int]:
+    """Those of these questions still open whose game is postponed (BUG-109): no picks till its new date opens them
+    again (moved), and nothing shown that closing would show (friends' picks, the split), since they haven't closed."""
+    events = {q.event_id for q in rows if q.status == OPEN and q.event_id is not None}
+    off = set(db.scalars(select(Event.id).where(Event.id.in_(events), Event.status == "postponed"))) if events else set()
+    return {q.id for q in rows if q.status == OPEN and q.event_id in off}
+
+
 def pick(db: Session, fan: str, question_id: int, option: str, now: datetime | None = None, counted: bool = True) -> Question:
     """A fan's answer to a question, or a new one in place of theirs, while it's open. A question with no event to
     be settled by yet gets its game's (matches.event_for), so the poller follows it from now on. `counted`: whether
@@ -377,6 +389,8 @@ def pick(db: Session, fan: str, question_id: int, option: str, now: datetime | N
     q = db.get(Question, question_id, with_for_update=True)  # a poll closing it waits for this pick, or this for it
     if q is None:
         raise Refused(404, "No such question.")
+    if held(db, [q]):
+        raise Refused(409, POSTPONED)
     if not is_open(q, now):
         raise Refused(409, SHUT)
     if not sports.on(q.sport):
@@ -469,10 +483,12 @@ def shown(db: Session, fan: str | None, rows: list[Question], now: datetime) -> 
         return []
     counts = _counts(db, ids)
     mine = {qid: (option, pts) for qid, option, pts in db.execute(select(Pick.question_id, Pick.option, Pick.points).where(Pick.question_id.in_(ids), Pick.fan_id == fan))} if fan else {}
+    on_hold = held(db, rows)
     out = []
     for q in rows:
         keys = [o["key"] for o in q.options or []]
-        live = is_open(q, now)
+        takes = is_open(q, now) and q.id not in on_hold
+        live = takes or q.id in on_hold  # shown as while it's open: a postponed game's hasn't closed
         # While it's open, the split as last refreshed: the counts as they are, or shares moving with each pick, would
         # tell a friend's pick to a fan watching them.
         c = {k: int(n) for k, n in (q.split or {}).items()} if live else counts.get(q.id, {})
@@ -481,7 +497,7 @@ def shown(db: Session, fan: str | None, rows: list[Question], now: datetime) -> 
         split = shares(c, keys) if (own is not None and total >= SPLIT_FROM) or not live else None
         out.append({
             "id": q.id, "ask": q.ask, "title": q.title, "game": q.game_title, "sport": q.sport, "match": q.match,
-            "status": q.status if q.status != OPEN or live else CLOSED, "locks_at": _iso(q.locks_at), "answer": q.answer,
+            "status": q.status if q.status != OPEN or takes else CLOSED, "locks_at": _iso(q.locks_at), "answer": q.answer,
             "picks": total if q.split or not live else None,  # while it's open, as many as the split was refreshed at
             "split_from": SPLIT_FROM,
             # Shares only while it's open: exact counts would tell friends' picks.
@@ -725,10 +741,11 @@ def league(db: Session, fan: str, code: str, now: datetime | None = None) -> dic
     for qid, who, option in db.execute(select(Pick.question_id, Pick.fan_id, Pick.option).where(Pick.question_id.in_(list(questions)), Pick.fan_id.in_(list(names)))):
         picks.setdefault(qid, {})[who] = option
     shown_ = shown(db, fan, list(questions.values()), now)
+    on_hold = held(db, list(questions.values()))
     for item in shown_:
         q = questions[item["id"]]
         made = picks.get(q.id, {})
-        hidden = is_open(q, now)
+        hidden = is_open(q, now) or q.id in on_hold  # a postponed game's stay hidden till its new start closes them
         item["friends"] = [{"name": names[f], "you": f == fan, **({"option": made[f]} if f == fan or not hidden else {})} for f in names if f in made]
         item["waiting"] = [names[f] for f in names if f not in made] if hidden else []
     return {"code": found.code, "name": found.name, "created_at": _iso(found.created_at), "members": len(rows),
