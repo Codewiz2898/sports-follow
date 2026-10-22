@@ -301,6 +301,33 @@ def test_a_match_is_kept_once_parsed_and_the_minute_is_never_overspent(monkeypat
         budget.take(opendota.BUDGET, lane_name="live")
 
 
+def test_what_opendota_says_is_left_of_the_day_is_kept_and_spent_to_its_margin_only(monkeypatch):
+    """OpenDota's allowance is per address: other traffic from the server spends it too, so what it says is
+    left of its day (x-rate-limit-remaining-day) counts as well as our own count, until the day's end (BUG-139)."""
+    said = {"day": "2991"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[], headers={"x-rate-limit-remaining-minute": "59", "x-rate-limit-remaining-day": said["day"]})
+
+    monkeypatch.setattr(opendota, "ENABLED", True)
+    monkeypatch.setattr(opendota, "_memo", {})
+    monkeypatch.setattr(opendota, "_client", httpx.Client(transport=httpx.MockTransport(handler), headers=opendota._client.headers))
+    opendota.live()
+    assert budget.left(opendota.BUDGET) == 2991
+    said["day"] = str(opendota.MARGIN_MINUTE)  # someone else on the address spent the rest
+    opendota._memo.clear()
+    opendota.live()
+    assert budget.left(opendota.BUDGET) == opendota.MARGIN_MINUTE
+    opendota._memo.clear()
+    with pytest.raises(opendota.RateLimited):  # our own count is 2 of 3,000, but the source's is what's left
+        opendota.live()
+    said["day"] = "not a number"  # a header it can't read is left out
+    budget.observe(opendota.BUDGET, "", 100, 60)
+    opendota._memo.clear()
+    opendota.live()
+    assert budget.left(opendota.BUDGET) == 100
+
+
 def test_turned_off_it_asks_nothing(monkeypatch):
     monkeypatch.setattr(opendota, "ENABLED", False)
     monkeypatch.setattr(opendota, "_memo", {})
