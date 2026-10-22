@@ -332,6 +332,58 @@ def test_a_reads_detail_shows_under_a_followed_players_newer_card(db, redis, sou
     assert page["page"]["detail"] == {"maps": maps, "live": None} and page["page"]["teams"] == teams
 
 
+def series(clock: str, state: dict) -> LiveGame:
+    return LiveGame(source_id="100", title="Team Spirit vs Team Yandex", competition="BLAST Slam", start_utc=NOW, teams=["Team Spirit", "Team Yandex"],
+                    snapshot=Snapshot(status="live", score_label="1–0", clock_label=clock, state=state))
+
+
+@needs_db
+def test_a_dota_series_map_being_played_stays_though_live_nows_newer_board_doesnt_have_it(db, redis, source):
+    """Live now's list of a Dota 2 series asks OpenDota nothing, so its board has no map insides, and a page open
+    shows it every other look, when it's the newest: the game's own read a moment older fills them in (the map
+    being played and its clock), so they don't come and go. Not the map being played once the newer board has it
+    over, nor anything from a read FILL or more older."""
+    teams = [{"id": "10", "name": "Team Spirit", "short": "Spirit"}, {"id": "20", "name": "Team Yandex", "short": "Yandex"}]
+    on = {"n": 2, "clock": "23:45", "radiant": {"id": "10", "name": "Team Spirit", "kills": 14}, "dire": {"id": "20", "name": "Team Yandex", "kills": 9},
+          "gold_lead": {"id": "10", "amount": 4400}, "heroes": {}}
+    dota = {"maps": [{"n": 1, "match_id": 7, "players": {}}], "live": on}
+    detail = {"teams": teams, "maps": [], "live": {"n": 2, "lead": None, "buildings": None, "heroes": []}}
+    source.game = series("Map 2 · 23:45", {**SERIES, "dota": dota, "page_detail": detail})
+    match.read("pitch", "100", NOW)
+    source.live = [series("Map 2", SERIES)]
+    live.read("pitch", NOW + timedelta(seconds=40))
+
+    page, _ = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=45))
+    assert page["live"]["as_of"] == (NOW + timedelta(seconds=40)).isoformat()  # Live now's board: the newest
+    assert (page["live"]["clock"], page["live"]["state"]["dota"]) == ("Map 2 · 23:45", dota)
+    assert page["page"]["detail"]["live"]["n"] == 2
+
+    # Map 2 over and map 3 on, says Live now's newer list: the read's map 2 isn't the one being played.
+    source.live = [series("Map 3", {**SERIES, "maps": [*SERIES["maps"][:1], {"n": 2, "status": "finished", "winner": "20"}, {"n": 3, "status": "running", "winner": None}]})]
+    live.read("pitch", NOW + timedelta(seconds=70))
+    page, _ = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=75))
+    assert (page["live"]["clock"], page["live"]["state"]["dota"]) == ("Map 3", {"maps": dota["maps"], "live": None})
+
+    # A read further back than FILL fills in nothing.
+    source.live = [series("Map 2", SERIES)]
+    live.read("pitch", NOW + timedelta(seconds=match.FILL + 1))
+    page, _ = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=match.FILL + 5))
+    assert (page["live"]["clock"], "dota" in page["live"]["state"]) == ("Map 2", False)
+
+
+def test_a_series_board_with_its_own_dota_numbers_keeps_them():
+    """A board whose read asked OpenDota keeps what that read said, though an older one had the map on: the
+    newer knows it's over. Nor does a game with no maps inside (a CS2 series) gain anything."""
+    esports, football = sports.get("esports"), sports.get("football")
+    assert esports is not None and football is not None
+    older = {"clock": "Map 2 · 23:45", "state": {**SERIES, "dota": {"maps": [], "live": {"n": 2}}}}
+    newer = {"clock": "Between maps", "state": {**SERIES, "dota": {"maps": [{"n": 2}], "live": None}}}
+    assert esports.fill_board(newer, older) == newer
+    plain = {"clock": "Map 2", "state": SERIES}
+    assert esports.fill_board(plain, {"clock": "Map 2", "state": SERIES}) == plain
+    assert football.fill_board(plain, older) == plain
+
+
 def card(minute: int) -> dict:
     return {"clock": f"{minute}'", "kind": "YELLOW", "text": f"Booked at {minute}", "team_id": HOME}
 

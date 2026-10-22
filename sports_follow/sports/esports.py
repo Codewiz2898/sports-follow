@@ -353,6 +353,22 @@ class Esports(Sport):
             return {"maps": maps}
         return {"maps": maps, "teams": told["teams"], "detail": {"maps": told.get("maps") or [], "live": told.get("live")}}
 
+    def fill_board(self, shown: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
+        """A series' board with no Dota 2 map insides (Live now's list asks OpenDota nothing, nor does a poll it
+        failed), with another board's: each finished map's numbers, and while the board shown still has that map
+        on, the map being played (its kills and gold lead), with its clock ("Map 2 · 23:45" for "Map 2"). So the
+        page's map being played doesn't come and go with whichever board is newest."""
+        state, theirs = shown.get("state") or {}, (other.get("state") or {}).get("dota")
+        if state.get("kind") != "esports" or state.get("dota") or not isinstance(theirs, dict):
+            return shown
+        on = {m.get("n") for m in state.get("maps") or [] if m.get("status") == "running"}
+        live = theirs.get("live") if (theirs.get("live") or {}).get("n") in on else None
+        clock, said = shown.get("clock") or "", other.get("clock") or ""
+        filled = {**shown, "state": {**state, "dota": {"maps": theirs.get("maps") or [], "live": live}}}
+        if live and clock and said.startswith(f"{clock} · "):
+            filled["clock"] = said
+        return filled
+
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
         """Who took the series, and by how many maps ("Sentinels won 2–1", "NRG won by forfeit"), or the
         lobby ("GodLike Esports won the lobby")."""

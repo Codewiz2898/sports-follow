@@ -633,6 +633,13 @@ class Sport:
         ({"events": [{"clock", "kind", "text"}]}); a sport whose board says it all (chess) has nothing more."""
         return {"events": [{k: e.get(k) for k in ("clock", "kind", "text")} for e in events]} if events else {}
 
+    def fill_board(self, shown: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
+        """The board a game's match page shows (a live block: its score, clock and state), with what another
+        board of the game a moment apart (match.FILL) says and it doesn't, where that's still so. Boards from
+        different reads can differ in how much they say, not only in how new they are (Live now's list of
+        esports series asks OpenDota nothing). By default as it is: a newer board says all an older one does."""
+        return shown
+
     def verdict(self, state: dict[str, Any], score: str, clock: str) -> str:
         """Who won a finished game, in a few words, for the head of its match page above the final board:
         "Arsenal won", "Draw", "India won by 57 runs". From its final scoreboard (Snapshot.state) and its score

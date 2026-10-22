@@ -12,8 +12,10 @@ address (`match`), where it has a page: the app never makes one up.
 Where a fan follows someone in it, the game is polled already (structured.py): its board and the source's key
 events are their live card's, as fresh as the polls, and its moments are those found for every player in it.
 Otherwise its board is the newer of its own last read and Live now's (live.py); a finished game's is its final
-one, its own read's once that's settled. Its own read, from its source (an adapter's optional match()), brings
-both sides' line-ups and every player's line as well (a cricket scorecard). The worker reads it
+one, its own read's once that's settled. What the board shown doesn't say and one a moment apart does (Live now's
+list asks OpenDota nothing of a Dota 2 series), its sport fills in from that one (Sport.fill_board), so a page
+open doesn't lose it each time the other board is the newer. Its own read, from its source (an adapter's
+optional match()), brings both sides' line-ups and every player's line as well (a cricket scorecard). The worker reads it
 (worker.read_match) at most once every FRESH seconds a game and only while someone has the page open: the API
 serves the last read from Redis and asks for the next, so a page never waits on a source, and more fans
 looking cost a source nothing more. A read is asked only for a game a source has named (on Live now, among
@@ -66,6 +68,9 @@ CONFIRM = 30 * 60
 PARTIAL = 6 * 3600  # what a source's read of a finished game still lacks this long after it was first found over isn't coming
 FINAL_KEEP = 7 * 86400  # a week
 LAG = 2 * 60  # how much newer than a final board a live one must be to show over it: Live now's list can lag a game's end
+# How far apart in time another board of the game may be from the one shown and still fill in what that one
+# doesn't say (Sport.fill_board): a page open reads the game every FRESH or so, and Live now's list as often.
+FILL = 3 * 60
 LATE = 15 * 60  # how long after its start a game may still begin (a chess round's boards are listed as its games begin)
 READS = 6  # reads a minute of one source for match pages, whichever games: what fans' looks may spend
 MOMENTS = 40  # the most of a game's moments a page lists
@@ -257,6 +262,17 @@ def _shown(boards: list[Board]) -> Board:
     return max(boards, key=rank)
 
 
+def _filled(rules: sports.Sport, shown: Board, boards: list[Board]) -> dict[str, Any]:
+    """The board shown's live block, with what the game's other boards within FILL of it say and it doesn't,
+    as its sport fills that in (Sport.fill_board), the newest first: Live now's list says less of a Dota 2
+    series than its read and its polls do, and whichever is newest shows."""
+    at, block = datetime.fromisoformat(shown[0]), shown[2]
+    for other in sorted((b for b in boards if b is not shown), key=lambda b: datetime.fromisoformat(b[0]), reverse=True):
+        if abs(at - datetime.fromisoformat(other[0])) <= timedelta(seconds=FILL):
+            block = rules.fill_board(block, other[2])
+    return block
+
+
 def _fresh(status: str, start: str | None, read_: dict[str, Any] | None, now: datetime) -> float:
     """How long a read of the game is served before a look asks for another: till Redis drops it after a settled
     read (over and whole), or one that found nothing (a source that hasn't got the game), but for one made
@@ -336,7 +352,8 @@ def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime 
 
     boards = _boards(db, system, events, read_, listed)
     unread = events[0].status if events else (big or {}).get("status") or "scheduled"
-    as_of, status, board, game_events, _ = _shown(boards) if boards else (None, unread, None, [], False)
+    shown = _shown(boards) if boards else None
+    as_of, status, board, game_events, _ = shown or (None, unread, None, [], False)
     game_events = _merged(game_events, (game or {}).get("events") or [])
     # Read by its board's kind ("cricket"), as the source drew it; for an esports game, the kind is the group's,
     # and the game's own sport ("cs2") is its, with the same rules.
@@ -346,6 +363,8 @@ def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime 
         rules = by_kind
     if not sports.on(rules.key):
         return None, False  # a game turned off, though its source runs for another
+    if shown is not None:
+        board = _filled(rules, shown, boards)
     event = events[0] if events else None
     said = game or listed or big or {}  # what a source last said of the game, where nothing's stored
     start = event.start_utc.isoformat() if event and event.start_utc else said.get("start_utc")

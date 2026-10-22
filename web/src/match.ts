@@ -10,8 +10,10 @@ import type { FollowedMatch, LiveStatus, Match, MatchFollowState, MatchStream } 
 // A look again: a followed player's game is polled every few seconds, any other read once a minute. A look only
 // reads what the server has, which asks the game's source at most once a minute whoever looks.
 export const EVERY = 30_000
-const SOON = 5_000  // when the server says a read is on its way, the next look
-const TRIES = 3  // and how many such looks before waiting the usual time again
+// When the server says a read is on its way, the next look: a read takes a second or two (8 s at the most
+// for 22 Oct's esports series), and a page opened on an old read fills in once it comes.
+const SOON = 2_500
+const TRIES = 5  // and how many such looks before waiting the usual time again
 
 /** After a look whose answer said `refreshing` (a newer read on its way) or not: how long until the next, and
  * how many quick looks that one will have been. */
