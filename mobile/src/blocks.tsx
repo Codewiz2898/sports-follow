@@ -56,11 +56,12 @@ export function StatGrid({ stats, empty = 'No stats yet.', paper }: { stats?: St
   return (
     <View style={b.statGrid}>
       {stats.map((x) => {
-        // A value in words ("Black", an opponent's name) set smaller, two tiles wide when long (.stat.words, .stat.wide).
+        // A value in words ("Black", an opponent's name) set smaller, two tiles wide when it wouldn't fit one on a line
+        // (.stat.words, .stat.wide); a number on one line, smaller where its tile hasn't the room (a clock's "1:24:50").
         const { words, wide } = statFit(x.value)
         return (
           <View key={x.label} style={[b.stat, wide && b.statWide, paper && { backgroundColor: colour.bg }]}>
-            <Text style={words ? [num(22), { lineHeight: 25 }] : num(34)}>{x.value}</Text>
+            {words ? <Text style={[num(22), { lineHeight: 25 }]}>{x.value}</Text> : <Text style={num(34)} numberOfLines={1} adjustsFontSizeToFit>{x.value}</Text>}
             <Text style={[t.tiny, { fontFamily: font[700], color: colour.muted }]}>{x.label}</Text>
           </View>
         )
