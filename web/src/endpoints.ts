@@ -82,9 +82,10 @@ export function endpoints(request: Request) {
     feed: (playerId: number) => request<Feed>(`/api/players/${playerId}/feed`),
     feedFeedback: (playerId: number, itemId: string, verdict: FeedVerdict) =>
       request<{ item_id: string; hidden: boolean }>(`/api/players/${playerId}/feed/${encodeURIComponent(itemId)}/feedback`, json('POST', { verdict })),
-    // A video whose player refused to play it here (feed.refusedHere): it leaves this fan's Feed, and every fan's once
-    // enough networks have said so (feed.said_unplayable, feed.unplayable), counting only devices whose time zone is
-    // the feed's country's (feed.counts_everywhere): abroad, a video may be refused that plays for the fans it's for.
+    // A video whose player refused to play it here (feed.refusedHere): it leaves this fan's Feed, and once enough
+    // networks have said so its source is asked, whose word alone takes it from every fan's (feed.said_unplayable,
+    // feed.check_unplayable). Only devices whose time zone is the feed's country's count (feed.counts_everywhere):
+    // abroad, a video may be refused that plays for the fans it's for.
     feedUnplayable: (playerId: number, itemId: string) =>
       request<{ item_id: string; unplayable: boolean; marked: boolean }>(`/api/players/${playerId}/feed/${encodeURIComponent(itemId)}/unplayable`,
         json('POST', { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone })),
