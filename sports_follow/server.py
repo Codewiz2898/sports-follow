@@ -2181,8 +2181,8 @@ def this_week(fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict
     """Today's "This week" and the Wire (week.py): the big moments of the fan's players over the last seven
     days, as each sport words them for a poster, biggest first; and the Wire: their players' facts (who's out,
     who's back), line-ups and news, newest first, then facts about a few of the best-known players they don't
-    follow, which a fan who follows nobody gets too."""
-    return {"posters": week.posters(db, fan), "wire": week.wire(db, fan)}
+    follow, which a fan who follows nobody gets too. Kept a minute per fan (week.mine)."""
+    return week.mine(db, fan)
 
 
 @app.get("/api/players/{player_id}/feed")

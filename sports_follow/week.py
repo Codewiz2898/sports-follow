@@ -20,6 +20,8 @@ names where it's from: those headlines are web search results, not our facts. It
 from __future__ import annotations
 
 import re
+import threading
+import time
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -35,6 +37,11 @@ from .naming import team_key
 
 DAYS = 7
 LIMIT = 12  # posters at most, the biggest first
+KEPT_FOR = 60  # seconds a fan's week is kept (mine), in each API process
+KEPT_MAX = 5000  # fans' weeks kept at once, in each API process
+
+_kept: dict[str, tuple[float, tuple[int, ...], dict[str, Any]]] = {}  # fan (or "" for nobody's): when, follows, answer
+_keeping = threading.Lock()
 
 # The two sides in a game's title: "India v Australia", "GenOne vs 6666", "Spurs at Jazz".
 _SIDES = re.compile(r"\s+(?:v|vs|at)\.?\s+", re.I)
@@ -47,6 +54,26 @@ def versus(title: str | None, mine: list[str]) -> str:
     ours = {team_key(m) for m in mine if m}
     others = [s for s in sides if team_key(s) not in ours]
     return f"v {others[0]}" if len(sides) == 2 and len(others) == 1 else ""
+
+
+def mine(db: Session, fan: str) -> dict[str, Any]:
+    """This week and the Wire, as GET /api/me/week answers them, kept a minute (KEPT_FOR) per fan: every open
+    app asks again after a big moment, and Today each time it opens, so most asks are read from here. Following
+    someone or stopping is seen at once (the answer is kept with the players it was for); fans who follow nobody
+    all have the same one."""
+    follows = tuple(sorted(db.scalars(select(Follow.player_id).where(Follow.fan_id == fan))))
+    key, now = (fan if follows else ""), time.monotonic()
+    kept = _kept.get(key)
+    if kept is not None and kept[1] == follows and now - kept[0] < KEPT_FOR:
+        return kept[2]
+    answer = {"posters": posters(db, fan), "wire": wire(db, fan)}
+    if KEPT_FOR > 0:
+        with _keeping:
+            if len(_kept) >= KEPT_MAX:  # the ones past their minute go; if that's not enough, all of them
+                for gone in [k for k, (at, _, _) in _kept.items() if now - at >= KEPT_FOR] or list(_kept):
+                    del _kept[gone]
+            _kept[key] = (now, follows, answer)
+    return answer
 
 
 def posters(db: Session, fan: str, now: datetime | None = None) -> list[dict[str, Any]]:

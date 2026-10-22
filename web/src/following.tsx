@@ -15,7 +15,7 @@ interface FollowingState {
   setAlerts: (playerId: number, level: AlertLevel) => Promise<void>
   moments: PlayerMoment[]  // moments to show as toasts while the app is open
   dismissMoment: (id: number) => void
-  heard: number  // moments the stream has brought, any level, and its reconnects: the activity list refreshes on it
+  heard: number  // moments the stream has brought at the fan's level, and coming back to the app: the activity list and This week look again on it
   listen: (onEvent: (e: StreamEvent) => void) => () => void  // every event the fan stream brings, for a followed player's page
   // The games the fan follows by themselves (sports_follow/matches.py), each board as last polled, and whether
   // the list has come; following one, or stopping, by its address after /match/; its level.
@@ -37,6 +37,7 @@ const TOAST_MS = 8000
 const RETRY_MS = 2000
 const RETRY_MAX_MS = 60_000
 const SAME_MS = 10_000  // a game's own moment this soon after one of the fan's players' of its kind in the game is that one
+const AWAY_MS = 30_000  // away from the app this long (a phone that slept): what came meanwhile is looked for on coming back
 
 /** A team's tag, as a game's own moment told from its side names it (PlayerMoment.sides). */
 const teamTag = (teamId: number) => `team:${teamId}`
@@ -156,12 +157,25 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
     }
   }, [loaded, failed, reload])
 
+  // Back in the app after a while: what came while it was away may be in the activity list. Not on the stream's
+  // reconnect, which every open app makes at once when the server restarts (BUG-265).
+  useEffect(() => {
+    let away = document.visibilityState === 'hidden' ? Date.now() : null
+    const seen = () => {
+      if (document.visibilityState === 'hidden') { away ??= Date.now(); return }
+      if (away != null && Date.now() - away >= AWAY_MS) setHeard((n) => n + 1)
+      away = null
+    }
+    document.addEventListener('visibilitychange', seen)
+    return () => document.removeEventListener('visibilitychange', seen)
+  }, [])
+
   const apply = useCallback((e: StreamEvent) => {
     if (e.type === 'following') {
       // First on every (re)connect: each card as it is now, so a score or result published while the
-      // stream was down (a locked phone, a restart) isn't missed, and the activity list catches up.
-      // Who the fan follows, and their alert levels, stay as this app has them, unless the list never
-      // loaded (a player was followed since): then this is the list.
+      // stream was down (a locked phone, a restart) isn't missed. Who the fan follows, and their alert
+      // levels, stay as this app has them, unless the list never loaded (a player was followed since):
+      // then this is the list.
       const fresh = new Map(e.players.map((c) => [c.player_id, c]))
       if (!loadedRef.current) {
         setCards((prev) => withLocal(e.players, prev))
@@ -178,7 +192,6 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
         const theirs = new Map(e.teams.map((t) => [t.team_id, t]))
         setTeams((prev) => (loadedRef.current ? prev.map((t) => { const f = theirs.get(t.team_id); return f ? { ...t, ...f, alerts: t.alerts } : t }) : e.teams ?? prev))
       }
-      setHeard((n) => n + 1)
     } else if (e.type === 'match') {
       // A followed game's board and where it's at, as its poll found it; the rest stays as the list has it.
       setMatches((prev) => prev.map((m) => (m.event_id === e.event_id ? { ...m, live: e.match.live, status: e.match.status } : m)))
@@ -194,12 +207,13 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
       setCards((prev) => prev.map((c) => (c.player_id === e.player_id && e.card.version >= c.version ? { ...c, ...e.card } : c)))
       if (e.card.status !== 'building') setProgress((p) => ({ ...p, [e.player_id]: [] }))
     } else if (e.type === 'moment') {
-      setHeard((n) => n + 1)
       // With the app in front the service worker skips the system notification, so the toast
       // follows the same level the push does: the player's, or the game's for a game's own moment.
       const m = e.moment
       const level = m.player_id != null ? cardsRef.current.find((c) => c.player_id === m.player_id)?.alerts ?? 'key' : gameLevel(m, matchesRef.current, teamsRef.current)
       if (level == null || !wanted(level, m)) return
+      // One the fan hears about: the activity list looks again (one below their level waits for its next look).
+      setHeard((n) => n + 1)
       // A board's moment its other side tells, where the fan follows that player too: theirs shows, as the push does.
       const voice = m.voice != null ? cardsRef.current.find((c) => c.player_id === m.voice) : undefined
       if (voice && wanted(voice.alerts ?? 'key', m)) return
