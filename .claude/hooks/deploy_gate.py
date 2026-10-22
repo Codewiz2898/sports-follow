@@ -9,11 +9,13 @@ it stands for never happens (18 Oct 2026). This blocks a Bash call that would ge
   file or stdin. Or GraphQL's approveDeployments / rejectDeployments with `graphql` in the call, inline
   or in a file the call feeds in (`@q.graphql`, `--input`, `< q`, `cat q |`);
 - changing an environment (its required reviewers): a POST, PUT, PATCH, DELETE or fields to
-  `repos/<owner>/<repo>/environments/...`;
+  `repos/<owner>/<repo>/environments/...` (or `repositories/<id>/...`), or GraphQL's createEnvironment,
+  updateEnvironment, deleteEnvironment and the like, as above;
 - running `deploy.sh` other than `status`: a command line naming it may only read (grep, git, ls, cat and
   the like); anything that could run it (a shell, ssh, sudo, xargs, `.`, python) stops the line, though
   ssh, `-c` and `eval` scripts are judged the same way. And `ssh … deploy` or `rollback`, which the
-  deploy key's forced command hands to deploy.sh.
+  deploy key's forced command hands to deploy.sh: after the host, as ssh's RemoteCommand option
+  (`-o RemoteCommand=deploy`), or as a RemoteCommand in a config file the call names (`-F file`).
 
 These read the raw command, so no wrapper, variable or spelling of a flag gets past them; the cost is
 that a commit message or comment naming them in the command itself is stopped too (pass the text in a
@@ -45,14 +47,18 @@ TELL = ("Approving or rejecting a production deploy, changing its environment, a
 
 GATE = re.compile(r"pending_deployments|deployment_protection_rule")
 SENDS = re.compile(r"\b(approved|rejected)\b|(\b|-X)post\b|--input|(=|\s)@", re.IGNORECASE)
-MUTATIONS = re.compile(r"\b(approve|reject)Deployments\b", re.IGNORECASE)
+# A waiting deploy approved or rejected, or an environment changed: its reviewers cleared, or it deleted (BUG-221).
+MUTATIONS = re.compile(r"\b((approve|reject)Deployments|(create|update|delete|pin|reorder)Environment)\b", re.IGNORECASE)
 GRAPHQL = re.compile(r"\bgraphql\b", re.IGNORECASE)
 CALLS_API = re.compile(r"\bgh\b.*\bapi\b|\bcurl\b|\bwget\b|\bhttp\b|requests|urllib|fetch\(", re.IGNORECASE | re.DOTALL)
 FED = re.compile(r"(?:(?:=|\s)@|--input[=\s]+|<\s*|\bcat\s+)['\"]?([^\s'\"|;&()<>]+)")  # files a call feeds in
-ENVIRONMENT = re.compile(r"repos/\S+/environments\b")  # repos/o/r/, repos/$GITHUB_REPOSITORY/
+ENVIRONMENT = re.compile(r"repos(itories)?/\S+/environments\b")  # repos/o/r/, repos/$GITHUB_REPOSITORY/, repositories/<id>/
 CHANGES = re.compile(r"(\b|-X)(post|put|patch|delete)\b|(^|\s)(-[fF]\S*|--field|--raw-field|--input)", re.IGNORECASE)
 NAMES_DEPLOY = re.compile(r"(?<![\w-])deploy\.sh\b(?![\s'\"]+(status|help|-h|--help)\b)")
-FORCED_TEXT = re.compile(r"\b(ssh|mosh)\b[^\n;&|]*\s['\"]?(deploy|rollback)(?=['\"\s]|$)")  # when unreadable
+FORCED_TEXT = re.compile(r"\b(ssh|mosh)\b[^\n;&|]*\s['\"]?(deploy|rollback)(?=['\"\s]|$)"  # when unreadable
+                         r"|\bRemoteCommand\s*[=\s]\s*['\"]?(deploy|rollback)\b", re.IGNORECASE)
+# ssh's RemoteCommand, as an -o option's value ("RemoteCommand=deploy", "RemoteCommand deploy") or a config file's line.
+REMOTE_COMMAND = re.compile(r"^\s*RemoteCommand\s*(?:=\s*|\s+)(.*?)\s*$", re.IGNORECASE | re.MULTILINE)
 
 # Commands that only read or tidy files: a line naming deploy.sh may run these and nothing else.
 READ_ONLY = {"grep", "egrep", "fgrep", "rg", "ag", "ls", "cat", "bat", "less", "more", "head", "tail", "wc", "sed",
@@ -86,16 +92,54 @@ def shell_parts(words: list[str]) -> tuple[str | None, list[str], bool]:
     return None, [], check
 
 
-def ssh_remote(words: list[str]) -> list[str]:
-    """What an ssh call runs on the other side: the words after its options and host."""
-    i = 1
+def ssh_parts(words: list[str]) -> tuple[list[tuple[str, str]], list[str]]:
+    """An ssh call's options that take a value, as (letter, value): -o X or -oX, -i key, -F file; and the words
+    it runs on the other side. OpenSSH reads options after the host too (`ssh host -i key deploy`), up to the
+    first other word or `--`."""
+    options: list[tuple[str, str]] = []
+    i, host = 1, False
     while i < len(words):
         w = words[i]
-        if w.startswith("-"):
-            i += 2 if len(w) == 2 and w[1] in SSH_OPTION_ARGS else 1
+        if w == "--":
+            i += 1 if host else 2  # the host may come after it
+            break
+        if w.startswith("-") and len(w) > 1:
+            if len(w) == 2 and w[1] in SSH_OPTION_ARGS:
+                options.append((w[1], words[i + 1] if i + 1 < len(words) else ""))
+                i += 2
+                continue
+            if w[1] in SSH_OPTION_ARGS:
+                options.append((w[1], w[2:]))
+            i += 1
             continue
-        return words[i + 1:]
-    return []
+        if host:
+            break
+        host, i = True, i + 1
+    return options, words[i:]
+
+
+def ssh_remote(words: list[str]) -> list[str]:
+    """What an ssh call runs on the other side: the words after its options and host, or else the command its
+    RemoteCommand option gives (`-o RemoteCommand=deploy`)."""
+    options, remote = ssh_parts(words)
+    if remote:
+        return remote
+    given = [m.group(1) for letter, value in options if letter == "o" for m in [REMOTE_COMMAND.match(value)] if m]
+    return [given[0].strip("'\"")] if given else []
+
+
+def ssh_configs(words: list[str], cwd: str | None) -> list[str]:
+    """The text of each config file an ssh call names (-F file), read from where the call runs."""
+    texts: list[str] = []
+    for name in (value for letter, value in ssh_parts(words)[0] if letter == "F"):
+        path = os.path.join(cwd or os.getcwd(), os.path.expanduser(name))
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    texts.append(f.read(1 << 20))
+            except OSError:
+                pass
+    return texts
 
 
 def could_run_deploy(command: str, depth: int = 0) -> bool:
@@ -134,8 +178,9 @@ def could_run_deploy(command: str, depth: int = 0) -> bool:
     return False
 
 
-def forced_deploy(command: str, depth: int = 0) -> bool:
-    """`ssh … deploy` or `rollback`: with the deploy key, its forced command hands these to deploy.sh."""
+def forced_deploy(command: str, depth: int = 0, cwd: str | None = None) -> bool:
+    """`ssh … deploy` or `rollback`: with the deploy key, its forced command hands these to deploy.sh. Given
+    after the host, as the RemoteCommand option, or as the RemoteCommand of a config file the call names."""
     if depth > 4:
         return False
     for simple in parse(command).commands:
@@ -146,13 +191,17 @@ def forced_deploy(command: str, depth: int = 0) -> bool:
         if at is not None:
             remote = " ".join(ssh_remote(words[at:])).split()
             remote = remote[1:] if remote[:1] == ["--"] else remote
-            if remote[:1] in (["deploy"], ["rollback"]) or forced_deploy(" ".join(remote), depth + 1):
+            if remote[:1] in (["deploy"], ["rollback"]) or forced_deploy(" ".join(remote), depth + 1, cwd):
                 return True
+            for text in ssh_configs(words[at:], cwd):
+                for m in REMOTE_COMMAND.finditer(text):
+                    if m.group(1).strip("'\"").split()[:1] in (["deploy"], ["rollback"]) or NAMES_DEPLOY.search(m.group(1)):
+                        return True
         if words and os.path.basename(words[0]) in SHELLS:
             script = shell_parts(words)[0]
-            if script and forced_deploy(script, depth + 1):
+            if script and forced_deploy(script, depth + 1, cwd):
                 return True
-        if words and words[0] == "eval" and forced_deploy(" ".join(words[1:]), depth + 1):
+        if words and words[0] == "eval" and forced_deploy(" ".join(words[1:]), depth + 1, cwd):
             return True
     return False
 
@@ -210,7 +259,7 @@ def blocked(command: str, cwd: str) -> bool:
     if "SSH_ORIGINAL_COMMAND" in command and "deploy.sh" in command:
         return True  # deploy.sh takes its arguments from it: `SSH_ORIGINAL_COMMAND=deploy deploy.sh status`
     try:
-        if forced_deploy(command) or (NAMES_DEPLOY.search(command) and could_run_deploy(command)):
+        if forced_deploy(command, cwd=cwd) or (NAMES_DEPLOY.search(command) and could_run_deploy(command)):
             return True
         names = {os.path.basename(s.words[0]) for s in parse(command).commands if s.words}
     except ValueError:  # a line the reader can't follow: stopped if it names deploy.sh at all
