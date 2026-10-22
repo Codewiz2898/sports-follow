@@ -778,6 +778,72 @@ def test_a_player_fide_names_without_a_comma_is_found_by_their_name_not_its_init
     assert len(tours) == lichess_chess.MAX_TOURS and tours[0]["id"] == "OwnEvent"
 
 
+def test_a_matchs_rounds_to_come_are_one_game_under_both_players(monkeypatch):
+    # BUG-215: a World Championship's games further off than 12 hours have no pairing yet, so no board: each player's
+    # fixture of one was a game of its own, and a fan of both saw each one twice in Coming up. In a match between two
+    # players, a round to come is their meeting: under both, it's the round's.
+    now = datetime.now(timezone.utc)
+    ms = lambda d: int(d.timestamp() * 1000)  # noqa: E731
+    gukesh = {"name": "Gukesh D", "fideId": 46616543, "rating": 2767, "title": "GM"}
+    sindarov = {"name": "Sindarov, Javokhir", "fideId": 14205483, "rating": 2726, "title": "GM"}
+    carlsen = {"name": "Carlsen, Magnus", "fideId": 1503014, "rating": 2837, "title": "GM"}
+    so = {"name": "So, Wesley", "fideId": 5202213, "rating": 2750, "title": "GM"}
+    tour = {"id": "WorldCh1", "name": "FIDE World Championship 2026", "info": {"players": "Gukesh, Sindarov", "format": "14-game match"},
+            "dates": [ms(now - timedelta(days=1)), ms(now + timedelta(days=20))]}
+    rounds = [{"id": "Game0001", "name": "Game 1", "finished": True, "startsAt": ms(now - timedelta(days=1))},
+              {"id": "Game0002", "name": "Game 2", "startsAt": ms(now + timedelta(hours=3))},
+              *({"id": f"Game000{n}", "name": f"Game {n}", "startsAt": ms(now + timedelta(days=n - 2, hours=3))} for n in (3, 4, 5))]
+    start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    pgn = ('[White "Gukesh D"]\n[Black "Sindarov, Javokhir"]\n[Result "1/2-1/2"]\n[WhiteFideId "46616543"]\n[BlackFideId "14205483"]\n'
+           '[GameURL "https://lichess.org/broadcast/t/r/Game0001/game1aaa"]\n\n1. d4 d5 1/2-1/2\n')
+    game2 = {"round": rounds[1], "tour": tour, "games": [{"id": "game2aaa", "players": [sindarov, gukesh], "fen": start, "status": "*"}]}
+
+    def get_json(url, ttl, text=False):
+        if "/broadcast/search?q=" in url:
+            return {"currentPageResults": [{"tour": tour}]}
+        if url.endswith("/broadcast/top"):
+            return {"active": [], "upcoming": []}
+        if url.endswith(f"/broadcast/{tour['id']}"):
+            return {"tour": tour, "rounds": rounds}
+        if url.endswith(f"/broadcast/{tour['id']}.pgn"):
+            return pgn
+        if url.endswith("/broadcast/-/-/Game0002"):
+            return game2
+        raise AdapterError(f"not faked: {url}")
+
+    monkeypatch.setattr(lichess_chess, "get_json", get_json)
+    monkeypatch.setattr(lichess_chess.bus, "sync_redis", lambda: Kept())
+    chess = lichess_chess.LichessChess()
+
+    def boards(*players) -> list[dict[str, str]]:
+        return [{f.source_id.split("-")[0]: f.board for f in chess.fixtures(lichess_chess.ref_for({"id": p["fideId"], "name": p["name"]}))} for p in players]
+
+    mine, theirs = boards(gukesh, sindarov)
+    assert mine == theirs and (mine["Game0001"], mine["Game0002"]) == ("game1aaa", "game2aaa")  # a board once it's paired
+    assert mine["Game0003"] == "round:Game0003" and len(set(mine.values())) == 5  # each game to come one of its own, the same under both
+    from sports_follow import structured  # Coming up's game: one for both players' fixtures of it
+
+    assert structured.board_key(f"lichess_chess:Game0003-{gukesh['fideId']}", mine["Game0003"]) == structured.board_key(f"lichess_chess:Game0003-{sindarov['fideId']}", theirs["Game0003"])
+    # Before its first game is paired too, as its format says it's a match of the two it names.
+    rounds[0].update(finished=False, startsAt=ms(now + timedelta(days=1)))
+    rounds[1]["startsAt"] = ms(now + timedelta(days=2))
+    pgn, game2["games"] = "", []
+    mine, theirs = boards(gukesh, sindarov)
+    assert mine == theirs and mine["Game0001"] == "round:Game0001"
+    # Not in a round robin, where a round's boards pair others: a round to come there is each player's own.
+    tour["info"] = {"players": "Gukesh, Sindarov, Carlsen, So", "format": "4-player double round robin"}
+    rounds[0].update(finished=True, startsAt=ms(now - timedelta(days=1)))
+    pgn = pgn + ('[White "Gukesh D"]\n[Black "Sindarov, Javokhir"]\n[Result "1-0"]\n[WhiteFideId "46616543"]\n[BlackFideId "14205483"]\n'
+                 '[GameURL "https://lichess.org/broadcast/t/r/Game0001/game1aaa"]\n\n1. d4 1-0\n\n'
+                 '[White "So, Wesley"]\n[Black "Carlsen, Magnus"]\n[Result "0-1"]\n[WhiteFideId "5202213"]\n[BlackFideId "1503014"]\n'
+                 '[GameURL "https://lichess.org/broadcast/t/r/Game0001/game1bbb"]\n\n1. e4 0-1\n')
+    assert {b["Game0003"] for b in boards(gukesh, sindarov, carlsen, so)} == {""}
+    # Nor where its players line names two of a bigger field (no "match" in its format), with no round read yet.
+    tour["info"] = {"players": "Gukesh, Sindarov", "format": "10-player round robin"}
+    rounds[0].update(finished=False, startsAt=ms(now + timedelta(days=1)))
+    assert {b["Game0001"] for b in boards(gukesh, sindarov)} == {""}
+
+
 def test_a_round_set_to_start_after_the_previous_one_is_read_and_said_to_be_next_once_that_one_is_on(monkeypatch):
     # BUG-211 (H17): a blitz day's round 7 has no start time ("startsAfterPrevious"): it was taken as unpaired, its
     # pairings never read, and its fixture no more than "scheduled" with no start, which nothing ever armed or polled.

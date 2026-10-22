@@ -454,10 +454,28 @@ def may_follow(round_data: dict[str, Any], games: list[dict[str, Any]]) -> bool:
         return True
     pairs: dict[frozenset[str], int] = {}
     for g in round_data.get("games") or games:
-        # Its players by FIDE id, or by name where they have none (an open's unrated boards are each a pairing of their own).
-        pair = frozenset(str(p.get("fideId") or p.get("name") or "") for p in g.get("players") or [])
+        pair = pairing(g)
         pairs[pair] = pairs.get(pair, 0) + 1
     return max(pairs.values(), default=0) > 1
+
+
+def pairing(game: dict[str, Any]) -> frozenset[str]:
+    """A game's two players by FIDE id, or by name where they have none (an open's unrated boards are each a pairing of
+    their own)."""
+    return frozenset(str(p.get("fideId") or p.get("name") or "") for p in game.get("players") or [])
+
+
+MATCH = re.compile(r"\bmatch\b", re.I)  # Lichess's format for an event of two players' games ("14-game match")
+
+
+def a_match(tour: dict[str, Any], pairings: set[frozenset[str]], fide_id: str) -> bool:
+    """Whether an event is a match between two players, the player one of them (a World Championship), so each of its
+    rounds is their meeting, before its pairing's out too: every round of it read so far paired the same two, or, with
+    none read yet, its players line names two and its format says it's a match."""
+    if pairings:
+        return len(pairings) == 1 and fide_id in next(iter(pairings))
+    info = tour.get("info") or {}
+    return len([p for p in str(info.get("players") or "").split(",") if p.strip()]) == 2 and bool(MATCH.search(str(info.get("format") or "")))
 
 
 def round_status(round_info: dict[str, Any], games: list[dict[str, Any]], now: datetime, follows: bool = False, waited: float | None = None) -> str:
@@ -634,10 +652,12 @@ def parse_board(round_data: dict[str, Any], fide_id: str, now: datetime | None =
 
 
 def fixture_for(tour: dict[str, Any], rnd: dict[str, Any], games: list[dict[str, Any]], fide_id: str, now: datetime,
-                follows: bool = False, waited: float | None = None, upnext: bool = False) -> Fixture:
+                follows: bool = False, waited: float | None = None, upnext: bool = False, meeting: bool = False) -> Fixture:
     """A player's fixture in one round: their game (or match) once paired, the round itself before that.
     `follows` and `waited` as round_status's: a refresh calls a game over no sooner than its polls do; `upnext`, a
-    round with no start time of its own that's next (next_up)."""
+    round with no start time of its own that's next (next_up); `meeting`, a round of a match between two players
+    (a_match), whose board before its pairing's out is the round, the same under both players' fixtures, so Coming
+    up shows it once."""
     status = round_status(rnd, games, now, follows, waited)
     title = f"{tour.get('name', '')} · {rnd.get('name', '')}"
     result = None
@@ -661,7 +681,7 @@ def fixture_for(tour: dict[str, Any], rnd: dict[str, Any], games: list[dict[str,
         locator={"round": rnd["id"], "fide": fide_id},
         detail=rnd.get("name") if games else "Pairings not published yet",
         result=result,
-        board=str((current_game(games) or {}).get("id") or ""),  # the game parse_board will show, under each player's fixture
+        board=str((current_game(games) or {}).get("id") or "") or (f"round:{rnd['id']}" if meeting else ""),  # the game parse_board will show, under each player's fixture
         next_up=upnext,
     )
 
@@ -901,6 +921,7 @@ class LichessChess(Adapter):
                 continue
             games: list[Fixture] = []
             unpaired: list[dict[str, Any]] = []
+            pairings: set[frozenset[str]] = set()  # every pairing in its rounds read: one, in a match between two players
             finished = {}
             if any(r.get("finished") for r in rounds):
                 done = all(r.get("finished") for r in rounds)
@@ -926,6 +947,7 @@ class LichessChess(Adapter):
                     except AdapterError:
                         continue
                 read = {**data, "round": rnd, "tour": tour}  # a finished round's games come from the PGN, without it
+                pairings.update(pairing(g) for g in read.get("games") or [])
                 mine = games_of(read, ref.athlete_id)
                 if mine:
                     games.append(fixture_for(tour, rnd, mine, ref.athlete_id, now, may_follow(read, mine), self._waited(read, ref.athlete_id), next_up(rounds, rnd, now)))
@@ -934,7 +956,8 @@ class LichessChess(Adapter):
                 # else: paired without them (a bye, or not in this section)
             # Rounds not yet paired count as the player's only if they've played in this event or it names them.
             if games or names_them(tour, names):
-                out += games + [fixture_for(tour, rnd, [], ref.athlete_id, now, upnext=next_up(rounds, rnd, now)) for rnd in unpaired[:3]]
+                meeting = a_match(tour, pairings, ref.athlete_id)
+                out += games + [fixture_for(tour, rnd, [], ref.athlete_id, now, upnext=next_up(rounds, rnd, now), meeting=meeting) for rnd in unpaired[:3]]
         return sorted(out, key=lambda f: f.start_utc or datetime.max.replace(tzinfo=timezone.utc))
 
     def history_pages(self, ref: PlayerRef, anchor: date) -> list[dict[str, Any]]:
