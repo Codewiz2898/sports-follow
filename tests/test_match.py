@@ -632,6 +632,26 @@ def test_a_fans_players_in_a_game_with_their_lines_and_results(db, redis, source
 
 
 @needs_db
+def test_a_game_called_off_and_played_again_lists_only_the_replays_moments_and_lines(db, redis, source):
+    # BUG-301: a replay's page listed the abandoned game's goals and cards, and a fan's player's line from it.
+    followed(db)  # the replay, started at NOW
+    db.add_all([Moment(key="a1", player_id=5, event_id=40, kind="goal", level="key", title="Goal: Bukayo Saka puts Arsenal ahead", body="1–0 · 23'", created_at=NOW - timedelta(days=2)),
+                Moment(key="a2", player_id=6, event_id=40, kind="yellow", level="minor", title="Yellow card: Harry Kane", body="1–0 · 30'", created_at=NOW - timedelta(days=2, minutes=-7)),
+                PlayerLine(event_id=40, player_id=5, as_of=NOW - timedelta(days=2, minutes=-10), stats={"headline": "1 goal", "stats": []}),
+                EventState(event_id=40, as_of=NOW - timedelta(days=2, minutes=-25), status="postponed", score_label="Arsenal 1 – 0 Chelsea", clock_label="Abandoned", state=FOOTBALL)])
+    db.commit()
+    page, _ = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=40))
+    assert page["moments"] == []
+    assert [(p["name"], p["headline"]) for p in page["yours"]] == [("Bukayo Saka", None)]
+    db.add_all([Moment(key="r1", player_id=5, event_id=40, kind="goal", level="key", title="Goal: Bukayo Saka", body="2–1 · 64'", created_at=NOW + timedelta(seconds=10)),
+                PlayerLine(event_id=40, player_id=5, as_of=NOW + timedelta(seconds=10), stats={"headline": "1 goal", "stats": []})])
+    db.commit()
+    page, _ = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=40))
+    assert [m["title"] for m in page["moments"]] == ["Goal: Bukayo Saka"]
+    assert [(p["name"], p["headline"]) for p in page["yours"]] == [("Bukayo Saka", "1 goal")]
+
+
+@needs_db
 def test_a_read_at_full_time_is_confirmed_before_it_beats_newer_boards(db, redis, source):
     """A football source read right at the whistle: no lines yet, a goal it hasn't corrected. The state a poll
     stored after it shows, the read is asked for again CONFIRM on, and the read then, with its lines, is the

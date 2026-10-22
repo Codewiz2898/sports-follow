@@ -30,7 +30,7 @@ from typing import Any
 from sqlalchemy import Select, and_, exists, or_, select, tuple_
 from sqlalchemy.orm import Session, aliased
 
-from . import news, rank, registry, sports
+from . import news, notify, rank, registry, sports
 from .adapters import ADAPTERS, NEWS, source_name
 from .moments import Found
 from .models import Event, EventPlayer, FeedCandidate, Follow, Moment, NewsItem, Player, PlayerIdentity, PlayerLine, Sidelined, Team, TeamFollow
@@ -124,8 +124,12 @@ def _highs(*where: Any) -> Select[Moment, Player, str]:
 
 
 def _seen(db: Session, rows: Sequence[Any]) -> list[tuple[Moment, Player, str | None]]:
-    """The key moments (_highs) a poster may be read from: none of a sport turned off."""
-    return [(m, player, title) for m, player, title in rows if sports.on(player.sport)]
+    """The key moments (_highs) a poster may be read from: none of a sport turned off, and of a game called off and
+    played again under its fixture, only the replay's, since it began (notify.editions): the goals of the game
+    abandoned are no poster of the one played again."""
+    began = notify.editions(db, [m.event_id for m, _, _ in rows])
+    return [(m, player, title) for m, player, title in rows
+            if sports.on(player.sport) and not (m.event_id in began and m.created_at < began[m.event_id])]
 
 
 def _of_moments(game: Sequence[Any]) -> tuple[int, datetime, dict[str, Any]] | None:

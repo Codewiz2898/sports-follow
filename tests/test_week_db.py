@@ -16,7 +16,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import controls, notify, pipeline, server, week
-from sports_follow.models import AthleteOverride, Event, EventPlayer, Follow, Moment, Player, PlayerIdentity, PlayerLine, Sidelined, Team, TeamFollow
+from sports_follow.models import AthleteOverride, Event, EventPlayer, EventState, Follow, Moment, Player, PlayerIdentity, PlayerLine, Sidelined, Team, TeamFollow
 from sports_follow.moments import Found, Seen, detect
 
 from .test_moments import goal, line, scored
@@ -377,3 +377,16 @@ def test_a_sport_turned_off_has_no_posters_and_a_link_to_its_game_previews_none(
     assert server.this_week("other", db)["posters"] == []
     assert week.game(db, 2, 20) is None and week.game(db, 3, 20) is None
     assert week.game(db, 1, 10) is not None
+
+
+def test_a_game_called_off_and_played_again_has_only_the_replays_poster(db):
+    # BUG-301: the goals of a game abandoned and replayed under its fixture made the replay's poster, and its preview.
+    moment(db, 1, 1, 10, "goal", "Goal: Mohamed Salah", "Egypt 1 – 0 South Africa · 23'", 85, ago=timedelta(days=2))
+    moment(db, 2, 1, 10, "goal", "Goal: Mohamed Salah (2)", "Egypt 2 – 0 South Africa · 40'", 85, ago=timedelta(days=2, minutes=-17))
+    db.add(EventState(event_id=10, as_of=NOW - timedelta(days=2, minutes=-30), status="postponed", score_label="Egypt 2 – 0 South Africa", clock_label="Abandoned", state={}))
+    db.get(Event, 10).start_utc = NOW - timedelta(hours=2)  # the replay's start, set after it was called off
+    db.flush()
+    assert server.this_week("fan", db)["posters"] == [] and week.game(db, 1, 10) is None
+    moment(db, 3, 1, 10, "goal", "Goal: Mohamed Salah", "Egypt 1 – 0 South Africa · 75'", 85, ago=timedelta(minutes=30))
+    assert [(p["id"], p["word"]) for p in server.this_week("fan", db)["posters"]] == [(3, "Goal")]
+    assert (week.game(db, 1, 10) or {}).get("id") == 3

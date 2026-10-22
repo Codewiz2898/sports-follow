@@ -43,10 +43,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.orm import Session
 
-from . import bus, league, live, matches, registry, search, sports, watch
+from . import bus, league, live, matches, notify, registry, search, sports, watch
 from .adapters import ADAPTERS, KNOWN, Adapter, LiveGame, PlayerRef, source_name
 from .db import session
 from .models import Event, EventPlayer, EventState, Follow, Moment, Player, PlayerCard, PlayerIdentity, PlayerLine
@@ -386,6 +386,8 @@ def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime 
         verdict = (rules.verdict(state, board.get("score") or "", board.get("clock") or "") if board else "") or (big or {}).get("line") or (big or {}).get("word") or ""
     adapter = reader(system)
     ask = bool(adapter and adapter.fixture_pattern.fullmatch(fixture) and _age((read_ or {}).get("as_of"), now) > _fresh(status, start, read_, now))
+    ids = [e.id for e in events]
+    began = notify.editions(db, ids)  # a game called off and played again under its fixture: the replay's alone
     return {
         "key": f"{system}:{fixture}",
         "match": path(f"{system}:{fixture}"),
@@ -398,8 +400,8 @@ def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime 
         "live": board,
         "verdict": verdict,
         "page": page,
-        "moments": _moments(db, [e.id for e in events]),
-        "yours": _yours(db, fan, system, [e.id for e in events], (game or {}).get("lines") or {}),
+        "moments": _moments(db, ids, began),
+        "yours": _yours(db, fan, system, ids, (game or {}).get("lines") or {}, began),
         "sides": _sides(db, fan, rules, system, roster, (game or {}).get("teams") or [], [e.id for e in events]),
         # Its teams to follow (teams.py): each side the team registry has.
         "teams": teams.in_game(db, fan, system, state, [e.id for e in events]),
@@ -410,19 +412,28 @@ def view(db: Session, fan: str | None, system: str, fixture: str, now: datetime 
     }, ask
 
 
-def _moments(db: Session, event_ids: list[int]) -> list[dict[str, Any]]:
+def _since(began: dict[int, datetime], event: Any, at: Any) -> list[ColumnElement[bool]]:
+    """Of a game called off and played again under its fixture (notify.editions: when each began again), what's the
+    replay's, by a row's game and when it was stored: what came before is the game called off's (its goals, its
+    players' lines), which the replay's page doesn't show."""
+    return [or_(event != event_id, at >= since) for event_id, since in began.items()]
+
+
+def _moments(db: Session, event_ids: list[int], began: dict[int, datetime]) -> list[dict[str, Any]]:
     """What was found for the players followed in the game, newest first (moments.py), but what each of them
     gets alike. Not the game's own moments, for fans following the game (matches.py): its board and timeline
-    say those."""
+    say those. Of a game played again, the replay's (_since)."""
     if not event_ids:
         return []
-    rows = db.scalars(select(Moment).where(Moment.event_id.in_(event_ids), Moment.player_id.is_not(None), Moment.kind.not_in(ALIKE)).order_by(Moment.created_at.desc(), Moment.id.desc()).limit(MOMENTS))
+    rows = db.scalars(select(Moment).where(Moment.event_id.in_(event_ids), Moment.player_id.is_not(None), Moment.kind.not_in(ALIKE), *_since(began, Moment.event_id, Moment.created_at))
+                      .order_by(Moment.created_at.desc(), Moment.id.desc()).limit(MOMENTS))
     return [{"id": m.id, "at": m.created_at.isoformat(), "kind": m.kind, "level": m.level, "title": m.title, "body": m.body, "player_id": m.player_id} for m in rows]
 
 
-def _yours(db: Session, fan: str | None, system: str, event_ids: list[int], lines: dict[str, Any]) -> list[dict[str, Any]]:
+def _yours(db: Session, fan: str | None, system: str, event_ids: list[int], lines: dict[str, Any], began: dict[int, datetime]) -> list[dict[str, Any]]:
     """The players this fan follows in the game, by name, each with their line in it (the newest a poll stored,
-    else the game's read's) and, once it's over, their result from their side ("Won 2–1")."""
+    else the game's read's; of a game played again, the replay's: _since) and, once it's over, their result from
+    their side ("Won 2–1")."""
     if not fan or not event_ids:
         return []
     rows = db.execute(select(Player.id, Player.name, Player.sport, EventPlayer.result).join(EventPlayer, EventPlayer.player_id == Player.id)
@@ -431,7 +442,8 @@ def _yours(db: Session, fan: str | None, system: str, event_ids: list[int], line
         return []
     ids = list(dict.fromkeys(r.id for r in rows))
     stored: dict[int, dict[str, Any]] = {}
-    for player_id, stats in db.execute(select(PlayerLine.player_id, PlayerLine.stats).where(PlayerLine.event_id.in_(event_ids), PlayerLine.player_id.in_(ids)).order_by(PlayerLine.as_of.desc())):
+    for player_id, stats in db.execute(select(PlayerLine.player_id, PlayerLine.stats).where(PlayerLine.event_id.in_(event_ids), PlayerLine.player_id.in_(ids), *_since(began, PlayerLine.event_id, PlayerLine.as_of))
+                                       .order_by(PlayerLine.as_of.desc())):
         stored.setdefault(player_id, stats)
     known = dict(db.execute(select(PlayerIdentity.player_id, PlayerIdentity.external_id).where(PlayerIdentity.player_id.in_(ids), PlayerIdentity.system == system)).all())
     out: dict[int, dict[str, Any]] = {}
