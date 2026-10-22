@@ -230,11 +230,11 @@ def _series(match_id: int, team: str, name: str) -> dict:
 
 
 class Moving:
-    """PandaScore for a pro, ProX (31001), on OldTeam until `team` says otherwise, each team with its next series:
-    what it was asked, and in which lane."""
+    """PandaScore for a pro, ProX (31001), on OldTeam until `team` says otherwise (None: on no team), each team with
+    its next series: what it was asked, and in which lane."""
 
     def __init__(self, monkeypatch):
-        self.team = (OLD, "OldTeam")
+        self.team: tuple[str, str] | None = (OLD, "OldTeam")
         self.asked: list[tuple[str, str | None, str]] = []
         monkeypatch.setattr(pandascore, "get_json", self.get_json)
         monkeypatch.setattr(pandascore, "get_all", self.get_all)
@@ -243,7 +243,8 @@ class Moving:
     def get_json(self, path, ttl, **params):
         self.asked.append((path, None, budget.lane()))
         if path == "/players/31001":
-            return {"id": 31001, "name": "ProX", "current_team": {"id": int(self.team[0]), "name": self.team[1]}, "current_videogame": {"slug": "valorant"}}
+            team = {"id": int(self.team[0]), "name": self.team[1]} if self.team else None
+            return {"id": 31001, "name": "ProX", "current_team": team, "current_videogame": {"slug": "valorant"}}
         return []
 
     def get_all(self, path, ttl, pages=2, **params):
@@ -359,3 +360,29 @@ def test_following_a_pro_again_from_search_moves_them_to_the_team_their_source_h
     # A pick of the teams already bound changes nothing.
     assert pipeline.start_from_pick(adapter, picked) == (player_id, False)
     assert games_of(player_id) == ["NewTeam vs Rival"]
+
+
+@pytest.mark.parametrize("real", [True, False])
+def test_a_read_naming_no_team_moves_a_pro_off_their_team_only_where_the_source_says_that_is_real(prox, monkeypatch, real):
+    # A read with no team is a pro between teams or retired where the source says so (PandaScore's and Liquipedia's
+    # current team): their old team's games stop. Where a read may just leave the team out (ESPN's athlete records at
+    # times), it's passed over: one flaky read mustn't drop a cricketer's games for hours.
+    assert KNOWN["pandascore_esports"].no_team_is_real and KNOWN["liquipedia_esports"].no_team_is_real
+    assert not KNOWN["espn_cricket"].no_team_is_real and not KNOWN["sportmonks_football"].no_team_is_real
+    monkeypatch.setattr(KNOWN["pandascore_esports"], "no_team_is_real", real)
+    player_id, source, redis = prox
+    structured.refresh(player_id)
+    assert games_of(player_id) == ["OldTeam vs Rival"]
+    source.team = None
+    redis.delete(f"lock:reread:{player_id}")
+    structured.refresh(player_id)
+    if real:
+        assert bound_to(player_id) == {"fixtures": [], "stats": []}
+        assert games_of(player_id) == []
+    else:
+        assert bound_to(player_id) == {"fixtures": [OLD], "stats": [OLD]}
+        assert games_of(player_id) == ["OldTeam vs Rival"]
+    # A pick of that read does the same.
+    adapter = KNOWN["pandascore_esports"]
+    assert pipeline.start_from_pick(adapter, adapter.player("31001")) == (player_id, False)
+    assert bound_to(player_id) == ({"fixtures": [], "stats": []} if real else {"fixtures": [OLD], "stats": [OLD]})

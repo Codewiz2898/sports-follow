@@ -325,6 +325,10 @@ class Adapter:
     id_pattern: re.Pattern[str] = DIGITS  # the shape of its athlete ids
     fixture_pattern: re.Pattern[str] = DIGITS  # and of its games' (Fixture.source_id), for match(): refused before anything is sent
     preview_fixtures = True  # False: a preview before following shows stats only (fixtures take many reads)
+    # Whether a read of an athlete (player()) naming no team means they have none now (a pro between teams, or retired),
+    # so their old team's games stop (structured.record_move). False where a read may leave the team out (ESPN's athlete
+    # records at times): a read with no team is passed over there, and the binding stays as it is.
+    no_team_is_real = False
     # How a player's page words this source's live scores, where the app's general sentences don't fit (a
     # source whose standings come after each match): live_note under the live board, lag_note at the page's
     # foot. Sent in the card's live block; None leaves the app's own.

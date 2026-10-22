@@ -386,22 +386,27 @@ def reread(player_id: int, adapter: Adapter, ref: PlayerRef) -> PlayerRef:
     except AdapterError as exc:
         log.warning("refresh %s: %s couldn't say again who athlete %s is: %s", player_id, adapter.system, ref.athlete_id, exc)
         return ref
-    return (record_move(player_id, fresh) if fresh else None) or ref
+    return (record_move(player_id, adapter, fresh) if fresh else None) or ref
 
 
-def record_move(player_id: int, fresh: PlayerRef) -> PlayerRef | None:
+def record_move(player_id: int, adapter: Adapter, fresh: PlayerRef) -> PlayerRef | None:
     """Move a bound player's bindings to a fresh read of them from their source (a refresh's reread, or a fan's
     pick from search) where it names other teams than the bound ones: a transfer, or a pro leaving their team.
     Their fixtures are then the new team's, their old team's games still to come are no longer theirs (one against
     the new team stays), and their card's fixtures are due at the next tick. What the read leaves out (a league, a
-    birth date) stays as bound, and so do the other sides the agent named, less any the source names now. Returns
-    the ref now bound, or None where nothing moved: not bound to that source, another athlete, or the same teams."""
+    birth date) stays as bound, and so do the other sides the agent named, less any the source names now. A read
+    naming no team moves them off their team only where the source says that's real (Adapter.no_team_is_real).
+    Returns the ref now bound, or None where nothing moved: not bound to that source, another athlete, the same
+    teams, or no team from a source that may leave it out."""
     with session() as db:
         row = db.scalar(select(SourceBinding).where(SourceBinding.player_id == player_id, SourceBinding.purpose == "fixtures", SourceBinding.adapter == fresh.system))
         if row is None or not row.locator:
             return None
         old, confidence = PlayerRef(**row.locator), row.confidence
     if fresh.athlete_id != old.athlete_id or set(fresh.team_ids) == set(old.team_ids):
+        return None
+    if not fresh.team_ids and not getattr(adapter, "no_team_is_real", False):
+        log.info("bind %s: %s's read of athlete %s names no team; kept on %s", player_id, fresh.system, fresh.athlete_id, ", ".join(old.team_names) or "no team")
         return None
     known = {naming.team_key(t) for t in fresh.team_names if t}
     ref = replace(fresh, profile_url=fresh.profile_url or old.profile_url, league=fresh.league or old.league, born=fresh.born or old.born,
