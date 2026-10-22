@@ -119,6 +119,7 @@ class _Copy:
         self.reads = 0  # reads begun, in order
         self.applied = 0  # the latest-begun read whose rows are the copy
         self.lock = threading.Lock()
+        self.first = threading.Lock()  # held through the process's first read: every thread that asks meanwhile waits for it
         self.thread: threading.Thread | None = None
 
 
@@ -158,19 +159,25 @@ def _keep_reading() -> None:
 
 
 def _first_read() -> None:
-    with _copy.lock:
-        if _copy.loaded:
-            return
-        _copy.loaded = True  # once: a database that's down isn't asked again on every read
-        start = isinstance(STORE, DbStore) and _copy.thread is None
-        if start:
-            _copy.thread = threading.Thread(target=_keep_reading, name="controls", daemon=True)
-    try:
-        load()
-    except Exception as exc:
-        log.warning("admin controls: can't read them (%s); nothing is turned off until they can be", exc)
-    if start and _copy.thread is not None:
-        _copy.thread.start()
+    """The process's first read of the rows. A thread that asks while it's under way (a worker starting against a slow
+    database) waits for it, rather than see nothing turned off and poll a sport the panel has off. One that fails
+    leaves nothing turned off, said in the log, until the reading thread's next read (every REFRESH seconds): a
+    database that's down isn't asked again on every call."""
+    with _copy.first:
+        with _copy.lock:
+            if _copy.loaded:
+                return
+            start = isinstance(STORE, DbStore) and _copy.thread is None
+            if start:
+                _copy.thread = threading.Thread(target=_keep_reading, name="controls", daemon=True)
+        try:
+            load()
+        except Exception as exc:
+            log.warning("admin controls: can't read them (%s); nothing is turned off until they can be", exc)
+            with _copy.lock:
+                _copy.loaded = True
+        if start and _copy.thread is not None:
+            _copy.thread.start()
 
 
 def current() -> Controls:

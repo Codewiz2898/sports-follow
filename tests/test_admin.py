@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 import base64
+import threading
 import time
 
 from sports_follow import admin, adapters, controls, metrics, server, sports
@@ -84,6 +85,46 @@ def test_a_tests_patch_of_the_running_sources_holds_until_the_panel_changes_them
 
 def test_rows_of_the_wrong_shape_turn_nothing_off():
     assert controls.parse({"sports_off": "football", "sources_off": [1, None], "budget:x": [1]}) == controls.Controls()
+
+
+def test_a_processs_other_threads_wait_for_its_first_read_of_the_controls():
+    """BUG-263: a process's first read marked its copy read before it was, so while that read was under way (a worker
+    starting against a slow database) its other threads saw nothing turned off, and could poll a sport the panel had
+    off. They wait for it."""
+    entered, release = threading.Event(), threading.Event()
+
+    class Slow(controls.MemoryStore):
+        def read(self):
+            entered.set()
+            release.wait(5)
+            return {controls.SPORTS_OFF: ["chess"]}
+
+    controls.reset(Slow())
+    seen: list[frozenset[str]] = []
+    first = threading.Thread(target=controls.current)
+    other = threading.Thread(target=lambda: seen.append(controls.current().sports_off))
+    try:
+        first.start()
+        assert entered.wait(5)
+        other.start()
+        other.join(0.3)
+        assert other.is_alive()  # waiting, not answered "nothing off"
+    finally:
+        release.set()
+        first.join(5)
+        other.join(5)
+    assert seen == [frozenset({"chess"})]
+
+    class Down(controls.MemoryStore):
+        reads = 0
+
+        def read(self):
+            Down.reads += 1
+            raise OSError("the database is down")
+
+    controls.reset(Down())
+    assert controls.current() == controls.current() == controls.Controls()  # nothing off, said in the log
+    assert Down.reads == 1  # and not asked again on every call: the reading thread tries again
 
 
 # ---------------------------------------------------------------- what a source may spend
