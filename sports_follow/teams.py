@@ -15,14 +15,14 @@ follows goes.
     .venv/bin/python -m sports_follow.teams restore <system> <team id>
 
 **A follow** (TeamFollow) is a fan, a team and their level. A followed team's games are read from its source
-(refresh: Adapter.team_fixtures, as often as a followed player's) and linked to it (EventTeam), and from then on
-each is followed as a game followed by itself is (matches.py): armed by its sport's lead, polled in the live lane
-by the same allowances, its own moments from both sides (Sport.game_moments) reaching the team's fans by their
-level, and its result told from the team's side (Sport.side_final) in place of the game's own (alerts.plan). A
-fan who follows a player in it as well hears each moment once; one who mutes a game of it hears nothing more of
-that game. The refresh keeps each result from the team's side (EventTeam.result), and the team's page (its card):
-its games to come, its last results and its squad (Adapter.team, read daily), each player followable as a search
-result is. A fan follows at most MAX teams.
+(refresh: Adapter.team_fixtures, as often as a followed player's near a game, every QUIET otherwise: stale) and
+linked to it (EventTeam), and from then on each is followed as a game followed by itself is (matches.py): armed
+by its sport's lead, polled in the live lane by the same allowances, its own moments from both sides
+(Sport.game_moments) reaching the team's fans by their level, and its result told from the team's side
+(Sport.side_final) in place of the game's own (alerts.plan). A fan who follows a player in it as well hears each
+moment once; one who mutes a game of it hears nothing more of that game. The refresh keeps each result from the
+team's side (EventTeam.result), and the team's page (its card): its games to come, its last results and its squad
+(Adapter.team, read daily), each player followable as a search result is. A fan follows at most MAX teams.
 """
 
 from __future__ import annotations
@@ -56,6 +56,8 @@ RECENT = 5  # and results
 LIMIT = 6  # teams a search answers with
 REFRESH_LOCK = 20 * 60  # as a player's refresh (structured.REFRESH_LOCK)
 LOOK_AGAIN = 10 * 60  # a page nobody follows the team of asks its source again at most this often
+SOON = timedelta(hours=48)  # a team with a game on or this soon has its games read as often as a followed player's
+QUIET = timedelta(hours=6)  # and one without, this often: a schedule days off doesn't change by the half hour
 READS = 6  # and pages ask at most this many reads a minute of one source's allowance, whichever teams (as match.READS)
 STREAM_AHEAD = timedelta(hours=36)  # a fan's teams' games this soon are on their stream (event_ids)
 NO_SOURCE = "This team's games can't be followed now: its source isn't running."
@@ -312,16 +314,23 @@ def set_level(db: Session, fan: str, team_id: int, level: str) -> bool:
 
 
 def stale(team: Team, now: datetime | None = None) -> bool:
-    """Whether a team's games are due to be read again (as a followed player's: FIXTURES_MAX_AGE)."""
+    """Whether a team's games are due to be read again: as often as a followed player's (FIXTURES_MAX_AGE) while
+    it has a game on or within SOON, as its last read had them, else every QUIET. A game of it that ends has them
+    read at the next tick (ended)."""
     from .config import FIXTURES_MAX_AGE
 
-    return team.fetched_at is None or team.fetched_at < (now or _now()) - timedelta(seconds=FIXTURES_MAX_AGE)
+    now = now or _now()
+    if team.fetched_at is None:
+        return True
+    soon = any(g.get("status") in ("armed", "live") or (g.get("start_utc") and datetime.fromisoformat(g["start_utc"]) <= now + SOON)
+               for g in (team.card or {}).get("upcoming") or [])
+    return team.fetched_at < now - (timedelta(seconds=FIXTURES_MAX_AGE) if soon else QUIET)
 
 
 def due(db: Session, now: datetime) -> list[int]:
-    """The followed teams whose games are due to be read again (the tick, pipeline.due_work): of a sport running,
-    from a source running that can say them and isn't down to what its live games need (structured.spare), not
-    failing lately (structured.retry_at), and not being read now."""
+    """The followed teams whose games are due to be read again (the tick, pipeline.due_work: stale): of a sport
+    running, from a source running that can say them and isn't down to what its live games need (structured.spare),
+    not failing lately (structured.retry_at), and not being read now."""
     from .config import FIXTURES_MAX_AGE
 
     running = dict(ADAPTERS.items())
@@ -329,7 +338,7 @@ def due(db: Session, now: datetime) -> list[int]:
     out = []
     for team in db.scalars(select(Team).where(Team.id.in_(select(TeamFollow.team_id)), or_(Team.fetched_at.is_(None), Team.fetched_at < now - timedelta(seconds=FIXTURES_MAX_AGE)))):
         adapter = running.get(team.system)
-        if not readable(adapter) or not followable(team.sport):
+        if not stale(team, now) or not readable(adapter) or not followable(team.sport):
             continue
         retry = structured.retry_at(team.health)
         if retry and now < retry:

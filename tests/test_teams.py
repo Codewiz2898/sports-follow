@@ -844,3 +844,24 @@ def test_a_sport_turned_off_is_out_of_reach_and_its_hidden_follows_take_no_room(
     monkeypatch.setattr(sports, "ENABLED", sports.ALL)
     assert [p["player"]["name"] for p in asyncio.run(server.following("fan"))["players"]] == ["Magnus Carlsen"]
     assert asyncio.run(server.follow(None, {"player_id": carlsen.id}, "other"))["player_id"] == carlsen.id  # pyright: ignore[reportArgumentType]
+
+
+@needs_db
+def test_a_followed_team_with_no_game_soon_is_read_again_less_often(db, redis, source, monkeypatch):
+    # BUG-227: every followed team was read again every half hour, game or not, and once most teams have a follower
+    # that's the source's background allowance: a team with nothing in the next two days is read every few hours.
+    monkeypatch.setattr(teams, "_now", lambda: NOW)
+    monkeypatch.setattr(structured, "_now", lambda: NOW)
+    teams.import_teams(source.fake, NOW)
+    arsenal, chelsea = team(db, ARS), team(db, CHE)
+    source.fixtures[ARS] = [fixture("100", NOW + timedelta(days=5))]
+    source.fixtures[CHE] = [fixture("101", NOW + timedelta(hours=30), home=CHE, away=TOT)]
+    for t in (arsenal, chelsea):
+        teams.follow(db, "fan", t.id)
+    db.commit()
+    for t in (arsenal, chelsea):
+        teams.refresh(t.id)
+    db.expire_all()
+    assert pipeline.due_work(NOW + timedelta(hours=1)).teams == [chelsea.id]  # a game tomorrow: every half hour
+    assert sorted(pipeline.due_work(NOW + teams.QUIET + timedelta(minutes=1)).teams) == sorted([arsenal.id, chelsea.id])
+    assert not teams.stale(team(db, ARS), NOW + timedelta(hours=1)) and teams.stale(team(db, CHE), NOW + timedelta(hours=1))
