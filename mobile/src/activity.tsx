@@ -4,6 +4,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { followsKey } from '../../web/src/alerts'
 import { ACTIVITY, refetcher, type Refetcher } from '../../web/src/refetch'
 import StannNotifications from '../modules/stann-notifications'
 import { useAccount } from './account'
@@ -34,8 +35,7 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
   const [seenRead, setSeenRead] = useState(false)
   const [muted, setMutedIds] = useState<Set<number>>(new Set())
   // Following someone new, or turning a player off, changes the whole list; a game or a team too.
-  const who = [...cards.map((c) => `${c.player_id}:${c.alerts ?? 'key'}`), ...matches.map((m) => `game${m.event_id}:${m.alerts}`),
-    ...teams.map((x) => `team${x.team_id}:${x.alerts}`)].sort().join(',')
+  const who = followsKey(cards, matches, teams)
 
   // What this phone last saw, read again for each fan (a sign-in or out forgets it: account.tsx).
   useEffect(() => {
