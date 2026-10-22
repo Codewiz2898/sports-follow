@@ -58,12 +58,12 @@ AHEAD = 30 * 60  # or, for a game to come more than SOON from its start, this lo
 SOON = 2 * 3600  # out an hour or so before
 KEEP = 6 * 3600  # and Redis keeps it this long: a page open at full time, or opened again later, still has it
 # A read that finds the game over is the first word, not the last: the source fills in what's missing in the
-# minutes after (a scorecard's lines, a result's note, a goal's correction), and a chess round's next game can
-# follow a decided one. So it's read once more CONFIRM after the game was first found over (and every CONFIRM
+# minutes after (a scorecard's lines, a result's note, a goal's correction), and may yet find it on again. So it's
+# read once more CONFIRM after the game was first found over (and every CONFIRM
 # while the source says its read is partial, for PARTIAL at most), and that read, still over and whole, is
 # settled: kept FINAL_KEEP and not asked for again till then. A crowd opening yesterday's final costs its
-# source two reads. Till it's settled, a live board newer than it by LAG shows instead (a chess mini-match's
-# next game), and the game is read every FRESH again.
+# source two reads. Till it's settled, a live board newer than it by LAG shows instead (a game its source called
+# over too soon), and the game is read every FRESH again.
 CONFIRM = 30 * 60
 PARTIAL = 6 * 3600  # what a source's read of a finished game still lacks this long after it was first found over isn't coming
 FINAL_KEEP = 7 * 86400  # a week
@@ -254,8 +254,7 @@ def _boards(db: Session, system: str, events: list[Event], read_: dict[str, Any]
 def _shown(boards: list[Board]) -> Board:
     """The board the page shows: the game's own read once it's settled (over, confirmed, and with all the page
     shows: a chess game's moves); else the newest, a final board standing over a live one less than LAG newer
-    (Live now's list can lag a game's end), so a game that goes on after its source called it over (a chess
-    mini-match's next game) shows live."""
+    (Live now's list can lag a game's end), so a game that goes on after its source called it over shows live."""
     def rank(b: Board) -> tuple[bool, datetime]:
         at = datetime.fromisoformat(b[0])
         return b[1] == "final" and b[4], at + timedelta(seconds=LAG) if b[1] == "final" else at
@@ -281,7 +280,7 @@ def _fresh(status: str, start: str | None, read_: dict[str, Any] | None, now: da
     on its broadcast till its games begin): that one is stale, and the game is read as any is. While the board
     shown is live, one that found nothing LATE or more after its start is read again every AHEAD, for a source
     that lists a game late, but not every minute. Else FRESH while the board shown is live (a newer one than a read
-    that found it over, too: a mini-match's next game); CONFIRM after a read that found it over but isn't
+    that found it over, too: a source that called it over too soon); CONFIRM after a read that found it over but isn't
     settled; AHEAD for a game called off (cancelled, abandoned, suspended: a new date comes slowly, if at all),
     or to come more than SOON from its start, or with its day still to be fixed."""
     if read_ is not None and read_.get("settled"):

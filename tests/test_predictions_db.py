@@ -166,15 +166,18 @@ def test_a_chess_game_is_asked_before_it_starts_and_settled_from_its_recorded_re
     assert picks(db) == {"asha": (CARLSEN, 0), "ravi": (CARLSEN, 0), "meera": ("draw", 80), "kiran": (LAZAVIK, 0), "dev": (LAZAVIK, 0)}
 
 
-def test_a_tiebreak_rounds_question_is_settled_by_its_match_through_its_polls(db, redis):
-    # "Who wins?" asked of a tiebreak round's game 1, shown alone before the start (BUG-213): its games 1–4 come one at
-    # a time, each a board of its own, and none of them settles it; the match does once the round's over: Lazavik won
-    # 2½–1½ (Carlsen won game 1, Lazavik games 2 and 3, game 4 drawn), and the picks of Lazavik are right.
+def test_a_tiebreak_rounds_question_is_settled_by_its_first_game(db, redis):
+    # "Who wins?" asked of a tiebreak round's game 1, shown alone before the start (BUG-213). Each game is a game of its
+    # own (BHA-675, Bharath's call: Call it stays on game 1): Carlsen wins game 1, and the picks of Carlsen are right as
+    # soon as it's over; Lazavik's wins after it answer their own games, which ask nothing, and settle nothing again.
     chess_board(db, soon())
 
-    def look(*results: str, **when: bool) -> None:
+    def look(*results: str, **when: bool) -> tuple[str, str | None]:
         for event_id, fide in ((1, CARLSEN), (2, LAZAVIK)):
             poll(event_id, lichess_chess.parse_board(tiebreak(*results, **when), fide))
+        db.expire_all()
+        [q] = db.scalars(select(Question)).all()  # one question, game 1's
+        return q.status, q.answer
 
     look("*", to_come=True)
     [q] = db.scalars(select(Question)).all()
@@ -182,23 +185,18 @@ def test_a_tiebreak_rounds_question_is_settled_by_its_match_through_its_polls(db
     for fan, option in (("asha", CARLSEN), ("ravi", LAZAVIK), ("meera", "draw")):
         predictions.pick(db, fan, q.id, option)
     db.commit()
-    for results in (("*",), ("1-0",), ("1-0", "*"), ("1-0", "1-0"), ("1-0", "1-0", "0-1"), ("1-0", "1-0", "0-1", "½-½")):
-        look(*results)
-        db.expire_all()
-        assert (db.get(Question, q.id).status, db.get(Question, q.id).answer) == ("closed", None), results  # type: ignore[union-attr]
-    look("1-0", "1-0", "0-1", "½-½", finished=True)
-    db.expire_all()
-    assert (db.get(Question, q.id).status, db.get(Question, q.id).answer) == ("settled", LAZAVIK)  # type: ignore[union-attr]
-    assert {fan: points > 0 for fan, (_, points) in picks(db).items() if points is not None} == {"asha": False, "ravi": True, "meera": False}
-    assert db.scalars(select(Question)).all() == [q]  # one question, the match's, through all its boards
+    assert look("*") == ("closed", None)
+    assert look("1-0") == ("settled", CARLSEN)
+    told = picks(db)
+    assert {fan: points > 0 for fan, (_, points) in told.items() if points is not None} == {"asha": True, "ravi": False, "meera": False}
+    assert look("1-0", "1-0", "0-1", "½-½", finished=True) == ("settled", CARLSEN) and picks(db) == told  # game 1's board read once the match is over
 
 
-def test_a_tiebreak_rounds_question_waits_through_lichess_calling_the_round_finished_between_its_games(db, redis, monkeypatch):
-    # BUG-213 reopened (R4, R8): Lichess calls a round finished as soon as every game in it has a result, and on again
-    # as the next game's first moves come. "Who wins?" was settled on game 1 (Carlsen) when it did; game 2 listed, it
-    # switched to the match and was settled again, the other way, its fans told twice; at 1–1 between games, a draw.
-    # Through the source's own reads and the poller, it's settled once, when no game has followed game 3 for GRACE:
-    # Lazavik, 2–1.
+def test_a_tiebreak_rounds_question_is_settled_once_whatever_lichess_says_of_the_round(db, redis, monkeypatch):
+    # BUG-213 reopened (R4, R8), BHA-675: Lichess calls a round finished as soon as every game in it has a result, and on
+    # again as the next game's first moves come. Through the source's own reads and the poller, "Who wins?", game 1's, is
+    # settled once, as game 1 ends (Carlsen); game 1's board read between the games after it, and once the match is over
+    # (Lazavik's, 2–1), leaves it as it was.
     chess_board(db, soon())
     round_now: dict = {}
     monkeypatch.setattr(lichess_chess, "get_json", lambda url, ttl, text=False: round_now)
@@ -218,18 +216,19 @@ def test_a_tiebreak_rounds_question_waits_through_lichess_calling_the_round_fini
     for fan, option in (("asha", CARLSEN), ("ravi", LAZAVIK), ("meera", "draw")):
         predictions.pick(db, fan, q.id, option)
     db.commit()
+    assert look("*") == ("closed", None)
     between = {"finished": True, "ago": 0}  # every game so far decided: Lichess calls the round finished
-    for results, when in ((("*",), {}), (("1-0",), between), (("1-0", "*"), {}), (("1-0", "1-0"), between), (("1-0", "1-0", "*"), {}), (("1-0", "1-0", "0-1"), between)):
-        assert look(*results, **when) == ("closed", None), results
-    assert look("1-0", "1-0", "0-1", finished=True, ago=lichess_chess.GRACE) == ("settled", LAZAVIK)
-    assert {fan: points > 0 for fan, (_, points) in picks(db).items() if points is not None} == {"asha": False, "ravi": True, "meera": False}
+    for results, when in ((("1-0",), between), (("1-0", "*"), {}), (("1-0", "1-0"), between), (("1-0", "1-0", "*"), {}), (("1-0", "1-0", "0-1"), between),
+                          (("1-0", "1-0", "0-1"), {"finished": True, "ago": lichess_chess.GRACE})):
+        assert look(*results, **when) == ("settled", CARLSEN), results
+    assert {fan: points > 0 for fan, (_, points) in picks(db).items() if points is not None} == {"asha": True, "ravi": False, "meera": False}
 
 
 def test_a_chess_question_told_isnt_settled_again_the_other_way_by_games_after_its_board_was_over(db, redis):
-    # R8's cross-talk on BUG-213: a question settled and told stays as told. "Who wins?" settled on game 1, Carlsen's,
-    # no game 2 having come within GRACE; then one comes after all (a longer break), and Lazavik wins games 2 and 3: the
-    # match's board answers Lazavik, but its fans were told Carlsen, and aren't told the other way. A single game's result
-    # corrected at its source still settles again (test_a_chess_game_is_asked_…).
+    # R8's cross-talk on BUG-213: a question settled and told stays as told. "Who wins?" settled on game 1, Carlsen's;
+    # then Lazavik wins games 2 and 3, and game 1's board read again is a mini-match's game: what its fans were told
+    # stands (Chess.resettles). A single game's result corrected at its source still settles again
+    # (test_a_chess_game_is_asked_…).
     chess_board(db, soon())
     for event_id, fide in ((1, CARLSEN), (2, LAZAVIK)):
         poll(event_id, lichess_chess.parse_board(tiebreak("*", to_come=True), fide))

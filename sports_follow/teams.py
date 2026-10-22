@@ -444,7 +444,7 @@ def _refresh(team_id: int, adapter: Adapter, external: str, card: dict[str, Any]
         if team is None:
             return  # removed meanwhile
         label = sports.label(team.sport)
-        events = {f.source_id: structured.upsert_game(db, adapter, label, f) for f in [*finals, *ahead]}
+        events = {f.source_id: structured.upsert_game(db, adapter, label, f) for f in [*finals, *ahead, *structured.waiting(fixtures)]}
         for event in events.values():
             db.execute(insert(EventTeam).values(event_id=event.id, team_id=team.id).on_conflict_do_nothing())
         last = _final_boards(db, [events[f.source_id].id for f in finals if not f.result])

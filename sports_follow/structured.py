@@ -98,8 +98,7 @@ def board_key(key: str | None, board: str) -> str | None:
 @dataclass
 class Fixtures:
     """A game under several fixtures (a chess board is one of each player's, each polled as an event of its own), as
-    one of them knows it: the players on it here by their ids in its source, and each one's fixture of it, the same
-    all through a mini-match's games."""
+    one of them knows it: the players on it here by their ids in its source, and each one's fixture of it."""
 
     players: dict[str, int]
     events: dict[int, int]  # player id: their fixture's event
@@ -552,6 +551,12 @@ def _refresh(player_id: int) -> None:
             f.status = "final"
     finals_all = [f for f in fixtures if f.status == "final"]
     finals = finals_all[-RECENT_LIMIT:]  # scorecards read on every refresh; older ones by history.py
+    # An older one kept here with another game's board than its fixture says it is now (Fixture.board: a chess
+    # mini-match's first game, kept as its whole match before each game was its own) is read again too, a few a
+    # refresh, so its board, the player's line in it and their result become the game's own (_record_final).
+    with session() as db:
+        kept = kept_boards(db, [f"{adapter.system}:{f.source_id}" for f in finals_all if f.board])
+    again = [f for f in finals_all[:len(finals_all) - len(finals)] if f.board and kept.get(f"{adapter.system}:{f.source_id}", f.board) != f.board][:RECENT_LIMIT]
     ahead = upcoming(fixtures, now)
     # A game the schedule says is over but that is still armed or live here, the poller didn't see finish
     # (it was between sessions, or the source's live feed was failing): finish gives it a last poll.
@@ -569,9 +574,10 @@ def _refresh(player_id: int) -> None:
     # The scorecards are read side by side, in this refresh's lane: each is about a second from the server,
     # and a new follower's first card waits on them all.
     with ThreadPoolExecutor(max_workers=RECENT_LIMIT, thread_name_prefix="scorecard") as pool:
-        recent = list(pool.map(budget.carry(scorecard), finals))
+        read = list(pool.map(budget.carry(scorecard), [*finals, *again]))
+    recent, fixed = read[:len(finals)], read[len(finals):]
     stats, note = adapter.stats(ref, [(f, s) for f, s in recent if s])
-    snaps = {f.source_id: snap for f, snap in recent if snap}
+    snaps = {f.source_id: snap for f, snap in read if snap}
     finish({event_id: snaps.get(key.split(":", 1)[1]) for key, event_id in unfinished.items()})
 
     with session() as db:
@@ -582,9 +588,9 @@ def _refresh(player_id: int) -> None:
         kind = sports.BY_KEY.get(adapter.sport_of(ref))
         if kind and kind.group and sports.get(player.sport) is not kind:
             player.sport = kind.label  # an esports pro's sport is their game (bound as "Esports", or changed games)
-        events = {f.source_id: upsert_event(db, adapter, player, f) for f in [*finals_all, *ahead]}
+        events = {f.source_id: upsert_event(db, adapter, player, f) for f in [*finals_all, *ahead, *waiting(fixtures)]}
         dropped = unpicked(db, adapter, player_id, fixtures)
-        for f, snap in recent:
+        for f, snap in [*recent, *fixed]:
             if snap:
                 _record_final(db, events[f.source_id], player_id, snap, snap.lines.get(ref.athlete_id))
         over = found_over(db, [events[f.source_id].id for f in finals_all])
@@ -649,9 +655,17 @@ def unpicked(db: Session, adapter: Adapter, player_id: int, fixtures: list[Fixtu
 def upcoming(fixtures: list[Fixture], now: datetime) -> list[Fixture]:
     """The games still to come or under way, at most UPCOMING_LIMIT. A "scheduled" game long past its
     start is one the source never updated, and a postponed one long past is off (or waits for a new
-    date): both are left out. Not one its source says is next (Fixture.next_up), whose start is only its day."""
+    date): both are left out. Not one its source says is next (Fixture.next_up), whose start is only its day.
+    Nor one not shown till it starts (Fixture.unlisted: waiting)."""
     stale = now - timedelta(hours=12)
-    return [f for f in fixtures if f.status != "final" and not (f.status in ("scheduled", "postponed") and f.start_utc and f.start_utc < stale and not f.next_up)][:UPCOMING_LIMIT]
+    return [f for f in fixtures if f.status != "final" and not f.unlisted
+            and not (f.status in ("scheduled", "postponed") and f.start_utc and f.start_utc < stale and not f.next_up)][:UPCOMING_LIMIT]
+
+
+def waiting(fixtures: list[Fixture]) -> list[Fixture]:
+    """The games that may follow, not shown till they start (Fixture.unlisted): their events are made and armed with
+    the rest, so their start is seen when it comes, but they're left out of Coming up (upcoming)."""
+    return [f for f in fixtures if f.unlisted and f.status != "final"]
 
 
 def finish(unfinished: dict[int, Snapshot | None]) -> None:
@@ -792,11 +806,26 @@ def reschedule(db: Session, event: Event, start: datetime | None, status: str, s
 
 
 def _record_final(db: Session, event: Event, player_id: int, snap: Snapshot, line: Line | None) -> None:
-    """Keep one final state per finished event and the player's line in it."""
-    if not db.scalar(select(EventState.id).where(EventState.event_id == event.id, EventState.status == "final").limit(1)):
+    """Keep one final state per finished event and the player's line in it. A read of another game than the board kept
+    (Sport.board: a chess mini-match's first game, kept as its whole match before each game was its own) replaces both,
+    as the newest."""
+    kept = db.scalar(select(EventState).where(EventState.event_id == event.id, EventState.status == "final").order_by(EventState.as_of.desc()).limit(1))
+    board = sports.of_state(snap.state).board(snap.state)
+    other = kept is not None and bool(board) and sports.of_state(kept.state or {}).board(kept.state or {}) not in ("", board)
+    if kept is None or other:
         db.add(EventState(event_id=event.id, as_of=_now(), status="final", score_label=snap.score_label, clock_label=snap.clock_label, state=snap.state, source_url=snap.source_url))
-    if line and not db.scalar(select(PlayerLine.id).where(PlayerLine.event_id == event.id, PlayerLine.player_id == player_id).limit(1)):
+    if line and (other or not db.scalar(select(PlayerLine.id).where(PlayerLine.event_id == event.id, PlayerLine.player_id == player_id).limit(1))):
         db.add(PlayerLine(event_id=event.id, player_id=player_id, as_of=_now(), stats={"headline": line.headline, "stats": line.stats}))
+
+
+def kept_boards(db: Session, keys: list[str]) -> dict[str, str]:
+    """The board (Sport.board) each of these finished games' final state kept here shows, by event key, where it shows
+    one."""
+    if not keys:
+        return {}
+    latest = (select(Event.key, EventState.state).join(EventState, EventState.event_id == Event.id).where(Event.key.in_(keys), EventState.status == "final")
+              .ext(distinct_on(Event.key)).order_by(Event.key, EventState.as_of.desc()))
+    return {key: board for key, state in db.execute(latest) if (board := sports.of_state(state or {}).board(state or {}))}
 
 
 def found_over(db: Session, event_ids: Iterable[int | None]) -> dict[int, datetime]:
@@ -1092,7 +1121,7 @@ def _evaluate(rules: sports.Sport, db: Session, event_id: int, snap: Snapshot, l
     follower wants to hear about swings, and put the game's latest evaluation (engine.py) into the state,
     settled by the sport once for the board (each followed player's event of it takes the same). A game
     with its result is evaluated no more: the engine lets go of it, and its last evaluation stays as it
-    was, so nothing turns after the result (a mini-match stays live after its game is decided)."""
+    was, so nothing turns after the result (a source slow to call a decided game over)."""
     state = snap.state
     game, fen = state.get("game_id"), state.get("fen")
     if not (game and fen and engine.enabled()):

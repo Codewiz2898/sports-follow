@@ -122,7 +122,7 @@ def _playing_lately(fixtures: Iterable[Fixture], now: datetime) -> tuple[bool, F
     """Whether the source has them playing lately or soon (a game in the last RECENT_DAYS or the next
     TOP_DAYS), and their first game not yet over: started within STARTED, or starting within TOP_DAYS."""
     near = [f for f in fixtures if f.start_utc and now - timedelta(days=RECENT_DAYS) <= f.start_utc <= now + timedelta(days=TOP_DAYS)]
-    ahead = [f for f in near if f.status in ("scheduled", "live") and f.start_utc and f.start_utc >= now - STARTED]
+    ahead = [f for f in near if f.status in ("scheduled", "live") and not f.unlisted and f.start_utc and f.start_utc >= now - STARTED]
     return bool(near), min(ahead, key=lambda f: f.start_utc or now) if ahead else None
 
 

@@ -25,7 +25,7 @@ phone, notifications should feel like one sports app, not a feed of every poll:
   News is one notification per player.
 - **A game under several fixtures is one game.** A chess board is a fixture of each of its players, so an
   event of each, polled apart (BHA-378): its notification is the game's first fixture's (Item.fixtures),
-  whichever finds the moment, all through a mini-match, and each of its moments is found from both sides,
+  whichever finds the moment, and each of its moments is found from both sides,
   "Gukesh D is winning" and "Sindarov is in trouble". A fan who follows both hears it once, from the side
   the sport says tells it (voiced: the side it went toward, the winner, White for the start), where that
   side's fixture is being polled to say it; one who follows one of them hears it from their side. What's
@@ -215,7 +215,7 @@ def voiced_by(item: Item, other: Item, within: timedelta | None = PLAY_WINDOW) -
 
 def tag_of(item: Item) -> str:
     """The notification a moment lands on: its game's ("e{event}"; a game under several fixtures goes by its first
-    here, whichever of them found it, all through a mini-match's games); a player's news, theirs."""
+    here, whichever of them found it); a player's news, theirs."""
     return f"e{min(item.fixtures or {item.event_id})}" if item.event_id else f"p{item.player_id}"
 
 

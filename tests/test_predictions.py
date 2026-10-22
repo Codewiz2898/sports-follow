@@ -45,10 +45,10 @@ def test_chess_asks_who_wins_once_the_pairing_is_out():
     # One game however many fixtures show it: its board's id at Lichess, the same under each player's.
     assert CHESS.board(snap.state) == "mJnv1YBU" == CHESS.board(board(status="*", fide=LAZAVIK).state)
     assert not CHESS.closed("result", snap.status, snap.state) and CHESS.answer("result", snap.status, snap.state) is None
-    # Before the pairing's out (no board yet), and a knockout round's mini-match: nothing to ask.
+    # Before the pairing's out (no board yet), and a mini-match's games after its first: nothing to ask.
     assert CHESS.asks({"kind": "chess", "round": "Round 1"}) == []
-    match = lichess_chess.parse_board(load("lichess/round-final"), CARLSEN, NOW)
-    assert match.state["match"] and CHESS.asks(match.state) == []
+    second = lichess_chess.parse_board(load("lichess/round-final"), CARLSEN, NOW, game=2)
+    assert second.state["mini_match"]["game"] == 2 and CHESS.asks({**second.state, "result": None}) == []
 
 
 def test_chess_closes_at_the_first_move_and_settles_from_the_recorded_result():
@@ -60,17 +60,17 @@ def test_chess_closes_at_the_first_move_and_settles_from_the_recorded_result():
     assert all(board(g).status == "final" for g in (0, 1, 3))
 
 
-def test_a_tiebreak_rounds_who_wins_is_its_matchs_winner_not_its_last_games():
-    # A tiebreak round's games show one at a time, so "Who wins?" was asked of game 1 alone (BUG-213). Carlsen wins
-    # game 1, Lazavik games 2 and 3, game 4 is drawn: no answer till the round's over, then the match's winner,
-    # Lazavik 2½–1½, from either player's fixture; and its questions are game 1's board's all through.
-    played = [("1-0",), ("1-0", "1-0"), ("1-0", "1-0", "0-1"), ("1-0", "1-0", "0-1", "½-½")]
-    seen = [lichess_chess.parse_board(tiebreak(*results), CARLSEN, NOW) for results in played]
-    assert [CHESS.answer("result", s.status, s.state) for s in seen] == [None, None, None, None]
-    over = [lichess_chess.parse_board(tiebreak(*played[-1], finished=True), fide, NOW) for fide in (CARLSEN, LAZAVIK)]
-    assert [CHESS.answer("result", s.status, s.state) for s in over] == [LAZAVIK, LAZAVIK]
-    assert {CHESS.question_board(s.state) for s in (*seen, *over)} == {"mJnv1YBU"}
-    assert CHESS.question_board(board(status="*").state) == CHESS.board(board(status="*").state) == "mJnv1YBU"  # one game: its own
+def test_a_tiebreak_rounds_who_wins_is_its_first_games_winner():
+    # A tiebreak round's games show one at a time, so "Who wins?" is asked of game 1 alone. Each game is a game of its
+    # own (BHA-675, Bharath's call: Call it stays on game 1): Carlsen wins game 1, so its question is his, from either
+    # player's fixture, as soon as it's over; Lazavik's wins after it answer their own games, which ask nothing.
+    first = [lichess_chess.parse_board(tiebreak("1-0"), fide, NOW) for fide in (CARLSEN, LAZAVIK)]
+    assert [CHESS.answer("result", s.status, s.state) for s in first] == [CARLSEN, CARLSEN]
+    assert {CHESS.board(s.state) for s in first} == {"mJnv1YBU"}
+    later = lichess_chess.parse_board(tiebreak("1-0", "1-0", "0-1", "½-½", finished=True), CARLSEN, NOW)
+    assert CHESS.board(later.state) == "mJnv1YBU" and later.state["mini_match"]["label"] == "Game 1"
+    assert not CHESS.resettles("result", later.state)  # a mini-match's first game: settled before by the match, it stands
+    assert CHESS.resettles("result", board(0).state)  # a game of its own: a corrected result settles it again
 
 
 # ---------------------------------------------------------------- esports: who takes each map

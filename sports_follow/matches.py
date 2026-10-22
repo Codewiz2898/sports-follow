@@ -126,8 +126,8 @@ def offer(db: Session, fan: str | None, system: str, fixture: str, page: dict[st
 
 def _over(known: Said, now: datetime) -> bool:
     """Whether the game's over: polled to its end here, or never started a day past its start (as lapse() has
-    it), or its own read found it over and settled (match.read: a chess mini-match can go on after a read called
-    it over), or, with neither, the league's card says so."""
+    it), or its own read found it over and settled (match.read: a source's first word that a game's over may not be
+    its last), or, with neither, the league's card says so."""
     read_over = (known.game or {}).get("status") == "final" and bool((known.read or {}).get("settled"))
     gone = any(e.status in NOT_STARTED and e.start_utc is not None and e.start_utc < now - LAPSE_AFTER for e in known.events)
     return any(e.status == "final" for e in known.events) or gone or read_over or (not known.events and not known.game and (known.big or {}).get("status") == "final")

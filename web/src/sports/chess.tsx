@@ -4,7 +4,7 @@ import { BackIcon, ChevronIcon, SwapIcon } from '../components/Icons'
 import { usePwa } from '../pwa'
 import './chess.css'
 import type { Opening, replayedMoves } from './facts/chessLine'
-import { chess as facts, chessMiddle, evalDepth, evalScore, evalWords, followedSide, movesAbout, PIECES, position, standardCastling, whiteShare, type ChessColour, type ChessEval, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
+import { chess as facts, chessMiddle, evalDepth, evalScore, evalWords, followedSide, miniMatch, movesAbout, PIECES, position, standardCastling, whiteShare, type ChessColour, type ChessEval, type ChessPage, type ChessSide, type ChessState } from './facts/chess'
 import type { BoardProps, SportView } from './view'
 
 // The analysis board (Play from here), with chess.js and the engine's worker: loaded when a fan opens one.
@@ -261,7 +261,7 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
   // live's small card: chess.css).
   const middle = (
     <span className="row">
-      <span className="num clock" style={{ fontSize: compact ? 24 : 30 }}>{phrases(chessMiddle(state, clock, live.is_live))}</span>
+      <span className="num clock" style={{ fontSize: compact ? 24 : 30 }}>{phrases(chessMiddle(state, clock))}</span>
       {ranks.length === 8 && (
         <button type="button" className="btn icon chess-turn over-link" aria-label="Switch sides" title="Switch sides" onClick={() => setSide(flip ? 'white' : 'black')}>
           <SwapIcon width={18} height={18} />
@@ -269,7 +269,9 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page }: Board
       )}
     </span>
   )
-  const note = (state.result || state.match) && clock ? <span className="small muted">{clock}</span> : null
+  // Under it: who won, once it's over, and a mini-match's game's place in the match ("Game 2 · Caruana leads 1–0").
+  const said = [state.result ? clock : null, miniMatch(state)].filter(Boolean)
+  const note = said.length ? <>{said.map((line) => <span key={line} className="small muted">{line}</span>)}</> : null
 
   if (explore) {
     // The match page's: the analysis board opens over the page, its code a chunk of its own; while it comes, a

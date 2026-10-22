@@ -139,7 +139,7 @@ def ensure(db: Session, system: str, fixture: str, sport: str | None, status: st
     one closed stays closed (friends' picks may have shown). Returns the game's key and its questions."""
     now = now or _now()
     rules = _rules(sport, state)
-    game = game_key(system, fixture, rules.question_board(state))
+    game = game_key(system, fixture, rules.board(state))
     asks = {a.key: a for a in rules.asks(state)} if status in PRE_START else {}
     rows = list(db.scalars(select(Question).where(Question.game == game).order_by(Question.position, Question.id)))
     # Not one closed already: by its board, or a first one by its start time (a source late to say it began). Nor
@@ -287,7 +287,7 @@ def _rescheduled(db: Session, keys: list[str], game: dict[str, Any]) -> None:
     nothing else moves, as a schedule read sets them (structured.reschedule). A followed player's or team's refresh
     moves theirs (_refreshed): the two taking turns would move one back and forth, and remind its fans again each
     time (moved). A read that finds the game under way or over leaves its event to the poller, which a read calling
-    it over too soon (a chess mini-match's next game) would stop."""
+    it over too soon would stop."""
     from . import structured  # its polls make questions here
 
     status = game.get("status")
@@ -318,7 +318,7 @@ def settle(db: Session, rows: list[Question], rules: sports.Sport, status: str |
         if answer is None or answer == q.answer or (answer == sports.VOID and q.status == SETTLED):
             continue  # nothing new; or a board that lost an answer it gave doesn't take it back
         if q.status == SETTLED and not rules.resettles(q.ask, state):
-            continue  # no correction, as its sport reads the board (a chess mini-match grown since): what was told stands
+            continue  # no correction, as its sport reads the board (a chess mini-match's first game): what was told stands
         if answer != sports.VOID and answer not in {o["key"] for o in q.options or []}:
             continue  # an answer it didn't offer (a side changed after it was asked): it waits for the sweep
         score(db, q, answer, now)

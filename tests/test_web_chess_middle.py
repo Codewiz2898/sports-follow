@@ -1,8 +1,10 @@
-"""The big line between a chess board's players (web/src/sports/facts/chess.ts chessMiddle, shared by the web and
-Android apps), on boards as the server reads them (lichess_chess.parse_board). BUG-216: a mini-match's line was its
-score from the side of whichever player's fixture opened the page ("Match 2–6" between Carlsen and Lazavik, with
-nothing saying whose 2), and turning the board moved the names, not the score. Run with Node (22.6 or later, which
-reads TypeScript); skipped without it."""
+"""The big line between a chess board's players and the small one under it (web/src/sports/facts/chess.ts chessMiddle
+and miniMatch, shared by the web and Android apps), on boards as the server reads them (lichess_chess.parse_board).
+BUG-216: a mini-match's line was its score from the side of whichever player's fixture opened the page ("Match 2–6"
+between Carlsen and Lazavik, with nothing saying whose 2). BHA-675: a mini-match's games are each a game of their own,
+so the big line is the game's (its result, or its clock), and the match's score, by the leader's name, is the small one
+under it ("Game 2 · Caruana leads 1–0"), not a big red "Match ½–½" that read as a finished draw. Run with Node (22.6 or
+later, which reads TypeScript); skipped without it."""
 
 from __future__ import annotations
 
@@ -22,9 +24,9 @@ FIXTURES = Path(__file__).parent / "fixtures"
 CARLSEN, LAZAVIK = "1503014", "13515110"
 
 SCRIPT = """
-const { chessMiddle } = await import(%(module)s)
+const { chessMiddle, miniMatch } = await import(%(module)s)
 const boards = %(boards)s
-console.log(JSON.stringify(boards.map(([state, clock, on]) => chessMiddle(state, clock, on))))
+console.log(JSON.stringify(boards.map(([state, clock]) => [chessMiddle(state, clock), miniMatch(state)])))
 """
 
 
@@ -40,14 +42,14 @@ NODE = node()
 pytestmark = pytest.mark.skipif(NODE is None, reason="needs Node 22.6+ (TypeScript without a build)")
 
 
-def middles(boards: list[tuple[dict, str, bool]]) -> list[str]:
+def middles(boards: list[tuple[dict, str]]) -> list[list[str | None]]:
     script = SCRIPT % {"module": json.dumps(FACTS.as_uri()), "boards": json.dumps(boards)}
     done = subprocess.run([NODE or "node", "--experimental-strip-types", "--no-warnings", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
     return json.loads(done.stdout)
 
 
-def test_a_mini_matchs_line_names_who_leads_whichever_players_page_it_is():
+def test_a_mini_matchs_game_has_its_own_line_and_the_match_under_it_whichever_players_page_it_is():
     now = datetime(2026, 10, 22, tzinfo=timezone.utc)
     # A World Championship's tiebreaks: Gukesh won games 1 and 2, game 3 is on with Sindarov White.
     gukesh, sindarov = {"fideId": 1, "name": "Gukesh D"}, {"fideId": 2, "name": "Sindarov, Javokhir"}
@@ -60,14 +62,15 @@ def test_a_mini_matchs_line_names_who_leads_whichever_players_page_it_is():
     with gzip.open(FIXTURES / "lichess/round-final.json.gz", "rt") as f:
         final = json.load(f)
     boards = []
-    for data, fide in ((tiebreak, "1"), (tiebreak, "2"), (level, "1"), (level, "2"), (final, CARLSEN), (final, LAZAVIK)):
-        snap = lichess_chess.parse_board(data, fide, now)
-        boards.append((snap.state, snap.clock_label, snap.status == "live"))
+    for data, fide, game in ((tiebreak, "1", 3), (tiebreak, "2", 3), (level, "1", 3), (level, "2", 2), (final, CARLSEN, 8), (final, LAZAVIK, 8)):
+        snap = lichess_chess.parse_board(data, fide, now, game=game)
+        boards.append((snap.state, snap.clock_label))
     single = lichess_chess.parse_board({**final, "games": [final["games"][0]]}, LAZAVIK, now)
-    boards.append((single.state, single.clock_label, False))
+    boards.append((single.state, single.clock_label))
     assert middles(boards) == [
-        "Gukesh D leads\u00a02–0", "Gukesh D leads\u00a02–0",  # through either player's fixture (a long name may wrap, not the score)
-        "Match\u00a01–1", "Match\u00a01–1",
-        "Match\u00a06–2", "Match\u00a06–2",  # over: the leader's points first, the note under it ("Magnus Carlsen won the match") names him
-        "1–0",  # one game: its result, White's first
+        ["Move 1 · Black to play", "Game 3 · Gukesh D leads\u00a02–0"], ["Move 1 · Black to play", "Game 3 · Gukesh D leads\u00a02–0"],  # through either player's fixture (a long name may wrap, not the score)
+        ["Move 1 · Black to play", "Game 3 · Level\u00a01–1"],
+        ["1–0", "Game 2 · Level\u00a01–1"],  # a game over: its result, and the match as it leaves it
+        ["1–0", "Game 8 · Magnus Carlsen leads\u00a06–2"], ["1–0", "Game 8 · Magnus Carlsen leads\u00a06–2"],
+        ["1–0", None],  # one game: its result, White's first, and no match
     ]

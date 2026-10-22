@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
-import { chess as facts, chessMiddle, evalDepth, followedSide, movesAbout, position, standardCastling, type ChessColour, type ChessPage, type ChessSide, type ChessState } from '../../../web/src/sports/facts/chess'
+import { chess as facts, chessMiddle, evalDepth, followedSide, miniMatch, movesAbout, position, standardCastling, type ChessColour, type ChessPage, type ChessSide, type ChessState } from '../../../web/src/sports/facts/chess'
 import { lineOfGame, replayedMoves, samePosition, type Opening } from '../../../web/src/sports/facts/chessLine'
 import { BackIcon, ChevronIcon, SwapIcon } from '../icons'
 import { colour, font, num, t } from '../theme'
@@ -186,12 +186,12 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page, pal }: 
   }
   const top = flip ? state.white : state.black
   const bottom = flip ? state.black : state.white
-  // The match score, result or clock between the players, and the button that changes their places: not on a
+  // The result or clock between the players, and the button that changes their places: not on a
   // paper card's small board. Inside a card that opens its match page (Today's), it takes the tap itself: the
   // innermost Pressable answers a touch.
   const middle = (
     <View style={c.middle}>
-      <Text style={[num(compact ? 24 : 30), { color: pal.clock, flexShrink: 1 }]}>{chessMiddle(state, clock, live.is_live)}</Text>
+      <Text style={[num(compact ? 24 : 30), { color: pal.clock, flexShrink: 1 }]}>{chessMiddle(state, clock)}</Text>
       {ranks.length === 8 && !onPaper ? (
         <Pressable onPress={() => setSide(flip ? 'white' : 'black')} accessibilityRole="button" accessibilityLabel="Switch sides" hitSlop={4}
           style={({ pressed }) => [c.turn, { backgroundColor: pal.raised }, pressed && { opacity: 0.8 }]}>
@@ -200,7 +200,9 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page, pal }: 
       ) : null}
     </View>
   )
-  const note = (state.result || state.match) && clock ? <Text style={[t.small, { color: pal.muted }]}>{clock}</Text> : null
+  // Under it: who won, once it's over, and a mini-match's game's place in the match ("Game 2 · Caruana leads 1–0").
+  const said = [state.result ? clock : null, miniMatch(state)].filter(Boolean)
+  const note = said.length ? <>{said.map((line) => <Text key={line} style={[t.small, { color: pal.muted }]}>{line}</Text>)}</> : null
 
   if (explore) {
     // A move tapped in the list: the analysis board after it.
@@ -240,7 +242,7 @@ function ChessBoard({ state, clock, compact, live, lines, explore, page, pal }: 
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 16 }}>
       {ranks.length === 8 ? still() : null}
-      {/* The players beside or under the board, the match score, result or clock between them. */}
+      {/* The players beside or under the board, the result or clock between them. */}
       <View style={{ gap: 10, flex: 1, minWidth: onPaper || compact ? 140 : 180 }}>
         {player(top, flip ? 'white' : 'black', state, pal, onPaper)}
         {middle}

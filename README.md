@@ -175,7 +175,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   | Cricket | ESPN (ESPNcricinfo ids) | day-by-day calendar, filtered by squad | innings, player's batting/bowling | recent form from scorecards |
   | Basketball | ESPN (NBA, WNBA; NCAA if researched) | team schedule, every phase | score, quarters, box-score line | season averages |
   | Tennis | ESPN (ATP, WTA singles) | draws, current + 6 weeks back | set scores, serve | ranking, points, win–loss |
-  | Chess | Lichess broadcasts (FIDE ids) | the player's broadcast rounds | board, clocks, match score | FIDE ratings, recent score |
+  | Chess | Lichess broadcasts (FIDE ids) | the player's games in broadcast rounds, a mini-match's each its own | board, clocks, a mini-match's score | FIDE ratings, recent score |
   | Esports | PandaScore (team titles: Valorant, CS2, LoL, Dota 2…) | the team's series | series score, map by map (no in-game data); Dota 2 also inside the map, from OpenDota, and on its match page the map being played's gold line so far, towers and barracks and ten heroes, and each finished map's gold by minute, how it went, every player's items and the draft | team's series and maps won; a Dota player's kills, deaths, assists, GPM and heroes |
   | Esports, PUBG | PUBG's official API (PC tournaments) | the player's lobbies, found as each match ends (no schedule) | standings and every player's finishes, damage, assists and knocks, after each match | own and team form over 14 days |
   | Esports, battle royale | Liquipedia (BGMI and PUBG Mobile, Free Fire, Apex Legends) | the team's lobbies | standings and each game's winner, every 5 min (as editors record them) | placings, games won, finishes |
@@ -550,8 +550,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   what reaches the phone, and only key moments make a sound. Each game is one notification on the
   phone, replaced as moments come with the story so far underneath, whichever followed players are
   in it (two teammates' same play, "TenZ and zekken: Sentinels win 2–0", is one line); "Mute this game" stops it. A game under several fixtures (a chess board is one of each player's)
-  is one game too, its fixtures found by the players on it (`Sport.board_players`): one notification all
-  through a mini-match, one Android live card and one mute, and a fan who follows both players hears each
+  is one game too, its fixtures found by the players on it (`Sport.board_players`): one notification (a
+  mini-match's games one each), one Android live card and one mute, and a fan who follows both players hears each
   moment once, from the side it went toward (`Found.voice`), where that side's fixture is being polled to
   say it (else from both: twice beats never), and late from the other side should it never say it. A goal VAR rules out is corrected on that notification, for the
   fans who were sent it, and told again if the source shows it again (a goal the source credits to
@@ -597,8 +597,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   so the evaluation beside the board gets deeper the longer a player thinks; with several boards on,
   they take turns. A position scores the same whether the game is watched, and deeper readings are
   shown, never alerted on. A band changes only when the first looks of two positions in a row agree, so a board glitch
-  isn't a swing. It's settled once a board, so both players' events of it agree, and a decided game (a
-  mini-match stays live after it) isn't evaluated any more. The live state carries the latest evaluation (`eval`), and the board draws it
+  isn't a swing. It's settled once a board, so both players' events of it agree, and a decided game isn't
+  evaluated any more. The live state carries the latest evaluation (`eval`), and the board draws it
   as a bar beside the board, on the site and in the app, White's share by Lichess's winning-chances curve (`whiteShare` in
   `web/src/sports/facts/chess.ts`).
 - **A chess game's match page.** Its board is as big as the band and the screen let it be (up to 560px), the
@@ -613,6 +613,20 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   position now's), with Back to live (To the end, once it's over) under it; new moves leave it where it is. The
   Android app draws it alike, the board as wide as the screen with the moves under it
   (`mobile/src/sports/chess.tsx`).
+- **A chess mini-match is a game per game** (BHA-675). A knockout's tiebreak or playoff, an armageddon after a
+  draw, the Esports World Cup final's sets: Lichess has several games between the same two players in one round,
+  each shown only as it starts. Each is a game of its own, with its own fixture under each player (the first is
+  `<round>-<FIDE id>`, the round's own before it's paired; the next ones `<round>-<FIDE id>-<n>`), result, alerts
+  (its start, and its result with the match as it leaves it: "Caruana leads the match 1½–½"), card and page; Call
+  it asks of the first alone. Once a game ends where another may follow (`lichess_chess.may_follow`), the refresh it
+  sets off (reading a round just over from its own games, not the event's older PGN) adds the next game's fixture,
+  armed but unlisted (`Fixture.unlisted`: polled, not in Coming up), so its start is seen within a poll or two; 30
+  minutes on with none (`GRACE`), it's put off and shown nowhere. A board's big line is the game's own (its result,
+  or the clock), with the match under it ("Game 2 · Caruana leads 1–0": `miniMatch` in
+  `web/src/sports/facts/chess.ts`). A mini-match kept as one board before this (its fixture's id now game 1's) is
+  made game 1 by its player's next refresh, which reads it again where its kept board is another game's
+  (`structured.kept_boards`, `_record_final`): its board, line and result become game 1's, and the games after it
+  join the player's results, with nothing told.
 - **Play from here, on the fan's device.** A chess game's match page opens an analysis board over the page (a
   modal dialog, the board up to 720px; in the Android app a full-screen Modal, `mobile/src/sports/chessAnalysis.tsx`): the fan plays either side's legal moves from the game's position (or
   from any move in its list that replays, or the one the board was stepped back to), steps along their line (the
