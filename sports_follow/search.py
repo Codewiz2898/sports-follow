@@ -499,10 +499,14 @@ def offered_refs(db: Session, sport: str, refs: list[PlayerRef], fan: str | None
 
 def offered_players(db: Session, players: list[Player], fan: str | None) -> list[SearchResult]:
     """Players on Sports Follow as offered result rows (starters.py), in the order given: those whose page
-    is ready or being built, with what's next from their card."""
+    is ready or being built, with what's next from their card. Without research (config.RESEARCH), only those
+    a running source has (live_scores): a page with none has no scores or alerts to show, as search lists it."""
+    from .config import RESEARCH
+
     ids = [p.id for p in players]
     cards = {pid: (status, card) for pid, status, card in db.execute(select(PlayerCard.player_id, PlayerCard.status, PlayerCard.card).where(PlayerCard.player_id.in_(ids), PlayerCard.status != "failed")).all()} if ids else {}
-    return _results(db, [(p, *cards[p.id], 0.0, None) for p in players if p.id in cards], fan, "")
+    rows = _results(db, [(p, *cards[p.id], 0.0, None) for p in players if p.id in cards], fan, "")
+    return rows if RESEARCH else [r for r in rows if r.live_scores]
 
 
 def public(r: SearchResult) -> dict[str, Any]:

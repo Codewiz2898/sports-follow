@@ -24,7 +24,7 @@ from types import SimpleNamespace
 from sports_follow import adapters, bus, players, registry, sports, starters
 from sports_follow.adapters import Adapter, AdapterError, Fixture, PlayerRef, Roster, Rostered, pubg
 from sports_follow.adapters.budget import RateLimited
-from sports_follow.models import Athlete, AthleteOverride, AthleteUnmatch, Follow, Moment, Photo, Player, PlayerCard, PlayerIdentity, Starter
+from sports_follow.models import Account, Athlete, AthleteOverride, AthleteUnmatch, Follow, Moment, Photo, Player, PlayerCard, PlayerIdentity, Starter
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -36,7 +36,7 @@ LONG_AGO = datetime.now(timezone.utc) - timedelta(days=30)
 def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE athlete, athlete_override, athlete_unmatch, player, follow, moment, starter, photo RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE athlete, athlete_override, athlete_unmatch, player, follow, moment, starter, photo, account RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -394,30 +394,70 @@ def test_an_esports_starter_is_checked_in_the_source_their_row_came_from(db, cap
 NOW = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
 
 
+def signed_in(db, n: int, blocked: int = 0) -> list[str]:
+    """n fans with accounts (the last `blocked` of them blocked by an admin): their fan ids."""
+    ids = [f"acct-{i}" for i in range(n)]
+    db.add_all([Account(email=f"{f}@example.com", fan_id=f, blocked_at=LONG_AGO if i >= n - blocked else None) for i, f in enumerate(ids)])
+    db.flush()
+    return ids
+
+
 def test_starters_mix_whos_playing_the_most_followed_and_the_best_known(db, pools):
     system = chess_starters(db)
+    fans = signed_in(db, 4)
 
-    def page(pid: int, name: str, fans: int) -> None:
+    def page(pid: int, name: str, followers: int) -> None:
         db.add(Player(id=pid, slug=f"p{pid}", name=name, sport="Chess"))
         db.flush()
         db.add_all([PlayerCard(player_id=pid, status="ready", card={}), PlayerIdentity(player_id=pid, system=system, external_id=f"x{pid}", confidence=1.0),
-                    *[Follow(fan_id=f"f{i}", player_id=pid, alert_rules={}) for i in range(fans)]])
+                    *[Follow(fan_id=f, player_id=pid, alert_rules={}) for f in fans[:followers]]])
 
-    page(1, "Live Larry", 3)
-    page(2, "Soon Sam", 2)
-    page(3, "Idle Ida", 1)
+    page(1, "Live Larry", 4)
+    page(2, "Soon Sam", 3)
+    page(3, "Idle Ida", 2)
     db.commit()
     # The worker's live cards: one on now, one in two hours. The morning's top pool: one tomorrow, one within the hour.
     pools.cards = {1: {"live": {"is_live": True, "headline": "Round 3"}}, 2: {"upcoming": [{"title": "Round 4", "start_utc": (NOW + timedelta(hours=2)).isoformat()}]}}
     pools.top["chess"] = [{"qid": "Q10", "start_utc": (NOW + timedelta(hours=30)).isoformat(), "title": "Tata Steel", "competition": "Tata Steel"},
                           {"qid": "Q11", "start_utc": (NOW + timedelta(hours=1)).isoformat(), "title": "Norway Chess", "competition": "Norway Chess"}]
-    [offer] = starters.offer(db, "f0", NOW)
+    [offer] = starters.offer(db, fans[0], NOW)
     # The pools take turns (playing, followed, top); someone in two keeps their first place, and playing now
     # outranks being followed: Soon Sam came in as followed and plays in two hours.
     assert [(r["name"], r["why"]) for r in offer["players"]] == [
         ("Live Larry", "live"), ("Gukesh D", "top"), ("R Praggnanandhaa", "soon"), ("Soon Sam", "soon"), ("Idle Ida", "followed")]
-    assert [r["following"] for r in offer["players"]] == [True, False, False, True, True]  # f0 follows every page
+    assert [r["following"] for r in offer["players"]] == [True, False, False, True, True]  # the first fan follows every page
     assert offer["players"][1]["next"]["title"] == "Tata Steel" and offer["players"][3]["next"]["title"] == "Round 4"
+
+
+def test_only_signed_in_fans_make_a_player_a_starter_and_only_a_page_a_live_source_has_is_offered(db, pools, monkeypatch):
+    """Four cookies following a fourth-tier player put him first for every new fan, ahead of Messi and Salah,
+    and a page no live source has (a namesake the agent wrote, or Messi before his source id was known) was
+    offered though it shows no scores or alerts (BUG-085)."""
+    from sports_follow import config
+
+    system = registry.live_system("football")
+    if system is None:
+        pytest.skip("no live football source in this build")
+    fans = signed_in(db, 4, blocked=1)
+
+    def page(pid: int, name: str, followers: list[str], live: bool = True) -> None:
+        db.add(Player(id=pid, slug=f"p{pid}", name=name, sport="Football"))
+        db.flush()
+        ident = PlayerIdentity(player_id=pid, system=system, external_id=f"x{pid}", confidence=1.0) if live else PlayerIdentity(player_id=pid, system="wikidata", external_id=f"Q{pid}", confidence=1.0)
+        db.add_all([PlayerCard(player_id=pid, status="ready", card={}), ident, *[Follow(fan_id=f, player_id=pid, alert_rules={}) for f in followers]])
+
+    page(29, "Tenzin Samdup", ["cookie-1", "cookie-2", "cookie-3", "cookie-4"])  # four anonymous cookies, one script
+    page(28, "Lionel Messi", fans[:3], live=False)  # followed, but no live source has his page
+    page(27, "Mohamed Salah", fans[:2])
+    page(26, "Mohammed Sallah", [fans[0], fans[3]])  # one account, and one an admin blocked
+    page(25, "Someone Real", [fans[1], "cookie-1"])  # one account: not yet enough
+    db.commit()
+    [offer] = starters.offer(db, "someone new", NOW)
+    assert offer["key"] == "football"
+    assert [(r["name"], r["why"], r["live_scores"]) for r in offer["players"]] == [("Mohamed Salah", "followed", True)]
+    # With research on, a page with no live source is one the agent keeps up, and may be offered.
+    monkeypatch.setattr(config, "RESEARCH", True)
+    assert [r["name"] for r in starters.offer(db, "someone new", NOW)[0]["players"]] == ["Lionel Messi", "Mohamed Salah"]
 
 
 def test_with_nobody_followed_or_pinned_the_best_known_are_offered(db, pools):
