@@ -530,40 +530,33 @@ def watches(db: Session, events: set[int]) -> dict[str, dict[int, tuple[str, set
     return out
 
 
-def sided(about: list[str] | tuple[str, ...] | frozenset[str] | None) -> set[str]:
-    """The teams a game's own moment is told from the side of (Moment.about's tags)."""
-    return {a for a in about or () if str(a).startswith(TAG)}
-
-
 def for_fan(fan: str) -> ColumnElement[bool]:
     """A game's own moment this fan may see: one told from no side, or from the side of a team they follow and
-    haven't set to off (its result: side_finals). The activity list's condition, for the games they follow by
-    themselves as for their teams' games, as alerts.level_of has it for a push."""
-    mine = aliased(TeamFollow)  # apart from a query's own team follows (activity's), which it'd correlate to
-    level = func.coalesce(mine.alert_rules["level"].astext, moments.DEFAULT_LEVEL)
-    theirs = select(mine.id).where(mine.fan_id == fan, level != "off", Moment.about.contains(func.jsonb_build_array(func.concat(TAG, mine.team_id))))
-    return or_(~Moment.about.cast(Text).like(f'%"{TAG}%'), theirs.exists())
+    haven't set to off (its result: side_finals); and a game's result once, from the side of their team where it's
+    told so (the first team's, for a fan who follows both), in place of the game's own. The activity list's
+    condition, for the games they follow by themselves as for their teams' games, as alerts.level_of and plan have
+    it for a push: in the query, so a page is full and the next one starts where it ends, wherever that is."""
+    def theirs(m: Any) -> Select[int]:
+        mine = aliased(TeamFollow)  # apart from a query's own team follows (activity's), which it'd correlate to
+        level = func.coalesce(mine.alert_rules["level"].astext, moments.DEFAULT_LEVEL)
+        return select(mine.id).where(mine.fan_id == fan, level != "off", m.about.contains(func.jsonb_build_array(func.concat(TAG, mine.team_id))))
 
-
-def listed(rows: list[Any]) -> list[Any]:
-    """The activity list's rows (each a moment first, newest first) with a game's result said once: from the side
-    of the fan's team where it's told so (the first team's, for a fan who follows both), in place of the game's own."""
-    sided_first: dict[int | None, int] = {}
-    for row in sorted(rows, key=lambda r: r[0].id):
-        m = row[0]
-        if m.player_id is None and m.kind == "final" and sided(m.about):
-            sided_first.setdefault(m.event_id, m.id)
-    return [r for r in rows if not (r[0].player_id is None and r[0].kind == "final" and r[0].event_id in sided_first and sided_first[r[0].event_id] != r[0].id)]
+    sided_here = Moment.about.cast(Text).like(f'%"{TAG}%')
+    side = aliased(Moment)  # the game's result from one of their teams' sides, told before this one or in its place
+    told = select(side.id).where(side.event_id == Moment.event_id, side.player_id.is_(None), side.kind == "final", or_(~sided_here, side.id < Moment.id), theirs(side).exists())
+    return and_(or_(~sided_here, theirs(Moment).exists()), or_(Moment.kind != "final", ~told.exists()))
 
 
 def activity(fan: str, taken: Any, days: int) -> Select[Moment, str, bool, str]:
     """The game's own moments of the games of the teams this fan follows, since they followed each and within
     `days`, newest first, for the activity list (GET /api/me/activity): (moment, the game's title, whether they
-    muted it, its sport). Not a team's they set to off; one from a side's, only from their team's. `taken` is the
-    moment a correction takes back (an alias of Moment), as the list's other queries join it."""
+    muted it, its sport), each once though they follow both sides. Not a team's they set to off; one from a side's,
+    only from their team's. `taken` is the moment a correction takes back (an alias of Moment), as the list's other
+    queries join it."""
     level = func.coalesce(TeamFollow.alert_rules["level"].astext, moments.DEFAULT_LEVEL)
     return (
         select(Moment, Event.title, NotificationMute.event_id.is_not(None), Event.sport)
+        .ext(distinct_on(Moment.id))
         .join(EventTeam, EventTeam.event_id == Moment.event_id)
         .join(TeamFollow, and_(TeamFollow.team_id == EventTeam.team_id, TeamFollow.fan_id == fan))
         .join(Event, Event.id == Moment.event_id)

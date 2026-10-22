@@ -710,3 +710,68 @@ def test_a_basketball_teams_and_games_fans_hear_every_double_double(db, redis, s
         assert sorted(sent(db, fan)) == sorted([*said, told])
         assert sorted(i["title"] for i in server.activity(None, 50, fan, db)["items"]) == sorted([*said, told])
 
+
+def pages(db, fan: str, limit: int) -> list[list[str]]:
+    """The fan's activity list, page after page, each page's titles."""
+    out, before = [], None
+    while True:
+        page = server.activity(before, limit, fan, db)
+        out.append([i["title"] for i in page["items"]])
+        if page["next"] is None:
+            return out
+        before = page["next"]
+
+
+def ended(db, event: Event, goals: int, sides: list[Team], at: int) -> None:
+    """A finished game's own moments as its polls stored them: its goals, the last few found in the poll that saw it
+    end, between its own result (first) and the result from each followed side (last)."""
+    def goal(n: int) -> sports.Found:
+        return sports.Found("goal", "key", f"{event.title}: goal {n}", "", f"goal@{n}", 85, ("7",))
+
+    notify.record_game(db, event.id, [goal(n) for n in range(1, at)], "/match/pitch/1")
+    notify.record_game(db, event.id, [sports.Found("final", "key", f"{event.title}: Arsenal won", "", "", 80, ("*",)), *(goal(n) for n in range(at, goals + 1)),
+                                      *(sports.Found("final", "key", f"{event.title}: {t.name}'s result", "", f"team{t.id}", 80, ("*", teams.tag(t.id))) for t in sides)],
+                       "/match/pitch/1")
+
+
+@needs_db
+def test_a_teams_fan_pages_through_every_one_of_its_games_moments(db, redis, source):
+    teams.import_teams(source.fake, NOW)
+    arsenal, chelsea = team(db, ARS), team(db, CHE)
+    games = [Event(key=f"pitch:{n}", sport="Football", title=f"Game {n}", status="final") for n in range(1, 5)]
+    db.add_all(games)
+    db.flush()
+    db.add_all([EventTeam(event_id=e.id, team_id=t.id) for e in games for t in (arsenal, chelsea)])
+    db.add(TeamFollow(fan_id="gooner", team_id=arsenal.id, alert_rules={}))
+    db.commit()
+    for e in games:
+        ended(db, e, 10, [arsenal, chelsea], at=8)
+    db.commit()
+    # Four games of ten goals and a result from Arsenal's side, 44 in all, newest first, ten a page: the game's own
+    # result and Chelsea's aren't theirs, wherever the page breaks.
+    want = [t for e in reversed(games) for t in (f"{e.title}: Arsenal's result", *(f"{e.title}: goal {n}" for n in range(10, 0, -1)))]
+    got = pages(db, "gooner", 10)
+    assert [len(p) for p in got] == [10, 10, 10, 10, 4]
+    assert [t for p in got for t in p] == want
+
+
+@needs_db
+def test_a_fan_of_both_sides_gets_full_pages_of_their_game(db, redis, source):
+    teams.import_teams(source.fake, NOW)
+    arsenal, chelsea = team(db, ARS), team(db, CHE)
+    event = Event(key="pitch:1", sport="Football", title="Arsenal v Chelsea", status="final")
+    db.add(event)
+    db.flush()
+    db.add_all([EventTeam(event_id=event.id, team_id=arsenal.id), EventTeam(event_id=event.id, team_id=chelsea.id)])
+    db.add_all([TeamFollow(fan_id="sides", team_id=t.id, alert_rules={}) for t in (arsenal, chelsea)])
+    # And one who follows Arsenal and the game itself.
+    db.add_all([TeamFollow(fan_id="both", team_id=arsenal.id, alert_rules={}), MatchFollow(fan_id="both", event_id=event.id, alert_rules={}, keys=[event.key])])
+    db.commit()
+    ended(db, event, 20, [arsenal, chelsea], at=19)
+    db.commit()
+    # Twenty goals and the result once, from the first of their sides', ten a page.
+    want = ["Arsenal v Chelsea: Arsenal's result", *(f"Arsenal v Chelsea: goal {n}" for n in range(20, 0, -1))]
+    for fan in ("sides", "both"):
+        got = pages(db, fan, 10)
+        assert [len(p) for p in got] == [10, 10, 1]
+        assert [t for p in got for t in p] == want
