@@ -208,7 +208,8 @@ def standings(x: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def parse_fixtures(rows: list[dict[str, Any]], wiki: str, now: datetime | None = None) -> list[Fixture]:
-    """Lobbies (match2 records) -> fixtures, with the final standings for finished ones."""
+    """Lobbies (match2 records) -> fixtures, with the final standings for finished ones. One without a time is next
+    (Fixture.next_up) on its day."""
     now = now or datetime.now(timezone.utc)
     out = []
     for x in rows:
@@ -216,6 +217,7 @@ def parse_fixtures(rows: list[dict[str, Any]], wiki: str, now: datetime | None =
         if not x.get("match2id") or not teams:
             continue
         status = _status(x, now)
+        start = _time(x.get("date"))
         result = None
         if status == "final":
             table = standings(x)
@@ -224,7 +226,7 @@ def parse_fixtures(rows: list[dict[str, Any]], wiki: str, now: datetime | None =
             source_id=f"{SHORT.get(wiki, wiki)}:{x['match2id']}",  # event keys hold 64 characters
             title=_title(x),
             competition=team_name(x.get("tournament") or x.get("parent")),
-            start_utc=_time(x.get("date")),
+            start_utc=start,
             venue=None,
             status=status,
             team_ids=[team_id(o["name"]) for o in teams],
@@ -232,6 +234,9 @@ def parse_fixtures(rows: list[dict[str, Any]], wiki: str, now: datetime | None =
             locator={"wiki": wiki, "match": x["match2id"]},
             detail=_detail(x),
             result=result,
+            # A lobby without a time, on its day with nothing in yet: it's next, whenever it starts. Armed from the
+            # read that finds it (a fan following at noon), not only by the clock from midnight, so its start is told.
+            next_up=status == "scheduled" and not _exact(x) and start is not None and start <= now,
         ))
     return out
 

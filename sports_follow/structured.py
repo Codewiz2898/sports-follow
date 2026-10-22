@@ -643,9 +643,9 @@ def unpicked(db: Session, adapter: Adapter, player_id: int, fixtures: list[Fixtu
 def upcoming(fixtures: list[Fixture], now: datetime) -> list[Fixture]:
     """The games still to come or under way, at most UPCOMING_LIMIT. A "scheduled" game long past its
     start is one the source never updated, and a postponed one long past is off (or waits for a new
-    date): both are left out."""
+    date): both are left out. Not one its source says is next (Fixture.next_up), whose start is only its day."""
     stale = now - timedelta(hours=12)
-    return [f for f in fixtures if f.status != "final" and not (f.status in ("scheduled", "postponed") and f.start_utc and f.start_utc < stale)][:UPCOMING_LIMIT]
+    return [f for f in fixtures if f.status != "final" and not (f.status in ("scheduled", "postponed") and f.start_utc and f.start_utc < stale and not f.next_up)][:UPCOMING_LIMIT]
 
 
 def finish(unfinished: dict[int, Snapshot | None]) -> None:
@@ -774,12 +774,13 @@ def reschedule(db: Session, event: Event, start: datetime | None, status: str, s
     itself for one no followed player's or team's refresh brings up to date (predictions.made). Put back (or brought
     forward), its questions start then (predictions.moved); an armed one put back hours is disarmed (next_status).
     One with no start time of its own is armed while its source says it's next (Fixture.next_up: a chess round set
-    to start once the one before is over), so its start is seen when it comes, and disarmed once it doesn't."""
+    to start once the one before is over, a lobby with only its day), so its start is seen when it comes, and one with
+    no start at all is disarmed once it isn't."""
     if event.start_utc is not None and start is not None and start != event.start_utc:
         predictions.moved(db, event, start)
     event.start_utc = start
     later = start is not None and start > _now() + arm_before(event.sport or sport) + timedelta(hours=1)
-    if start is None and status == "scheduled":
+    if status == "scheduled" and (next_up or start is None):
         status, later = ("armed", False) if next_up else (status, True)
     event.status = next_status(event.status, status, moved_later=later)
 
