@@ -196,9 +196,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   changing, otherwise once a minute.
 - **One stream per fan.** The app holds one SSE connection for all of a fan's players; a player's page
   listens on it too, and opens that player's own stream only for someone the fan doesn't follow. An API process
-  holds so many streams at once (`server.STREAMS_PER_PROCESS`): so many a fan, a client address, and an IPv4 /24's or
-  an IPv6 /48's addresses together; a player's stream with neither a fan's cookie nor a session takes one of the few
-  kept for those (`STREAMS_WITHOUT_FAN`), so the rest stay fans'.
+  holds so many streams at once (`server.STREAMS_PER_PROCESS`): so many a fan's own (`STREAMS_PER_FAN`; a player's
+  stream isn't counted there), a client address, and an IPv6 /48's /64s together (an IPv4 /24 is only logged at that
+  ceiling: a phone network's NAT puts many fans behind a few); a player's stream with neither a fan's cookie nor a
+  session takes one of the few kept for those (`STREAMS_WITHOUT_FAN`), so the rest stay fans'.
 - **A page for every game.** Every game on Today opens its match page, `/match/<source>/<game id>`
   (`sports_follow/match.py`, `GET /api/match/...`), live, over or to come: the fan's live boards, results
   and games to come, the big results and big games coming up, and Live now's games; so does a game on a
