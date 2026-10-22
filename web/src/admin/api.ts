@@ -66,7 +66,7 @@ export interface LinearStatus {
 }
 
 export interface Overview { accounts: number; active_week: number; blocked: number; anonymous: number; devices: number }
-/** Predictions with friends (sports_follow/predictions.py numbers): leagues, invites, and fans who came back to call another game day. */
+/** Predictions with friends (sports_follow/predictions.py numbers): leagues, invites, and fans who came back to call on another day (an IST day: BUG-193). */
 export interface PredictionNumbers { leagues: number; leagues_3: number; invites_shared: number; invites_opened: number; pickers: number; picks: number; game_day_returns: number }
 export interface AccountRow {
   id: number

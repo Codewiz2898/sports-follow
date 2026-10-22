@@ -64,7 +64,7 @@ export function UsersTab() {
           <Stat value={calls.invites_shared} label="Invites shared" />
           <Stat value={calls.invites_opened} label="Invites opened" />
           <Stat value={calls.pickers} label="Fans who called a game" />
-          <Stat value={calls.game_day_returns} label="Came back on another game day" />
+          <Stat value={calls.game_day_returns} label="Came back on another day" />
         </div>
       )}
       <Note>Fans without an account are anonymous (a cookie on their device) and aren't listed. Blocking an account signs it out everywhere and stops it signing in; its device can still use the app anonymously.</Note>
