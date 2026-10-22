@@ -895,3 +895,22 @@ def test_a_team_page_the_minutes_reads_had_no_room_for_asks_again_at_the_next_lo
     counts.clear()  # the next minute
     assert asyncio.run(server.team_page(chelsea, "fan"))["refreshing"] is True and queued == [arsenal, chelsea]
     assert asyncio.run(server.team_page(arsenal, "fan"))["refreshing"] is False  # asked a moment ago
+
+
+@needs_db
+def test_search_lists_every_team_with_the_name_typed_and_a_sport_typed_with_it_narrows_it(db, redis, source):
+    # BUG-233: search listed six teams at most, so Team Liquid in eight titles couldn't all be reached; and a sport's
+    # name typed with the team's ("india cricket") found none.
+    games = ["valorant", "cs2", "lol", "dota2", "r6siege", "overwatch", "rocketleague", "mlbb"]
+    db.add_all([Team(name="Team Liquid", sport=game, system="pitch", external_id=f"tl-{game}", search_text=teams.search_text("Team Liquid", "TL")) for game in games])
+    db.add_all([Team(name="Team Liquid Academy", sport="valorant", system="pitch", external_id="tla", search_text=teams.search_text("Team Liquid Academy", "TLA")),
+                Team(name="India", sport="cricket", system="pitch", external_id="ind", search_text=teams.search_text("India", "IND")),
+                Team(name="India", sport="football", system="pitch", external_id="ind-fc", search_text=teams.search_text("India", "IND"))])
+    db.commit()
+    found = teams.find(db, "team liquid")
+    assert sorted(t["sport"] for t in found if t["name"] == "Team Liquid") == sorted(games)  # every title's
+    assert len(teams.find(db, "team liq")) == teams.LIMIT  # none typed whole: the first few, as before
+    assert [(t["name"], t["sport"]) for t in teams.find(db, "liquid valorant")] == [("Team Liquid", "valorant"), ("Team Liquid Academy", "valorant")]
+    assert [(t["name"], t["sport"]) for t in teams.find(db, "india cricket")] == [("India", "cricket")]
+    assert [(t["name"], t["sport"]) for t in teams.find(db, "cricket india")] == [("India", "cricket")]
+    assert teams.find(db, "india cricket", sport="football") == [] and teams.find(db, "cricket") == []

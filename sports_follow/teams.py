@@ -54,6 +54,7 @@ SQUAD_MOST = 40  # players a squad lists: a club's first team with its youngster
 UPCOMING = 5  # games to come a team's page shows
 RECENT = 5  # and results
 LIMIT = 6  # teams a search answers with
+NAMESAKES = 20  # and teams with exactly the name typed, however many past LIMIT: Team Liquid in each of its titles
 REFRESH_LOCK = 20 * 60  # as a player's refresh (structured.REFRESH_LOCK)
 LOOK_AGAIN = 10 * 60  # a page nobody follows the team of asks its source again at most this often
 SOON = timedelta(hours=48)  # a team with a game on or this soon has its games read as often as a followed player's
@@ -227,11 +228,24 @@ def restore(db: Session, system: str, team_id: str) -> bool:
 
 def find(db: Session, query: str, sport: str | None = None, fan: str | None = None, limit: int = LIMIT) -> list[dict[str, Any]]:
     """Teams whose name or code has a word starting with every typed word (search as you type, beside players):
-    a whole name typed first, then the fan's own, then the most followed, the biggest, the shortest name. Only
-    teams of sports running whose source runs. `sport` narrows to one sport, or a group's (esports)."""
+    a whole name typed first (every team with it, up to NAMESAKES), then the fan's own, then the most followed, the
+    biggest, the shortest name, `limit` in all unless more have the whole name. Only teams of sports running whose
+    source runs. `sport` narrows to one sport, or a group's (esports); so does a sport's name typed with a team's
+    ("india cricket", "liquid valorant"), when the words together find no team."""
     typed = registry.words(query)
     if not typed or len(" ".join(typed)) < 2:
         return []
+    found = _find(db, typed, sport, fan, limit)
+    for i, word in enumerate(typed if not found else []):
+        named, rest = sports.get(word), typed[:i] + typed[i + 1:]
+        if named is not None and rest and (not sport or named.key in sports.within(sport)):
+            found = _find(db, rest, named.key, fan, limit)
+            if found:
+                break
+    return found
+
+
+def _find(db: Session, typed: list[str], sport: str | None, fan: str | None, limit: int) -> list[dict[str, Any]]:
     keys = [s.key for s in sports.ENABLED if s.follow_teams]
     if sport:
         keys = [k for k in keys if k in sports.within(sport)]
@@ -242,9 +256,10 @@ def find(db: Session, query: str, sport: str | None = None, fan: str | None = No
     exact = or_(Team.search_text.like(f" {whole} |%"), Team.search_text.like(f"%| {whole} |%"))
     mine = Team.id.in_(select(TeamFollow.team_id).where(TeamFollow.fan_id == fan)) if fan else None
     order = [exact.desc(), *([mine.desc()] if mine is not None else []), func.coalesce(fans.c.n, 0).desc(), Team.tier.desc(), func.length(Team.name), Team.id]
-    rows = db.execute(select(Team, func.coalesce(fans.c.n, 0)).outerjoin(fans, fans.c.team_id == Team.id)
+    rows = db.execute(select(Team, func.coalesce(fans.c.n, 0), exact).outerjoin(fans, fans.c.team_id == Team.id)
                       .where(*[Team.search_text.like(f"% {w}%") for w in typed], Team.sport.in_(keys), Team.system.in_(list(ADAPTERS)))
-                      .order_by(*order).limit(limit)).all()
+                      .order_by(*order).limit(max(limit, NAMESAKES))).all()
+    rows = [(t, n) for i, (t, n, named) in enumerate(rows) if i < limit or named]
     theirs = _following(db, fan, [t.id for t, _ in rows])
     return [summary(t, n, t.id in theirs) for t, n in rows]
 
