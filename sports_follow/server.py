@@ -1884,9 +1884,14 @@ def admin_clips(status: str | None = None, db: Session = Depends(get_db)) -> dic
 
 @app.post("/api/admin/clips/{slug}", dependencies=AdminOnly)
 def admin_clip(slug: str, body: dict[str, Any] = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Hide a clip ({"hidden": true}), or put a hidden one back ({"hidden": false}; its reports start again)."""
+    """Hide a clip ({"hidden": true}: off the app, and its files off their public address), or put a hidden one back
+    ({"hidden": false}; its reports start again)."""
     hidden = _switch(body, "hidden")
-    clip = clips.set_hidden(db, slug, hidden)
+    try:
+        clip = clips.set_hidden(db, slug, hidden)
+    except clips.Refused as refused:
+        db.rollback()
+        raise HTTPException(refused.status, refused.message) from None
     if clip is None:
         raise HTTPException(404, "No live or hidden clip by that id.")
     db.commit()
@@ -1917,11 +1922,20 @@ def admin_new_clip_key(body: dict[str, Any] = Body(...), db: Session = Depends(g
 
 
 @app.delete("/api/admin/clip-keys/{key_id}", status_code=204, dependencies=AdminOnly)
-def admin_revoke_clip_key(key_id: int, db: Session = Depends(get_db)) -> None:
+def admin_revoke_clip_key(key_id: RowId, hide: bool = False, db: Session = Depends(get_db)) -> None:
+    """Revoke a publishing key: it stops at once. ?hide=true hides its live clips too (a key that leaked)."""
     if not clips.revoke(db, key_id):
         raise HTTPException(404, "No such key, or revoked already.")
     db.commit()
     admin_log.info("admin: publishing key %s revoked", key_id)
+    if hide:
+        try:
+            hidden = clips.hide_from(db, key_id)
+        except clips.Refused as refused:
+            db.commit()  # the clips hidden before the bucket failed stay hidden
+            raise HTTPException(refused.status, f"Revoked, but not all its clips are hidden: {refused.message}") from None
+        db.commit()
+        admin_log.info("admin: publishing key %s's %d clips hidden", key_id, hidden)
 
 
 def _switch(body: dict, field: str) -> bool:
@@ -2025,13 +2039,16 @@ def admin_set_source(system: str, body: dict = Body(...)) -> dict[str, Any]:
 @app.put("/api/admin/budgets/{name}", dependencies=AdminOnly)
 def admin_set_budget(name: str, body: dict = Body(...)) -> dict[str, Any]:
     """What a source may spend (admin.checked_limits): its allowance a minute, an hour or a day, the
-    margin never spent, the reserve kept for live games and fans, the fans' share, the pause after a 429."""
+    margin never spent, the reserve kept for live games and fans, the fans' share, the pause after a 429. One
+    changed since the view this change was made from ("based_on") is a 409: the panel shows the newer one."""
     try:
         admin.set_limits(name, body)
     except LookupError:
         raise HTTPException(404, "There's no such allowance.") from None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
+    except admin.Stale:
+        raise HTTPException(409, "These limits were changed since you opened them (in another tab?): here they are now. Change them again if you still want to.") from None
     admin_log.info("admin panel: allowance %s set to %s", name, json.dumps(body, sort_keys=True))
     return admin.sources_view()
 
@@ -2075,6 +2092,20 @@ def admin_feed_layout(body: dict = Body(...)) -> dict[str, Any]:
     return {"layout": admin.layout_view()}
 
 
+@app.put("/api/admin/feed/channels", dependencies=AdminOnly)
+def admin_channel_trust(body: dict = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """How far the Feed trusts a video channel or a publisher's news feed ({"channel": its id or the feed's address,
+    "trust": 1 | 0.7 | 0.4 | 0 | null}); 0 hides its items. In the body, as an address doesn't fit in a path; and before
+    /api/admin/feed/{row_id}, which would take "channels" for a row."""
+    channel = body.get("channel")
+    try:
+        admin.set_channel_trust(channel, body.get("trust"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    admin_log.info("admin panel: feed channel %s trust %s", channel, body.get("trust"))
+    return {"channels": admin.channels_view(db)}
+
+
 @app.put("/api/admin/feed/{row_id}", dependencies=AdminOnly)
 def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[str, Any]:
     """An admin's word on a candidate ({"review": "approved" | "hidden" | "pinned" | null}), over the judge's."""
@@ -2088,16 +2119,6 @@ def admin_review_candidate(row_id: RowId, body: dict = Body(...)) -> dict[str, A
     admin_log.info("admin panel: feed candidate %s %s", row_id, said or "review taken back")
     return found
 
-
-@app.put("/api/admin/feed/channels/{channel}", dependencies=AdminOnly)
-def admin_channel_trust(channel: str, body: dict = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
-    """How far the Feed trusts a video channel ({"trust": 1 | 0.7 | 0.4 | 0 | null}); 0 hides its videos."""
-    try:
-        admin.set_channel_trust(channel, body.get("trust"))
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from None
-    admin_log.info("admin panel: feed channel %s trust %s", channel, body.get("trust"))
-    return {"channels": admin.channels_view(db)}
 
 
 @app.get("/api/admin/users", dependencies=AdminOnly)

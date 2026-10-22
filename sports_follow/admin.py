@@ -41,7 +41,7 @@ from sqlalchemy.orm import Session
 from . import accounts, controls, feed, feedstats, rank, sports
 from .adapters import ADAPTERS, ALL, KNOWN, NEWS, VIDEOS, budget, news, videos
 from .config import APP_NAME, FEED_LAYOUT, SOURCES
-from .models import Account, AccountSession, FeedCandidate, Follow, Player, PushSubscription
+from .models import Account, AccountSession, Event, FeedCandidate, Follow, LeagueMember, MatchFollow, Pick, Player, PushSubscription, Team, TeamFollow
 
 log = logging.getLogger("sports_follow.admin")
 
@@ -59,6 +59,7 @@ CODE_DRIFT = 1  # steps either side a code still works, for a phone whose clock 
 PAGE = 50  # accounts a page, and feed candidates
 FEED_SHOWS = ("all", "unjudged", "served", "held", "reviewed")  # which candidates the Feed tab lists
 TRUST_STEPS = (1.0, 0.7, 0.4, 0.0)  # what the Feed tab offers for a channel: high, some, low, hidden
+CHANNEL = re.compile(r"[A-Za-z0-9_-]{1,64}|https?://\S{1,500}")  # a video channel's id, or a news feed's address
 
 
 # ---------------------------------------------------------------- the password
@@ -168,7 +169,7 @@ def sports_view() -> list[dict[str, Any]]:
     """Every sport: whether the server's settings let it run, whether the panel has it on, its sources, whether
     fans are offered it (sports.offered: a sport on with no source running and research off isn't, and the
     panel says to turn it off), and the group it's one of (each esports game is a sport, under "Esports")."""
-    off = controls.current().sports_off
+    off = controls.load().sports_off  # what's stored: this process's copy may be a read behind another's change
     running = sports.ENABLED
     rows = []
     for s in sports.ALL:
@@ -210,7 +211,7 @@ def _limits(b: budget.Budget) -> dict[str, Any]:
 def sources_view(now: float | None = None) -> dict[str, Any]:
     """Every source this app knows, in order of preference, with why it does or doesn't run; and every
     allowance they spend: as declared, as the panel has it, where it stands now and what was spent."""
-    off = controls.current().sources_off
+    off = controls.load().sources_off  # what's stored: this process's copy may be a read behind another's change
     can = {a.system for a in ALL}
     running = ADAPTERS.now()
     sport_on = {s.key for s in sports.ENABLED}
@@ -285,6 +286,7 @@ def sources_view(now: float | None = None) -> dict[str, Any]:
             "declared": _limits(b),
             "limits": _limits(live),
             "changed": live != b,
+            "saved": controls.current().budgets.get(b.name),  # what the panel saved, as stored: a change from this view says it (set_limits)
             "standing": budget.standing(b, now),
             "usage": [{"lane": lane, **{k: v for k, v in used[(b.name, lane)].items() if k not in ("source", "lane")}} for lane in budget.LANES if (b.name, lane) in used],
         })
@@ -338,14 +340,19 @@ def checked_limits(name: str, body: dict[str, Any]) -> dict[str, Any]:
     return {"windows": out, "reserve": reserve, "fan": fan, "pause": pause}
 
 
+Stale = controls.Stale  # a change made from a view of the panel's that's no longer what's stored
+
+
 def set_limits(name: str, body: dict[str, Any] | None) -> None:
-    """Change what a source may spend (checked_limits), or go back to what it declares (None)."""
+    """Change what a source may spend (checked_limits), or go back to what it declares (None). A change made from
+    the panel's view says what that showed saved ("based_on": sources_view's "saved", null for nothing): Stale if
+    it was changed since (another tab, or a view from another process's older copy)."""
     if body is None:
         if name not in {b.name for b in budget.known()}:
             raise LookupError(name)
         controls.set_budget(name, None)
         return
-    controls.set_budget(name, checked_limits(name, body))
+    controls.set_budget(name, checked_limits(name, body), body["based_on"] if "based_on" in body else controls.ANYTHING)
 
 
 # ---------------------------------------------------------------- accounts
@@ -400,13 +407,22 @@ def _row(a: Account, follows: int, devices: int, seen: datetime | None) -> dict[
 
 
 def account(db: Session, account_id: int) -> dict[str, Any] | None:
-    """One account: who they follow, their signed-in devices and the devices with alerts on."""
+    """One account: the players, teams and games they follow, how many calls they've made and leagues they're in,
+    their signed-in devices and the devices with alerts on."""
     a = db.get(Account, account_id)
     if a is None:
         return None
     players = db.execute(
         select(Player.id, Player.name, Player.sport, Follow.created_at).join(Follow, Follow.player_id == Player.id)
         .where(Follow.fan_id == a.fan_id).order_by(Follow.created_at.desc())
+    ).all()
+    teams = db.execute(
+        select(Team.id, Team.name, Team.sport, TeamFollow.created_at).join(TeamFollow, TeamFollow.team_id == Team.id)
+        .where(TeamFollow.fan_id == a.fan_id).order_by(TeamFollow.created_at.desc())
+    ).all()
+    games = db.execute(
+        select(Event.id, Event.title, Event.sport, Event.start_utc, MatchFollow.created_at, MatchFollow.until).join(MatchFollow, MatchFollow.event_id == Event.id)
+        .where(MatchFollow.fan_id == a.fan_id).order_by(MatchFollow.created_at.desc())
     ).all()
     sessions = db.execute(
         select(AccountSession.created_at, AccountSession.last_seen_at, AccountSession.expires_at)
@@ -420,6 +436,12 @@ def account(db: Session, account_id: int) -> dict[str, Any] | None:
     return {
         **_row(a, len(players), len(devices), seen),
         "following": [{"id": p, "name": n, "sport": sports.label(s), "since": _iso(at)} for p, n, s, at in players],
+        "teams": [{"id": t, "name": n, "sport": sports.label(s), "since": _iso(at)} for t, n, s, at in teams],
+        # A game's follow lapses when it's over (matches.py), and goes a month after (retention.py).
+        "games": [{"id": e, "title": n, "sport": sports.label(s), "start": _iso(start), "since": _iso(at), "over": until is not None}
+                  for e, n, s, start, at, until in games],
+        "picks": db.scalar(select(func.count()).select_from(Pick).where(Pick.fan_id == a.fan_id)) or 0,
+        "leagues": db.scalar(select(func.count()).select_from(LeagueMember).where(LeagueMember.fan_id == a.fan_id)) or 0,
         "sessions": [{"created_at": _iso(c), "last_seen_at": _iso(ls), "expires_at": _iso(e)} for c, ls, e in sessions],
         "alert_devices": [{"created_at": _iso(c), "last_ok_at": _iso(ok), "timezone": tz, "failures": f} for c, ok, tz, f in devices],
     }
@@ -537,11 +559,12 @@ def review_candidate(row_id: int, said: str | None) -> dict[str, Any] | None:
         return _candidate_row(*found) if found else None
 
 
-def set_channel_trust(channel: str, trust: Any) -> None:
-    """How far the Feed trusts a channel: one of TRUST_STEPS, or None for its default; then rank its videos
-    again. ValueError for a channel id or trust that isn't one."""
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", channel):
-        raise ValueError("That isn't a channel id.")
+def set_channel_trust(channel: Any, trust: Any) -> None:
+    """How far the Feed trusts a channel (a video channel, by its id, or a publisher's news feed, by its address, as
+    channels_view lists them): one of TRUST_STEPS, or None for its default; then rank its items again. ValueError for
+    a channel or trust that isn't one."""
+    if not isinstance(channel, str) or not CHANNEL.fullmatch(channel):
+        raise ValueError("That isn't a channel's id or a news feed's address.")
     if trust is not None and (isinstance(trust, bool) or not isinstance(trust, (int, float)) or float(trust) not in TRUST_STEPS):
         raise ValueError(f"Trust is one of {', '.join(str(t) for t in TRUST_STEPS)}, or null for the default.")
     controls.set_channel_trust(channel, None if trust is None else float(trust))

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
 import importlib
 import logging
 from concurrent.futures import ThreadPoolExecutor
@@ -181,6 +182,64 @@ def test_the_admin_panels_allowance_keeps_the_zone_its_source_declares():
     pacific = budget.Budget("pacific", windows=(budget.Window(86400, 10, margin=1, zone=PACIFIC),))
     controls.set_budget("pacific", {"windows": [{"seconds": 86400, "requests": 50, "margin": 2}, {"seconds": 3600, "requests": 5}]})
     assert budget.effective(pacific).windows == (budget.Window(86400, 50, 2, PACIFIC), budget.Window(3600, 5, 0, None))
+
+
+def test_a_zoned_sources_spend_today_is_counted_from_its_own_midnight(monkeypatch):
+    """BUG-263: the usage table's "Today" was UTC's day while YouTube's allowance is counted from midnight Pacific, so
+    for most of an Indian day what it said was sent today and "used X of 10,000" disagreed."""
+    clock = [_at(2026, 10, 20, 23, 0)]  # 16:00 PDT
+    monkeypatch.setattr(budget, "time", SimpleNamespace(time=lambda: clock[0]))
+    pacific = budget.Budget("pacific", windows=(budget.Window(86400, 100, zone=PACIFIC),))
+    budget.take(pacific, lane_name="feed")
+    clock[0] = _at(2026, 10, 21, 1, 0)  # a new UTC day, the same Pacific one
+    budget.take(pacific, lane_name="feed")
+    [row] = budget.usage([pacific])
+    assert row["sent_d"] == 2 == budget.standing(pacific)["windows"][0]["used"]
+    clock[0] = _at(2026, 10, 21, 7, 30)  # 00:30 PDT: its new day
+    assert budget.usage([pacific]) == []
+
+
+def test_a_minutes_allowance_holds_across_the_edge_of_a_minute(monkeypatch):
+    """BUG-134: windows were counted from the epoch, so a minute's allowance spent just before a minute began was
+    there again just after: PUBG let 18 requests through in two seconds (it allows 10 a minute), and the 429 that
+    brings pauses its live lobbies. A minute is counted over the last minute, wherever it started; spread out, a
+    source still gets about its allowance a minute."""
+    edge = _at(2026, 10, 22, 10, 0)
+    clock = [edge - 1]
+    monkeypatch.setattr(budget, "time", SimpleNamespace(time=lambda: clock[0]))
+
+    def burst() -> int:
+        sent = 0
+        with contextlib.suppress(budget.RateLimited):
+            while True:
+                budget.take(pubg.BUDGET, lane_name="live")
+                sent += 1
+        return sent
+
+    allowance = pubg.PER_MINUTE - pubg.MARGIN
+    assert burst() == allowance
+    clock[0] = edge + 1
+    assert burst() == 0  # two seconds on, across the minute's edge
+    clock[0] = edge + 45
+    assert burst() == 0 and not budget.spare(pubg.BUDGET, lane_name="live")
+    assert budget.standing(pubg.BUDGET)["windows"] == [{"bucket": "", "window": "minute", "used": allowance, "allowance": pubg.PER_MINUTE}]
+    clock[0] = edge + 61  # a minute after the burst
+    assert burst() == allowance
+    # One every 7.5 s (8 a minute) for five minutes: none refused.
+    for i in range(40):
+        clock[0] = edge + 300 + i * 7.5
+        budget.take(pubg.BUDGET, lane_name="live")
+
+
+def test_the_fans_share_is_counted_in_the_window_not_shown_as_a_bucket_of_its_own():
+    """BUG-135: the fans' share is counted under keys of its own, which the panel and the metrics took for a bucket
+    (":fan"). A fan's request counts in the window it's sent in; a real bucket (Sportmonks' entities) is still shown."""
+    for scarce in (liquipedia.BUDGET, pubg.BUDGET):
+        budget.take(scarce, lane_name="fan")
+        budget.take(scarce, lane_name="live")
+        assert [(w["bucket"], w["used"]) for w in budget.standing(scarce)["windows"]] == [("", 2)], scarce.name
+    budget.take(sportmonks.BUDGET, "Fixture", lane_name="fan")
+    assert [(w["bucket"], w["used"]) for w in budget.standing(sportmonks.BUDGET)["windows"]] == [("", 0), ("Fixture", 1)]
 
 
 def test_every_client_asks_the_budget_before_it_sends():

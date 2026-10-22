@@ -118,6 +118,19 @@ def test_moments_outlive_the_activity_list(monkeypatch):
     assert now - seen["moment"] >= timedelta(days=server.ACTIVITY_DAYS)
 
 
+def test_a_clips_bucket_that_fails_is_logged_and_the_rest_of_the_prune_stands(monkeypatch, caplog):
+    """BUG-260: clearing clips' unfinished uploads asks the bucket; one that fails is tried again on the next run."""
+    @contextmanager
+    def fake_db(count):
+        yield None
+
+    monkeypatch.setattr(retention.clipstore, "STORE", object())
+    monkeypatch.setattr(retention, "_db", fake_db)
+    monkeypatch.setattr(retention.clips, "sweep", lambda db, now, count: (_ for _ in ()).throw(OSError("the bucket is down")))
+    assert retention._clip_uploads(datetime(2026, 10, 22, tzinfo=timezone.utc), False) == 0
+    assert "the clips bucket failed" in caplog.text
+
+
 def _indexed(column: Column) -> bool:
     """Whether an index, or the primary key, of the column's table starts with it."""
     firsts = [list(i.columns)[0] for i in column.table.indexes] + [list(column.table.primary_key.columns)[0]]
@@ -186,7 +199,7 @@ def test_a_finished_games_timeline_is_cut_to_what_is_read(monkeypatch):
     before = view()
     would = retention.run(count=True)
     done = retention.run()
-    assert would == done == {"event_state": 9 + 9, "player_line": 9 + 9, "moment": 2, "notification": 1, "sidelined": 0, "match_follow": 1, "card_keys": 0}
+    assert would == done == {"event_state": 9 + 9, "player_line": 9 + 9, "moment": 2, "notification": 1, "sidelined": 0, "match_follow": 1, "card_keys": 0, "clip_uploads": 0}
     assert view() == before
     with engine.connect() as c:
         kept = c.execute(text("SELECT event_id, score_label FROM event_state ORDER BY event_id, id")).all()
@@ -194,6 +207,6 @@ def test_a_finished_games_timeline_is_cut_to_what_is_read(monkeypatch):
         assert c.scalar(text("SELECT count(*) FROM event_state WHERE event_id IN (2, 3)")) == 20  # recent, and live: untouched
         assert sorted(c.scalars(text("SELECT key FROM moment"))) == ["new-2", "old-live"]
         assert sorted(c.scalars(text("SELECT event_id FROM match_follow"))) == [2, 3]
-    assert retention.run() == {"event_state": 0, "player_line": 0, "moment": 0, "notification": 0, "sidelined": 0, "match_follow": 0, "card_keys": 0}
+    assert retention.run() == {"event_state": 0, "player_line": 0, "moment": 0, "notification": 0, "sidelined": 0, "match_follow": 0, "card_keys": 0, "clip_uploads": 0}
     with engine.begin() as c:
         c.execute(text(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE"))

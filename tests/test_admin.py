@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 import base64
+import threading
 import time
 
 from sports_follow import admin, adapters, controls, metrics, server, sports
@@ -84,6 +85,46 @@ def test_a_tests_patch_of_the_running_sources_holds_until_the_panel_changes_them
 
 def test_rows_of_the_wrong_shape_turn_nothing_off():
     assert controls.parse({"sports_off": "football", "sources_off": [1, None], "budget:x": [1]}) == controls.Controls()
+
+
+def test_a_processs_other_threads_wait_for_its_first_read_of_the_controls():
+    """BUG-263: a process's first read marked its copy read before it was, so while that read was under way (a worker
+    starting against a slow database) its other threads saw nothing turned off, and could poll a sport the panel had
+    off. They wait for it."""
+    entered, release = threading.Event(), threading.Event()
+
+    class Slow(controls.MemoryStore):
+        def read(self):
+            entered.set()
+            release.wait(5)
+            return {controls.SPORTS_OFF: ["chess"]}
+
+    controls.reset(Slow())
+    seen: list[frozenset[str]] = []
+    first = threading.Thread(target=controls.current)
+    other = threading.Thread(target=lambda: seen.append(controls.current().sports_off))
+    try:
+        first.start()
+        assert entered.wait(5)
+        other.start()
+        other.join(0.3)
+        assert other.is_alive()  # waiting, not answered "nothing off"
+    finally:
+        release.set()
+        first.join(5)
+        other.join(5)
+    assert seen == [frozenset({"chess"})]
+
+    class Down(controls.MemoryStore):
+        reads = 0
+
+        def read(self):
+            Down.reads += 1
+            raise OSError("the database is down")
+
+    controls.reset(Down())
+    assert controls.current() == controls.current() == controls.Controls()  # nothing off, said in the log
+    assert Down.reads == 1  # and not asked again on every call: the reading thread tries again
 
 
 # ---------------------------------------------------------------- what a source may spend
@@ -374,6 +415,30 @@ def test_the_panel_turns_a_sport_off_for_the_app_too(api, password):
     assert sport not in sports.ENABLED
 
 
+def test_an_allowance_changed_since_the_panel_showed_it_isnt_written_over(api, password, scarce):
+    """BUG-262: the form sent the whole allowance as it was drafted, so a second tab, or one whose view came from another
+    API process's copy (up to controls.REFRESH behind), silently undid a change just saved. The form says what the view
+    showed saved; an allowance saved since is refused (409), and the panel's views read what's stored."""
+    cookie = admin_cookie(sign_in(api))
+    seen = api.call("GET", "/api/admin/sources", headers=cookie).json()["budgets"][0]  # two tabs' view
+    assert seen["saved"] is None
+    first = {"windows": [{"seconds": 3600, "requests": 30, "margin": 1}], "reserve": 3, "fan": 2, "pause": 60}
+    other = {**first, "windows": [{"seconds": 3600, "requests": 20, "margin": 1}], "reserve": 5}
+    saved = api.call("PUT", f"/api/admin/budgets/{scarce.name}", headers=cookie, body={**first, "based_on": seen["saved"]})
+    assert saved.status_code == 200 and saved.json()["budgets"][0]["saved"] == first
+    stale = api.call("PUT", f"/api/admin/budgets/{scarce.name}", headers=cookie, body={**other, "based_on": seen["saved"]})
+    assert stale.status_code == 409 and "changed since" in stale.json()["detail"]
+    assert budget.effective(scarce).windows[0].requests == 30  # the first tab's stands
+    again = api.call("PUT", f"/api/admin/budgets/{scarce.name}", headers=cookie, body={**other, "based_on": saved.json()["budgets"][0]["saved"]})
+    assert again.status_code == 200 and budget.effective(scarce).reserve == 5
+    # Changed by another process (its row written, this process's copy not read again yet): the panel shows it.
+    controls.STORE.rows[f"{controls.BUDGET}{scarce.name}"] = first
+    controls.STORE.rows[controls.SPORTS_OFF] = [sports.ALL[0].key]
+    assert api.call("GET", "/api/admin/sources", headers=cookie).json()["budgets"][0]["saved"] == first
+    assert next(s for s in api.call("GET", "/api/admin/sports", headers=cookie).json()["sports"] if s["key"] == sports.ALL[0].key)["on"] is False
+    controls.turn_sport(sports.ALL[0].key, True)
+
+
 def test_the_panel_sets_and_resets_an_allowance(api, password, scarce):
     cookie = admin_cookie(sign_in(api))
     good = {"windows": [{"seconds": 60, "requests": 30, "margin": 2}], "reserve": 10, "fan": 5, "pause": 120}
@@ -409,3 +474,24 @@ def test_a_blocked_accounts_code_signs_nobody_in(api, monkeypatch):
     assert asked.status_code == 200 and asked.json() == api.call("POST", "/api/auth/email/start", address="81.2.69.142", body={"email": "fan@example.com"}).json()
     refused = api.call("POST", "/api/auth/email/verify", address="81.2.69.142", body={"email": "blocked@example.com", "code": sent["blocked@example.com"]})
     assert refused.status_code == 403 and refused.json()["detail"] == server.BLOCKED
+
+
+# ---------------------------------------------------------------- the Feed tab
+
+
+def test_a_news_feeds_trust_is_set_from_the_panel_as_a_video_channels_is(api, password, monkeypatch):
+    """BUG-123: the Feed tab lists the publishers' news feeds beside the video channels, each with a Trust control,
+    but a feed is named by its address, which no route took in its path and the check of a channel id refused. The
+    channel goes in the body: an id or a feed's address."""
+    monkeypatch.setattr(admin.rank, "rescore", lambda **kw: {})
+    monkeypatch.setattr(admin, "channels_view", lambda db: [{"channel_id": c, "trust": t} for c, t in controls.current().channel_trust.items()])
+    cookie = admin_cookie(sign_in(api))
+    feed = next(f for s in sports.ENABLED for f in s.news_feeds)
+    video = next(c for s in sports.ENABLED for c in s.video_channels)
+    for channel, trust in ((feed, 0.4), (video, 0)):
+        answer = api.call("PUT", "/api/admin/feed/channels", headers=cookie, body={"channel": channel, "trust": trust})
+        assert answer.status_code == 200, answer.text
+    assert controls.current().channel_trust == {feed: 0.4, video: 0.0}
+    for bad in ("not a channel!", "https://example.com/a feed", "https://" + "x" * 600, "", 7, None):
+        assert api.call("PUT", "/api/admin/feed/channels", headers=cookie, body={"channel": bad, "trust": 1}).status_code == 400
+    assert api.call("PUT", "/api/admin/feed/channels", headers=cookie, body={"channel": feed, "trust": None}).json()["channels"] == [{"channel_id": video, "trust": 0.0}]

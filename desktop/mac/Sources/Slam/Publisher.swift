@@ -28,6 +28,7 @@ struct Publisher {
         let source: String
         let seconds: Double
         let bytes: Int
+        let poster_bytes: Int?  // its upload link is signed for this size, as the video's is for `bytes`
         let width: Int
         let height: Int
     }
@@ -53,8 +54,10 @@ struct Publisher {
         defer { try? FileManager.default.removeItem(at: poster) }
 
         progress("Asking Slam for upload links…", 0.15)
+        let posterBytes = (try? FileManager.default.attributesOfItem(atPath: poster.path)[.size] as? Int) ?? 0
         let body = Request(match: match, moment: moment.map(Publisher.momentBody), caption: caption,
                            source: source.rawValue, seconds: small.seconds, bytes: small.bytes,
+                           poster_bytes: posterBytes > 0 ? posterBytes : nil,
                            width: Int(small.size.width), height: Int(small.size.height))
         let up: Upload = try await call("POST", "/api/clips", body: try JSONEncoder().encode(body))
 

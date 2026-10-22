@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { admin, type AdminSport } from './api'
 import { Note, breakable, useFailure } from './shared'
+
+const REFRESH_MS = 30_000  // read again while the tab shows, as the Sources tab is: another tab or admin may switch one
 
 /** Every sport, in its colour while it runs, with a switch: off, it isn't searched, imported or polled, and isn't offered in the
  * app. Each esports game is a sport with a switch of its own, under "Esports". */
@@ -10,7 +12,12 @@ export function SportsTab() {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => { admin.sports().then((r) => setSports(r.sports), (e) => setError(failed(e))) }, [failed])
+  const load = useCallback(() => admin.sports().then((r) => setSports(r.sports), (e) => setError(failed(e))), [failed])
+  useEffect(() => {
+    void load()
+    const timer = setInterval(() => { if (document.visibilityState === 'visible') void load() }, REFRESH_MS)
+    return () => clearInterval(timer)
+  }, [load])
 
   const turn = async (sport: AdminSport) => {
     setBusy(sport.key)

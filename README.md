@@ -270,13 +270,15 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   competition's (`?competition=`), a player's (`?player=`) or everyone's, newest first (`?before=` pages back).
   Only a publishing key's holder publishes, for now admins (`python -m sports_follow.clips key "<name>"`, or
   `POST /api/admin/clip-keys`; the key is shown once). The app sends `Authorization: Bearer slam_pk_…` to
-  `POST /api/clips` with the match page's address, the moment it read, length, size and source, and gets two
-  upload URLs signed for 15 minutes. It puts the video and its poster frame straight into the bucket (Cloudflare R2;
+  `POST /api/clips` with the match page's address, the moment it read, length, size, its poster's size and source,
+  and gets two upload URLs signed for 15 minutes, each for its file's type and size. It puts the video and its poster frame straight into the bucket (Cloudflare R2;
   the server never carries a video), then `POST /api/clips/<id>/done`: both files are checked and the clip goes
   live, served from the CDN domain. A clip recorded from a browser window (a broadcast, its organiser's production)
   is refused while Slam itself posts clips (`clips.RIGHTS`, BHA-369). Fans report a clip once each
   (`POST /api/clips/<id>/report`), which flags it for the admin panel (`/api/admin/clips?status=reported`) to hide
-  or take down; reports never hide a clip by themselves, as an anonymous fan is just a request without a cookie. Without the bucket's settings, publishing says it isn't set up and the feeds are empty.
+  or take down; reports never hide a clip by themselves, as an anonymous fan is just a request without a cookie.
+  A hidden clip's files are moved off their public address, to a name made with the bucket's secret (the CDN domain
+  serves every name), and back when it's put back; one taken down has them deleted, wherever they are. Without the bucket's settings, publishing says it isn't set up and the feeds are empty.
 - **Predictions with friends** (`sports_follow/predictions.py`, BHA-317): before a game, or a map of a series, a
   fan calls it in a tap; the app settles it from the board its poller reads anyway, and friends compare in small
   leagues joined by an invite link. Bragging rights only: no entry fee, no prize of any value (India's online gaming
@@ -647,7 +649,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`Provider.budgets`), so the usage report finds it through `adapters.KNOWN`. Before each request it
   sends it takes one; it reports what the source says is left and its 429s, which pause every process.
   The research agent's `fetch_url` spends the same budget when it reads a source's API (`Budget.urls`).
-  Counts are kept in Redis, so the API and the worker spend from one allowance. Every request is in a
+  Counts are kept in Redis, so the API and the worker spend from one allowance. A minute's allowance (a
+  rate limit) is counted over the last minute, whenever it began, so a burst across a minute's edge can't
+  send twice it; an hour's or a day's from its start, as the source resets it. Every request is in a
   lane, set once where the work starts: `live` (polls), `fan` (every API request: search, previews,
   following), `refresh`, `history`, `import` and `feed` (the curator's). The background lanes stop at the reserve; a fan loop
   stops at its share and is logged, so live games keep the rest of the reserve. `python -m sports_follow.usage` shows each
@@ -908,8 +912,10 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   no restart: it turns sports (each esports game on its own) and sources off and on, sets what each source may spend (its allowance a
   minute, an hour or a day, as a new plan gives; the margin; the reserve for live games and fans; the
   fans' share; the pause after a 429) next to what was spent, by lane, and looks after accounts (find
-  one by address, see who they follow and their devices, sign them out everywhere, block them from
-  signing in, delete them). What it changes is rows in `control` (`sports_follow/controls.py`), which
+  one by address, see the players, teams and games they follow, their calls and devices, sign them out everywhere,
+  block them from signing in, delete them) and clips (those fans reported first: hide one, put it back or take it
+  down; revoke a publishing key, hiding its clips too if it leaked). A change of a source's allowance made from a
+  view that's since gone stale (another tab saved one) is refused, and the panel shows the newer one. What it changes is rows in `control` (`sports_follow/controls.py`), which
   every process reads again every 10 seconds; `sports.ENABLED`, `adapters.ADAPTERS` and the source
   budgets follow them. A sport turned off while its games are on is safe: the next tick puts them off
   (`structured.put_off`: no longer polled, nor LIVE on cards or phones), and once it's on again its

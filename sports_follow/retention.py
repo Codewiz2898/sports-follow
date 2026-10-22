@@ -16,6 +16,9 @@
   Wire's facts about it with it. One still listed stays, over or not: the next read compares with it.
 - **Hot copies of cards** (card:<id> in Redis) of players nobody follows get a day to live:
   server.read_card rebuilds a missing one from Postgres.
+- **Clips' unfinished uploads** (clips.sweep): a clip whose upload never reached done, once its upload links have
+  run out, has its files deleted and is kept as failed; and a file a link still running put back after its clip
+  failed or was taken down goes too. Only with a clips bucket.
 
 Rows go BATCH at a time, each batch in a transaction of its own, so no lock is held for long. One run
 at a time (a lock).
@@ -37,7 +40,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from . import bus, logs, sidelined
+from . import bus, clips, clipstore, logs, sidelined
 from .config import KEEP_MOMENTS_DAYS, KEEP_TIMELINE_DAYS
 from .db import session
 from .models import Follow
@@ -155,6 +158,19 @@ def _cards(count: bool) -> int:
     return done
 
 
+def _clip_uploads(now: datetime, count: bool) -> int:
+    """Clear clips' unfinished uploads (clips.sweep); or count them. A bucket that fails is logged, and tried again
+    on the next run."""
+    if clipstore.STORE is None:
+        return 0
+    try:
+        with _db(count) as db:
+            return clips.sweep(db, now, count)
+    except Exception:
+        log.warning("retention: the clips bucket failed while clearing unfinished uploads; tried again next run", exc_info=True)
+        return 0
+
+
 def run(count: bool = False, now: datetime | None = None) -> dict[str, int]:
     """Prune everything once, or (count) only count what would go."""
     now = now or datetime.now(timezone.utc)
@@ -168,6 +184,7 @@ def run(count: bool = False, now: datetime | None = None) -> dict[str, int]:
         "sidelined": _old("sidelined", OLD_SIDELINED, now - timedelta(days=sidelined.KEEP_DAYS), count),
         "match_follow": _old("match_follow", OLD_MATCH_FOLLOWS, now - timedelta(days=ACTIVITY_DAYS), count),
         "card_keys": _cards(count),
+        "clip_uploads": _clip_uploads(now, count),
     }
 
 
@@ -181,7 +198,7 @@ def prune() -> dict[str, int] | None:
         done = run()
     finally:
         bus.release(LOCK, token)
-    log.info("retention: %(event_state)d game states, %(player_line)d player lines, %(moment)d moments, %(notification)d notifications, %(sidelined)d spells out and %(match_follow)d lapsed match follows removed; %(card_keys)d idle cards set to expire", done)
+    log.info("retention: %(event_state)d game states, %(player_line)d player lines, %(moment)d moments, %(notification)d notifications, %(sidelined)d spells out and %(match_follow)d lapsed match follows removed; %(card_keys)d idle cards set to expire; %(clip_uploads)d clips' unfinished uploads cleared", done)
     return done
 
 
