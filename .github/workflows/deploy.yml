@@ -6,7 +6,8 @@
 # Every commit on main that CI passes starts a run, which waits at the production environment until you
 # approve it (its required reviewer; GitHub's phone app shows the Approve button). Only the newest one
 # waits: a newer commit's run cancels the older waiting ones, and a run for a commit that a newer one has
-# replaced stops before it waits. With no required reviewer on production, nothing deploys by itself.
+# replaced stops before it waits, or, approved anyway, before it deploys. With no required reviewer on
+# production, nothing deploys by itself.
 # By hand too (Actions → Deploy → Run workflow), which also waits for approval. Never on pull_request: a
 # fork's PR must not reach the deploy key.
 name: Deploy
@@ -40,7 +41,7 @@ jobs:
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 8     # the cancel step watches for up to two minutes
     permissions:
       contents: read
       actions: write        # to cancel the waiting deploys this one replaces
@@ -76,35 +77,21 @@ jobs:
             fi
           fi
           echo "go=$go" >>"$GITHUB_OUTPUT"
-      # A run waiting for approval holds the production concurrency group, so the next one would queue
-      # behind it and approving would deploy the older commit. Runs you started by hand are left alone, and
-      # a deploy that's running isn't stopped: each run is read again just before its cancel and skipped
-      # unless it's still waiting. GitHub has no "cancel only if waiting", so an approval in that second
-      # could still be cancelled; a failed cancel (rejected meanwhile) only warns.
-      - name: Cancel the waiting deploys this one replaces
-        id: replaced
-        if: steps.newest.outputs.go == 'true'
-        run: |
-          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/deploy.yml/runs?status=waiting&per_page=100" \
-            --jq ".workflow_runs[] | select(.event == \"workflow_run\" and .id != $GITHUB_RUN_ID) | \"\(.id) \(.display_title)\"")
-          count=0
-          while read -r id title; do
-            [ -n "$id" ] || continue
-            status=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" --jq .status || true)
-            if [ "$status" != waiting ]; then echo "\"$title\" (run $id) is $status now: left alone"; continue; fi
-            echo "Cancelling \"$title\" (run $id), which was waiting for approval"
-            if gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/cancel" --silent; then
-              count=$((count + 1))
-            else
-              echo "::warning::Couldn't cancel run $id; it may have been approved or rejected just now"
-            fi
-          done <<<"$runs"
-          echo "count=$count" >>"$GITHUB_OUTPUT"
+      # For the scripts below.
       - uses: actions/checkout@v7
-        if: steps.newest.outputs.go == 'true' && env.ACTION == 'deploy'
+        if: steps.newest.outputs.go == 'true'
         with:
           fetch-depth: 0       # the commits since the live one
           filter: blob:none    # their messages, not their files
+      # A run waiting for approval holds the production concurrency group, so the next one would queue
+      # behind it and approving would deploy the older commit. Runs you started by hand are left alone, and
+      # a deploy that's running isn't stopped; each run is read on its own, not from GitHub's list of waiting
+      # runs, which missed some (BHA-663), and one still on its way to the approval gate is watched for two
+      # minutes (deploy/cancel-replaced.sh). A failed cancel only warns.
+      - name: Cancel the waiting deploys this one replaces
+        id: replaced
+        if: steps.newest.outputs.go == 'true'
+        run: deploy/cancel-replaced.sh "$SHA"
       # On this run's page, above the Review deployments button. The first deploy to wait since the last
       # one went out is also sent now; one that replaces a waiting deploy comes with the morning's summary
       # (deploy-summary.yml). A summary that fails never stops the deploy.
@@ -141,6 +128,23 @@ jobs:
       ACTION: ${{ inputs.action || 'deploy' }}
       SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
+      # Approving deploys the newest commit CI passed, and everything before it. A run approved after a newer
+      # commit passed CI (the newer run's cancel missed it) would put the older commit live and hold the newer
+      # run queued behind it; stopping here lets that run, which brings this one's changes too, wait for
+      # approval next.
+      - name: Still the newest commit CI passed
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # As the newest job reads it. A read that fails doesn't stop the deploy.
+          newest=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" \
+            --jq '.workflow_runs[0].head_sha // empty') || newest=""
+          if [ -n "$newest" ] && [ "$newest" != "$SHA" ] &&
+              [ "$(gh api "repos/$GITHUB_REPOSITORY/compare/$SHA...$newest" --jq .status)" = ahead ]; then
+            echo "::error::${newest:0:7} passed CI after ${SHA:0:7}, so this run deployed nothing. ${newest:0:7}'s own Deploy run brings both: approve that one, which waits next (or run Deploy by hand)."
+            exit 1
+          fi
       - name: CI passed for this commit
         if: env.ACTION == 'deploy'
         env:

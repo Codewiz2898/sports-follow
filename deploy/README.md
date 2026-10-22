@@ -37,6 +37,7 @@ YouTube, plus OpenDota by choice (BHA-208). Never ESPN, which is for development
 | `restore-backup.sh` | On the server: puts a dump in place of the database (loaded beside it, then swapped in) and runs the migrations; keeps the database it replaced until you drop it. |
 | `deploy.sh` | On the server: deploys a commit of main, rolls back, or shows what's live. GitHub Actions runs it. |
 | `../.github/workflows/deploy.yml` | After CI passes on main: waits for your approval, then runs `deploy.sh` over SSH, then a health check from outside that the site runs that commit. |
+| `cancel-replaced.sh` | In each Deploy run: cancels the older ones waiting for approval that it replaces, and watches for one still on its way there. |
 | `deploy-summary.sh`, `../.github/workflows/deploy-summary.yml` | What a waiting deploy brings, on its run's page; sent when it starts waiting and every morning while it does. |
 | `server-check.sh`, `systemd/` | The server checks, whose findings go to Grafana Cloud as metrics; the weekly Docker clean-up. |
 | `alloy/` | Grafana Alloy's config: the server's metrics and the checks' findings, to Grafana Cloud every minute. |
@@ -439,9 +440,13 @@ exact commit; the run then checks from outside that `/api/health` names it. Leav
 the site.
 
 - **Only the newest waits.** When the next commit passes CI, its run cancels the one waiting, so approving
-  deploys everything merged so far. A run for a commit a newer one has replaced (an old CI run re-run)
-  stops before it waits. A deploy that's running is never stopped: the next run waits behind it, then for
-  approval.
+  deploys everything merged so far. It reads each older run itself, not just GitHub's list of waiting
+  runs, which on 22 Oct twice listed none while one had waited 17 and 49 minutes (BHA-663), and keeps
+  watching one still on its way to the approval step for two minutes (`cancel-replaced.sh`). A run for a
+  commit a newer one has replaced (an old CI run re-run) stops before it waits; if an older run waits
+  anyway and you approve it, it stops without deploying and names the newer commit that passed CI, whose
+  run brings both and waits for you next. A deploy that's running is never stopped: the next run waits
+  behind it, then for approval.
 - **What it brings** is on the run's page, above the approval button (`deploy-summary.sh`). It starts
   with what to look at before approving: a database migration (a rollback leaves it in place), changed
   secrets scripts (push a new key first), server changes the deploy applies (`compose.yaml`,
