@@ -108,6 +108,13 @@ def overs_a_side(fmt: str | None) -> int | None:
     return next((overs for pattern, overs in _LENGTHS if pattern.search(fmt or "")), None)
 
 
+def day_of_play(overs: int) -> timedelta:
+    """How long after its start a limited-overs match's day of play can run, rain and all: both innings at four minutes
+    an over, the break between them, and the two hours a delay may take before overs are lost or the match called
+    off (a T20's five hours, an ODI's nine)."""
+    return timedelta(minutes=2 * overs * 4 + 20 + 120)
+
+
 def _balls(overs: Any) -> int | None:
     """Balls bowled in an innings from its overs as the board has them (38.2, "38.2", 50): 230, 300."""
     whole, _, part = str(overs if overs is not None else "").partition(".")
@@ -241,9 +248,14 @@ class Cricket(Sport):
         one no word says the length of) within six (lasts), as the tick closes any source's game (pipeline.due_work)."""
         return start + (timedelta(days=2) if overs_a_side(state.get("format")) else self.lasts) if start is not None else None
 
-    def paused(self, state: dict[str, Any], score: str, clock: str) -> bool:
-        """Stumps: the day's play is over, and the match goes on tomorrow ("Stump Day 2", "Day 3 · Stumps")."""
-        return bool(re.search(r"\bstumps?\b", clock, re.I))
+    def paused(self, state: dict[str, Any], score: str, clock: str, start: datetime | None = None, now: datetime | None = None) -> bool:
+        """Stumps: the day's play is over, and the match goes on tomorrow ("Stump Day 2", "Day 3 · Stumps"). And a
+        limited-overs match stopped (rain, bad light: "Delayed") past its day's play (day_of_play): it goes on tomorrow,
+        on its reserve day, if at all (BUG-302). A stop within its day's play is a break: play may yet resume."""
+        if re.search(r"\bstumps?\b", clock, re.I):
+            return True
+        overs = overs_a_side(state.get("format"))
+        return bool(overs and start and now and re.search(r"\bdelay", clock, re.I) and now - start > day_of_play(overs))
 
     def match_page(self, state: dict[str, Any], events: list[dict[str, Any]], lines: dict[str, Line], names: dict[str, tuple[str, str]]) -> dict[str, Any]:
         """A scorecard: each side, in the order they batted, with who batted for it (runs, balls, fours, sixes,

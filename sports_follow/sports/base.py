@@ -482,9 +482,10 @@ class Sport:
         long after this tells nothing, its result old news (structured.long_over). None without a start."""
         return start + self.lasts if start is not None else None
 
-    def paused(self, state: dict[str, Any], score: str, clock: str) -> bool:
-        """Whether a game that's on has stopped for the day, to go on tomorrow (a Test at stumps): its Android live card
-        comes down till play resumes (livecards.py), rather than go again all night. False for a break in play."""
+    def paused(self, state: dict[str, Any], score: str, clock: str, start: datetime | None = None, now: datetime | None = None) -> bool:
+        """Whether a game that's on has stopped for the day, to go on tomorrow (a Test at stumps), as its board says at
+        `now`, for a game that started at `start`: its Android live card comes down till play resumes (livecards.py),
+        rather than go again all night. False for a break in play."""
         return False
 
     def start(self, who: str, now: Seen) -> Found:
