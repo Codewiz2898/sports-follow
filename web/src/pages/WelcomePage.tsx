@@ -1,10 +1,13 @@
-import { useEffect, useState, type CSSProperties } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
-import { LiveNow } from '../components/LiveNow'
-import { StarterPicker, useStarters } from '../components/Starters'
-import { CheckIcon, PlusIcon } from '../components/Icons'
-import { longestWordEms } from '../format'
+import { SectionHead } from '../components/Blocks'
+import { LiveNow, OtherGame, useLive } from '../components/LiveNow'
+import { StarterPicker, useFollowToggle, useStarters } from '../components/Starters'
+import { SportTiles } from '../components/YourSports'
+import { CheckIcon, SearchIcon } from '../components/Icons'
 import { useFollowing } from '../following'
+import { askAgain, catalogKnown, runningSports, sportInfo } from '../sports'
+import { inYourOrder, toggled, toSave } from '../yourSports'
 
 const WELCOMED = 'sf-welcomed'
 
@@ -18,18 +21,23 @@ function markWelcomed() {
 }
 
 /**
- * The welcome for a fan who follows nobody yet, in two steps: the sports they watch, then a few players
- * from each to follow with a tap (the starters, starters.py). Then Today, which keeps offering starters
- * while they follow few players.
+ * The welcome for a fan who follows nobody yet, in two steps: the sports they watch (every sport that's on, GET
+ * /api/sports), kept as their sports when they tap Next (Your sports, BHA-653: Following shows and changes them), then
+ * a few players from each to follow with a tap (the starters, starters.py), or for a sport with none, its games on
+ * now and a way to find its players. Then Today, which keeps offering starters while they follow few players, and of
+ * their sports they follow nobody in after.
  */
 export function WelcomePage() {
-  const { sports, failed } = useStarters()
-  const { cards } = useFollowing()
+  const tiles = runningSports()
+  const { cards, sports: saved, saveSports } = useFollowing()
   const navigate = useNavigate()
   const [step, setStep] = useState(1)
-  const [picked, setPicked] = useState<string[]>([])
+  // Null until the fan taps a tile: their sports saved already (another device's, signed in) show ticked.
+  const [tapped, setTapped] = useState<string[] | null>(null)
+  const [unsaved, setUnsaved] = useState(false)
+  const picked = tapped ?? saved.filter((k) => tiles.some((t) => t.key === k))
 
-  const offering = !!sports?.length
+  const offering = tiles.length > 0
   useEffect(() => {
     if (offering) markWelcomed()  // shown once: leaving by the tab bar doesn't bring a fan back here
   }, [offering])
@@ -39,25 +47,29 @@ export function WelcomePage() {
     navigate('/', { replace: true })
   }
 
-  if (sports === null && failed) {
+  if (!offering) {
+    const known = catalogKnown()
+    if (known === 'known') {
+      markWelcomed()  // no sport on to pick: Today's own start, finding a player
+      return <Navigate to="/" replace />
+    }
+    if (known === 'asking') return <span className="spinner" aria-label="Loading" />
     // Not marked unless skipped: the welcome comes back once the server answers.
     return (
       <div className="stack" style={{ gap: 12 }}>
-        <div className="error-box">Couldn't load players to suggest. Try again in a moment, or find one yourself.</div>
+        <div className="error-box">Couldn't load the sports. Try again in a moment, or find a player yourself.</div>
         <div className="row">
           <button type="button" className="btn link" onClick={finish}>Skip</button>
+          <button type="button" className="btn" onClick={askAgain}>Try again</button>
           <Link to="/search" className="btn primary">Find a player</Link>
         </div>
       </div>
     )
   }
-  if (sports === null) return <span className="spinner" aria-label="Loading" />
-  if (sports.length === 0) {
-    markWelcomed()  // nothing to offer: Today's own start, finding a player
-    return <Navigate to="/" replace />
+  const next = () => {
+    setStep(2)
+    if (tapped) saveSports(toSave(tapped, saved, tiles)).then(() => setUnsaved(false), () => setUnsaved(true))
   }
-  const pick = (key: string) => setPicked((p) => (p.includes(key) ? p.filter((k) => k !== key) : [...p, key]))
-  const offered = picked.length ? sports.filter((s) => picked.includes(s.key)) : sports  // none picked: every sport
 
   return (
     <>
@@ -72,21 +84,18 @@ export function WelcomePage() {
       </p>
 
       {step === 1 ? (
-        <div className="tiles" role="group" aria-label="Sports">
-          {sports.map((s) => {
-            const on = picked.includes(s.key)
-            return (
-              <button key={s.key} type="button" className="tile pick sport" data-sport={s.key} aria-pressed={on} onClick={() => pick(s.key)}>
-                <span className="corner">{on ? <CheckIcon width={20} height={20} /> : <PlusIcon width={20} height={20} />}</span>
-                <span className="dsp name" style={{ '--ems': longestWordEms(s.label) } as CSSProperties}>{s.label}</span>
-              </button>
-            )
-          })}
-        </div>
+        <>
+          <SportTiles tiles={tiles} picked={picked} onPick={(key) => setTapped(toggled(picked, key))} />
+          <div className="notice">
+            <CheckIcon width={18} height={18} style={{ flexShrink: 0 }} />
+            <span style={{ flex: 1 }}>Kept as your sports. Change them any time in Following.</span>
+          </div>
+        </>
       ) : (
         <>
+          {unsaved && <div className="error-box">Couldn't keep your sports just now. Pick them again in Following.</div>}
           <LiveNow first={picked} />
-          <StarterPicker sports={offered} />
+          <WelcomePlayers picked={picked} />
         </>
       )}
 
@@ -95,9 +104,49 @@ export function WelcomePage() {
           ? <button type="button" className="btn link" onClick={finish}>Skip</button>
           : <button type="button" className="btn link" onClick={() => setStep(1)}>Back</button>}
         {step === 1
-          ? <button type="button" className="btn primary" onClick={() => setStep(2)}>Next</button>
+          ? <button type="button" className="btn primary" onClick={next}>{picked.length ? `Next · ${picked.length} ${picked.length === 1 ? 'sport' : 'sports'}` : 'Next'}</button>
           : <button type="button" className="btn primary" onClick={finish}>{cards.length ? `Done · ${cards.length} followed` : 'Done'}</button>}
       </div>
     </>
+  )
+}
+
+/** The welcome's second step: the starters of each sport picked, in the fan's order (every sport's, none picked),
+ * then each sport picked that has none (an esports game, often): its games on now, and a way to find its players. */
+function WelcomePlayers({ picked }: { picked: string[] }) {
+  const { sports: starters, failed } = useStarters()
+  if (starters === null && failed) {
+    return <div className="error-box">Couldn't load players to suggest. Try again in a moment, or find one yourself.</div>
+  }
+  if (starters === null) return <span className="spinner" aria-label="Loading" />
+  const theirs = picked.length ? inYourOrder(starters.filter((s) => picked.includes(s.key)), (s) => s.key, picked) : starters
+  const without = picked.filter((k) => !starters.some((s) => s.key === k))
+  return (
+    <>
+      {theirs.length > 0 && <StarterPicker sports={theirs} />}
+      {without.map((key) => <PickedOnNow key={key} sport={key} />)}
+      {!theirs.length && !without.length && <Link to="/search" className="btn primary" style={{ alignSelf: 'flex-start' }}><SearchIcon width={18} height={18} />Find a player</Link>}
+    </>
+  )
+}
+
+/** A sport the fan picked that has no starters: its games on now (GET /api/live), each with players to follow from it,
+ * and a search for its players. */
+function PickedOnNow({ sport }: { sport: string }) {
+  const info = sportInfo(sport)
+  const live = useLive().find((s) => s.key === sport)
+  const follow = useFollowToggle()
+  const games = live?.games ?? []
+  return (
+    <section className="section" aria-label={info.label}>
+      <SectionHead title={info.label}>{games.length > 0 && <span className="eyebrow">On now</span>}</SectionHead>
+      {games.length > 0 && (
+        <div className="live-grid">
+          {games.map((g) => <OtherGame key={g.key} game={{ ...g, sport }} label={info.label} follow={follow} />)}
+        </div>
+      )}
+      {follow.error && <div className="error-box">{follow.error}</div>}
+      <Link to={`/search?sport=${encodeURIComponent(sport)}`} className="btn" style={{ alignSelf: 'flex-start' }}><SearchIcon width={18} height={18} />Find a {info.label} player</Link>
+    </section>
   )
 }

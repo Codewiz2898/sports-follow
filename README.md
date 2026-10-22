@@ -360,6 +360,12 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   other devices as a follow does (`sports` in the fan stream's list). Only the sports `/api/sports` says are on
   count: a key of another is left out, and a sport turned off in the admin panel stays in the fan's list out of
   sight, and is back when it's on again (after any the fan saved meanwhile). Dropping a sport unfollows nobody in it.
+  In the web app (`web/src/yourSports.ts`, `components/YourSports.tsx`): the welcome's tiles are every sport that's
+  on, each esports game its own, and a picked sport with no starters offers its games on now and a search for its
+  players; Following's row and Edit sheet (with none saved, the sports of who the fan follows ticked), also reached
+  from Today's game search; on Today, each of the fan's sports with something on it gets a chip (`filter.ts
+  theirGames`), "Players to follow" keeps offering their sports they follow nobody in past the first three follows,
+  and the fan's sports come first in Live now, the big rails, the Live page and search's "Try" names.
 - **Installable (PWA), the first step to Android.** A manifest, icons (`web/scripts/make_icons.py`) and a
   service worker (`web/public/sw.js`, production builds only) let Chrome on Android and desktop offer
   "Install app"; the app then opens full screen from the home screen. The app shell opens offline and

@@ -16,6 +16,9 @@ const AGAIN_MS = 10 * 60_000  // back in the app this long after the server was 
 let sports = sportsOf(NO_SPORTS)
 let version = 0  // how many times the catalog has changed: what the app draws again on (useSports)
 let asked = -Infinity  // when the server was last asked
+// Whether the app has a catalog (the server's, or the copy kept on this device), is still waiting for its first, or
+// that failed: an empty list of sports means none only once known (the welcome, which offers them).
+let known: 'known' | 'asking' | 'failed' = 'asking'
 const listeners = new Set<() => void>()
 
 function kept(): SportCatalog | null {
@@ -41,10 +44,35 @@ function ask(): Promise<SportCatalog | null> {
       return data
     })
     .catch(() => null)
+    .then((data) => {
+      if (!data?.sports && known === 'asking') told('failed')
+      return data
+    })
+}
+
+/** Whether there's a catalog yet (catalogKnown), the app told when that changes. */
+function told(state: typeof known) {
+  if (known === state) return
+  known = state
+  version++
+  for (const listener of listeners) listener()
+}
+
+/** Whether the app has the sports yet: 'known' (an empty list is none), 'asking' (none until the server answers), or
+ * 'failed' (it didn't; asked again when the app comes back to the front, or askAgain). */
+export function catalogKnown(): 'known' | 'asking' | 'failed' {
+  return known
+}
+
+/** Ask the server for the sports now, after its first answer failed (the welcome's Try again). */
+export function askAgain(): void {
+  if (known === 'failed') told('asking')
+  void ask()
 }
 
 /** A catalog in place of the one the app has, and the app told, unless it's the same. */
 function apply(data: SportCatalog) {
+  told('known')
   if (JSON.stringify(data) === JSON.stringify(sports.catalog)) return
   sports = sportsOf(data)
   version++
@@ -63,6 +91,7 @@ export async function loadSports(): Promise<void> {
   const copy = kept()
   if (copy?.sports) {
     sports = sportsOf(copy)
+    known = 'known'
     return
   }
   await Promise.race([fetched, new Promise<null>((done) => setTimeout(() => done(null), 4000))])
