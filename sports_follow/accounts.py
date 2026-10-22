@@ -24,9 +24,11 @@ from sqlalchemy.orm import Session
 
 from . import clips, matches, notify, predictions, teams
 from .db import session
-from .models import Account, AccountSession, ClipReport, Event, FanSource, FeedFeedback, Follow, MatchFollow, Notification, NotificationMute, PushSubscription, TeamFollow
+from .models import Account, AccountSession, ClipReport, Event, FanSource, FeedFeedback, Follow, LeagueMember, MatchFollow, Notification, NotificationMute, Pick, PushSubscription, TeamFollow
 
 FAN_PREFIX = "acct-"  # an account's fan id: never taken from a fan cookie (server._unsigned_fan)
+# The rows kept under a fan id here; predictions.py keeps its own (picks, places in leagues: predictions.forget).
+FAN_ROWS = (Follow, MatchFollow, TeamFollow, NotificationMute, Notification, PushSubscription, FanSource, FeedFeedback, ClipReport)
 SESSION_COOKIE = "sf_session"
 SESSION_LIFE = timedelta(days=365)  # since the device last opened the app
 COOKIE_MAX_AGE = 400 * 24 * 3600  # browsers keep a cookie at most 400 days; the app renews it daily
@@ -165,8 +167,10 @@ def end_sessions(db: Session, account_id: int, session_id: int | None = None) ->
 
 
 def purge_expired() -> int:
-    """Sessions not used for SESSION_LIFE: their devices go too. Returns how many."""
+    """Sessions not used for SESSION_LIFE: their devices go too. Returns how many. And what's left under the fan ids
+    of accounts deleted since (forget_orphans)."""
     with session() as db:
+        forget_orphans(db)
         return len(list(db.scalars(delete(AccountSession).where(AccountSession.expires_at <= func.now()).returning(AccountSession.id))))
 
 
@@ -273,8 +277,25 @@ def delete_account(db: Session, account_id: int) -> Deleted | None:
     if account is None:
         return None
     hashes = list(db.scalars(select(AccountSession.token_hash).where(AccountSession.account_id == account_id)))
-    for model in (Follow, MatchFollow, TeamFollow, NotificationMute, Notification, PushSubscription, FanSource, FeedFeedback, ClipReport):
-        db.execute(delete(model).where(model.fan_id == account.fan_id))
-    predictions.forget(db, account.fan_id)  # picks and places in leagues; a league they made stays its other members'
+    forget(db, account.fan_id)
     db.execute(delete(Account).where(Account.id == account_id))  # its sessions go with it
     return Deleted(fan_id=account.fan_id, email=account.email, token_hashes=hashes)
+
+
+def forget(db: Session, fan: str) -> None:
+    """Every row kept under a fan id."""
+    for model in FAN_ROWS:
+        db.execute(delete(model).where(model.fan_id == fan))
+    predictions.forget(db, fan)  # picks and places in leagues; a league they made stays its other members'
+
+
+def forget_orphans(db: Session) -> int:
+    """What's kept under the fan id of an account that's gone: a write another of its devices had under way as it was
+    deleted, with the fan id it had read just before, lands after the deletion (BUG-223). Returns how many fan ids."""
+    gone = set()
+    for model in (*FAN_ROWS, Pick, LeagueMember):
+        gone.update(db.scalars(select(model.fan_id).distinct().where(model.fan_id.startswith(FAN_PREFIX, autoescape=True),
+                                                                     ~select(Account.id).where(Account.fan_id == model.fan_id).exists())))
+    for fan in gone:
+        forget(db, fan)
+    return len(gone)

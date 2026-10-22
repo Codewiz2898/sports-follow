@@ -20,7 +20,8 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
 from sports_follow import accounts, notify
-from sports_follow.models import Account, AccountSession, Clip, ClipReport, Event, FanSource, Follow, Notification, NotificationMute, Player, PushSubscription
+from sports_follow.models import (Account, AccountSession, Clip, ClipReport, Event, FanSource, Follow, League, LeagueMember, Notification, NotificationMute, Pick, Player, PushSubscription,
+                                  Question, Team, TeamFollow)
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -32,7 +33,8 @@ NOW = datetime.now(timezone.utc)
 def db(monkeypatch):
     engine = create_engine(URL)
     with engine.begin() as c:
-        c.execute(text("TRUNCATE account, account_session, follow, notification_mute, notification, push_subscription, player, event, fan_source, clip, clip_report RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE account, account_session, follow, notification_mute, notification, push_subscription, player, event, fan_source, clip, clip_report, "
+                       "team, team_follow, match_follow, prediction_league RESTART IDENTITY CASCADE"))
     made = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -51,6 +53,7 @@ def db(monkeypatch):
     s = made()
     s.add_all([Player(id=i, slug=f"p{i}", name=f"Player {i}") for i in (1, 2, 3)])
     s.add_all([Event(id=i, key=f"e{i}", sport="football", title=f"Game {i}") for i in (1, 2)])
+    s.add_all([Team(id=i, name=f"Team {i}", sport="basketball", system="espn_basketball", external_id=str(i)) for i in range(1, 46)])
     s.commit()
     yield s
     s.close()
@@ -222,3 +225,26 @@ def test_deleting_an_account_leaves_nothing_under_its_fan_id(db):
     assert db.scalars(select(AccountSession.id)).all() == []
     assert db.get(Player, 1) is not None and db.get(Event, 1) is not None  # everyone's
     assert accounts.delete_account(db, account_id) is None
+
+
+def test_what_a_request_under_way_wrote_for_a_deleted_account_goes_at_the_next_sweep(db):
+    """BUG-223: a follow, a pick or a place in a league written by another of the account's devices as it was deleted
+    (its fan id read just before) outlived it: personal data kept, and its players polled, for good."""
+    account_id, fan = account(db)
+    other_id, other = account(db, "other@example.com")
+    accounts.delete_account(db, account_id)
+    db.commit()
+    db.add(Question(id=1, game="g1", ask="result", sport="football", match="pitch/1", title="Who wins?"))
+    db.add(League(id=1, code="ABC123", name="Friends", owner=fan))
+    db.flush()
+    for who in (fan, other, "anon"):
+        follow(db, who, 1)
+        db.add(TeamFollow(fan_id=who, team_id=1))
+        db.add(Pick(question_id=1, fan_id=who, option="home"))
+    db.add_all([LeagueMember(league_id=1, fan_id=fan, name="Asha"), LeagueMember(league_id=1, fan_id=other, name="Ravi")])
+    db.commit()
+    assert accounts.purge_expired() == 0
+    db.expire_all()
+    for model in (Follow, TeamFollow, Pick):
+        assert sorted(db.scalars(select(model.fan_id))) == sorted([other, "anon"])  # an account's and an anonymous fan's stay
+    assert db.scalars(select(LeagueMember.fan_id)).all() == [other] and db.get(League, 1).owner is None
