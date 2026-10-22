@@ -57,10 +57,11 @@ EVERGREEN = ("approved", "pinned")  # an admin's word that keeps a story past PR
 COMMON = 3  # a surname this many of the sport's athletes in the registry share names a player only with their side
 # Two stories about one player are one story when published within CLUSTER_WITHIN of each other and they say the
 # same (same_story), in their words (headline and description) less the player's names and words every story has:
-# the same figure ("179") with FIGURE_AND more words (one more for a figure under 100); or SAME_HEADLINE words of
-# their headlines, HEADLINE_SHARE of the shorter one's; or SAME_WORDS words, SAME_STORY of the shorter one's. In
-# those last two, the words USUAL_SHARE of the player's stories within USUAL_WITHIN have (at least USUAL_STORIES of
-# them) don't count: a series' opponent and ground are in every one of its stories.
+# the same figure ("179") with FIGURE_AND more words (one more for a figure under 100, not all of them usual); or
+# SAME_HEADLINE words of their headlines, HEADLINE_SHARE of the shorter one's; or SAME_WORDS words, SAME_STORY of the
+# shorter one's. The usual words are those USUAL_SHARE of the player's stories within USUAL_WITHIN have (at least
+# USUAL_STORIES of them): a series' opponent and ground are in every one of its stories, and in the last two they
+# don't count.
 CLUSTER_WITHIN = timedelta(hours=24)
 FIGURE_AND = 1  # words besides a figure two stories share to be one; one more for a figure under 100
 SAME_HEADLINE, HEADLINE_SHARE = 2, 0.5
@@ -394,9 +395,12 @@ def prune(now: datetime | None = None) -> dict[str, int]:
 # ---------------------------------------------------------------- the same story
 
 
-# A number that isn't one of the story's figures: a year, a season ("2026-27"), an age ("the 29-year-old", "aged 44").
+# A number that isn't one of the story's figures: a year, a season ("2026-27"), an age ("the 29-year-old", "aged 44"),
+# a day of the month ("25 October", "Oct. 25", "the 25th of October").
 _YEAR = re.compile(r"(?:19|20)\d\d")
-_NOT_A_FIGURE = re.compile(r"\b(?:19|20)\d\d\s*[-–/]\s*\d\d\b|\b\d+[- ]?years?[- ]old\b|\baged? \d+\b", re.I)
+_MONTH = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b\.?"
+_NOT_A_FIGURE = re.compile(rf"\b(?:19|20)\d\d\s*[-–/]\s*\d\d\b|\b\d+[- ]?years?[- ]old\b|\baged? \d+\b|\b\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?{_MONTH}"
+                          rf"|\b{_MONTH}\s*\d{{1,2}}(?:st|nd|rd|th)?\b", re.I)
 
 
 def _stem(word: str) -> str:
@@ -444,12 +448,15 @@ def story(sid: int, published: datetime | None, title: str, description: str, dr
 
 def same_story(a: Story, b: Story, usual: frozenset[str] = frozenset()) -> bool:
     """Whether two of one player's stories tell the same thing, as the outlets that ran it word it: they give the
-    same figure (a score) and another word or two (FIGURE_AND); or their headlines share SAME_HEADLINE words, at
-    least HEADLINE_SHARE of the shorter one's; or their words share SAME_WORDS, at least SAME_STORY of the shorter
-    one's. Neither of the last two counts the usual words (usual_words) of the days they're from."""
+    same figure (a score) and another word or two (FIGURE_AND), one of them not a usual word (usual_words) of the
+    days they're from for a figure under 100, which two stories of a series share by chance ("25" runs, "25" per
+    cent); or their headlines share SAME_HEADLINE words, at least HEADLINE_SHARE of the shorter one's; or their
+    words share SAME_WORDS, at least SAME_STORY of the shorter one's, neither of those counting the usual words."""
     shared = a.words & b.words
-    if any(w.isdigit() and len(shared) > FIGURE_AND + (len(w) < 3) for w in shared):
-        return True
+    for figure in (w for w in shared if w.isdigit()):
+        more = shared - {figure}
+        if len(more) >= FIGURE_AND + (len(figure) < 3) and (len(figure) >= 3 or more - usual):
+            return True
     heads = (a.headline & b.headline) - usual
     if len(heads) >= SAME_HEADLINE and len(heads) >= HEADLINE_SHARE * min(len(a.headline - usual), len(b.headline - usual)):
         return True

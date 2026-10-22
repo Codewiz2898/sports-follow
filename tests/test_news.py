@@ -271,6 +271,20 @@ def test_a_storys_words_keep_its_figures_and_read_a_name_and_a_word_however_writ
     assert news.story_words("Wickets fall as she gives up hope", "") == news.story_words("A wicket falls, giving up hoping", "")
 
 
+def test_a_date_or_a_small_figure_shared_with_only_a_series_words_is_another_story():
+    # BUG-249's review: "25 October" in one story and "25 per cent" in another, with the opponent and the nation in
+    # both, made an injury and a fine one item, and the ranking hid one of them. A day of the month isn't a figure;
+    # nor, among a series' stories, is a small number that only its usual words come with.
+    hamstring = s(1, 10, "Kohli to miss third ODI against Australia with hamstring strain", "India hope he is fit for the first Test on 25 October", name="Virat Kohli")
+    fined = s(2, 8, "Kohli fined 25 per cent of match fee for dissent against Australia", "The India batter disputed an lbw decision", name="Virat Kohli")
+    assert news.clusters([hamstring, fined]) == [[1], [2]]
+    for date in ("October 25", "Oct. 25", "25th October", "on the 25th of October"):
+        assert not {"25", "25th"} & news.story_words("Kohli fit for the first Test", f"He returns {date}")
+    squad = s(3, 9, "India name their squad for Australia", "Kohli and Bumrah return for India against Australia", name="Virat Kohli")
+    out = s(4, 6, "Kohli out for 25 as Australia beat India", "Australia's quicks were too good for India's top order", name="Virat Kohli")
+    assert news.clusters([hamstring, fined, squad, out]) == [[1], [3], [2], [4]]
+
+
 def test_a_story_is_scored_by_the_judges_interest_and_how_many_outlets_ran_it():
     verdict = {"about_player": "subject", "interest": 0.5}
     one, three, five, ten = (rank.story_score(verdict, n, 1.0) for n in (1, 3, 5, 10))
