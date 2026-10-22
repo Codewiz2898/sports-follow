@@ -1417,6 +1417,7 @@ async def research(fan: str = Depends(fan_id)) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- following
 
+
 def _room_to_follow(db: Session, fan: str, player_id: int | None = None) -> None:
     """Refuse (429) a follow past follows.MAX, of the follows that count (follows.counted: not a turned-off sport's).
     A player the fan follows already is no new follow. With the player, in the follow's transaction: one at a time
@@ -1514,15 +1515,13 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
     person = await in_db(_registry_athlete, body) if body.get("qid") else None
     if body.get("qid") and person is None:
         raise HTTPException(404, "That athlete isn't in the player registry.")
-    # Past the cap, a follow is refused before a source is asked; one of a player the fan follows already (a page's
-    # Retry) is no new follow, so it isn't (BUG-328). The follow's own transaction counts again (save).
     taken: list[str] = []
     if person and not body.get("system"):
         holder = await in_db(_registry_holder, person, bool(body.get("sport")))
         if holder is not None:
             player_id, created, ref = holder, False, None
         else:
-            await in_db(_room_to_follow, fan)
+            await in_db(_room_to_follow, fan)  # past the cap, refused before a source is asked (save counts again)
             await _source_lookup(fan, address)
             found = await _resolve(person)
             if found is None and not RESEARCH:
@@ -1554,6 +1553,7 @@ async def _follow_athlete(body: dict, fan: str, address: str | None) -> int:
             raise HTTPException(400, "Pick an athlete from the search results.")
         if (system, athlete_id) in await in_db(registry.blocked):
             raise HTTPException(404, f"That athlete isn't on {APP_NAME}.")  # removed by an operator (players.py)
+        # Past the cap, refused before the source is asked, unless the fan follows them already (a page's Retry: BUG-328).
         await in_db(_room_to_follow, fan, await in_db(_holder, system, athlete_id))
         await _source_lookup(fan, address)
         try:
