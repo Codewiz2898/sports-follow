@@ -55,6 +55,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from itertools import zip_longest
 
+from . import sports
 from .moments import wanted
 
 GAME_COOLDOWN = timedelta(minutes=3)
@@ -107,6 +108,7 @@ class Item:
     # The player as its title names them, where notify knows it: the same play told by two of a fan's players in the
     # same words but for their names (teammates' "TenZ: Sentinels win 2–0") is one line naming both (fold).
     who: str = ""
+    sport: str = ""  # the player's sport, where notify named them: a line naming several of them is in its words (fold)
 
 
 @dataclass
@@ -222,9 +224,11 @@ def tag_of(item: Item) -> str:
 def fold(members: list[tuple[Item, bool]]) -> tuple[list[tuple[Item, bool]], list[int]]:
     """A push's moments (each with whether it makes a sound), those that are the same play told by several of the fan's
     players as one, naming them all: of one game, kind and detail, in the same words but for the name each starts with
-    (two teammates' "TenZ: Sentinels win 2–0" and "zekken: Sentinels win 2–0" are "TenZ and zekken: Sentinels win 2–0").
-    Each player's own (their numbers on a map) stays theirs. Returns them in their order, and the moments folded into
-    another (BUG-206)."""
+    (two teammates' "TenZ: Sentinels win 2–0" and "zekken: Sentinels win 2–0" are "TenZ and zekken: Sentinels win 2–0"),
+    in their sport's words for several ("Rishabh Pant and Rohit Sharma are in the XI": Sport.told_by_several). Each
+    player's own (their numbers on a map) stays theirs, and so does each one's line in a result they tell alike ("Rishabh
+    Pant · 20 (10)" under "Rishabh Pant and Rohit Sharma: India won by 127 runs"). Returns them in their order, and the
+    moments folded into another (BUG-206)."""
     same: dict[tuple, list[tuple[Item, bool]]] = {}
     for item, loud in members:
         same.setdefault(_said(item), []).append((item, loud))
@@ -234,7 +238,9 @@ def fold(members: list[tuple[Item, bool]]) -> tuple[list[tuple[Item, bool]], lis
         names = sorted({i.who for i, _ in told}, key=str.casefold)
         if len(names) > 1:
             who = f"{', '.join(names[:-1])} and {names[-1]}"
-            lead = replace(lead, title=_named(lead.title, lead.who, who), body=_named(lead.body, lead.who, who), who=who)
+            alike = len({_named(i.body, i.who, "") for i, _ in told}) == 1
+            body = _named(lead.body, lead.who, who) if alike else "\n".join(f"{i.who} · {i.body}" for i, _ in sorted(told, key=lambda t: t[0].who.casefold()) if i.body)
+            lead = replace(lead, title=sports.of(lead.sport).told_by_several(lead.kind, lead.detail, lead.title, lead.who, who), body=body, who=who)
         out.append((lead, any(loud for _, loud in told)))
         folded += [i.id for i, _ in told[1:]]
     return out, folded
@@ -242,10 +248,11 @@ def fold(members: list[tuple[Item, bool]]) -> tuple[list[tuple[Item, bool]], lis
 
 def _said(item: Item) -> tuple:
     """What a player's moment says but for their name where its title or body starts with it, as its game, kind and
-    detail: the same for each of a fan's players who tell the same play (fold). Its own id where notify gave no name."""
+    detail: the same for each of a fan's players who tell the same play (fold). A result by its title alone: it's the
+    game's whoever tells it, and its body is each one's own line in it ("20 (10)"). Its own id where notify gave no name."""
     if item.player_id is None or not item.who:
         return (item.id,)
-    return item.event_id, item.kind, item.detail, _named(item.title, item.who, ""), _named(item.body, item.who, "")
+    return item.event_id, item.kind, item.detail, _named(item.title, item.who, ""), "" if item.kind == "final" else _named(item.body, item.who, "")
 
 
 def _named(text: str, who: str, names: str) -> str:

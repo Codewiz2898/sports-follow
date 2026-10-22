@@ -5,7 +5,7 @@ sends them to the fans of a game in a real database."""
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -143,7 +143,7 @@ def cards(monkeypatch):
     boards: list[dict[str, str]] = []
     clock = SimpleNamespace(now=1_000_000.0)
 
-    def queue(event_id: int, kind: str, made: dict | None, board: dict[str, str] | None = None) -> None:
+    def queue(event_id: int, kind: str, made: dict | None, board: dict[str, str] | None = None, out: frozenset[int] = frozenset()) -> None:
         sent.append((event_id, kind, made))
         boards.append(board or {})
 
@@ -152,7 +152,7 @@ def cards(monkeypatch):
     return SimpleNamespace(sent=sent, boards=boards, clock=clock)
 
 
-EVENT = SimpleNamespace(id=5, sport="Football", competition="Premier League", key="espn_soccer:740001", title="Arsenal vs Chelsea")
+EVENT = SimpleNamespace(id=5, sport="Football", competition="Premier League", key="espn_soccer:740001", title="Arsenal vs Chelsea", start_utc=None)
 
 
 def snap(home: int, away: int, clock: str, status: str = "live", goals: list[dict] | None = None) -> Snapshot:
@@ -203,7 +203,7 @@ def test_a_game_sends_its_newest_card_only_and_one_at_a_time(monkeypatch):
     monkeypatch.setattr(livecards, "_sending", set())
     monkeypatch.setattr(livecards, "_pool", SimpleNamespace(submit=lambda fn, *args: threads.append((fn, args))))
 
-    def sending(event_id: int, kind: str, made: dict | None, board: dict[str, str] | None = None) -> None:
+    def sending(event_id: int, kind: str, made: dict | None, board: dict[str, str] | None = None, out: frozenset[int] = frozenset()) -> None:
         went.append((event_id, kind, (made or {}).get("status", "")))
         if (event_id, kind) == (5, "live"):
             livecards._queue(5, "end", None)  # the game ends while its last card is going out
@@ -248,7 +248,7 @@ def test_a_failing_card_never_fails_the_poll(fake_fcm, cards, monkeypatch, caplo
 
 def test_a_lobby_has_no_sides_and_no_bar(fake_fcm, redis, cards):  # noqa: F811
     lobby = Snapshot("live", "GodLike lead · 87 pts", "After match 3 of 6", {"kind": "battle_royale", "standings": [{"id": "a", "name": "GodLike", "place": 1}]})
-    livecards.polled(SimpleNamespace(id=9, sport="BGMI", competition="BGIS", key="liquipedia_esports:x", title="BGIS Finals"), lobby)
+    livecards.polled(SimpleNamespace(id=9, sport="BGMI", competition="BGIS", key="liquipedia_esports:x", title="BGIS Finals", start_utc=None), lobby)
     [(_, _, made)] = cards.sent
     assert (made["sport"], made["colour"], made["sides"], made["status"], made["progress"], made["marks"]) == ("bgmi", "#166534", [], "After match 3 of 6", "", [])
     assert livecards.fcm.data_message("t" * 40, made, 60)["data"]["live"] == "1"
@@ -257,7 +257,7 @@ def test_a_lobby_has_no_sides_and_no_bar(fake_fcm, redis, cards):  # noqa: F811
 def test_a_test_match_at_stumps_takes_its_card_down_for_the_night_and_puts_it_up_when_play_resumes(fake_fcm, redis, cards):  # noqa: F811
     # BUG-186: a "Stumps Day 2" board is still on (it's polled every minute all night), and its unchanged card went again
     # every REFRESH: an ongoing "live" notification on the lock screen all night, the app woken ~96 times, for five nights.
-    test = SimpleNamespace(id=8, sport="Cricket", competition="Border-Gavaskar Trophy", key="sportmonks_cricket:71300", title="India v Australia")
+    test = SimpleNamespace(id=8, sport="Cricket", competition="Border-Gavaskar Trophy", key="sportmonks_cricket:71300", title="India v Australia", start_utc=None)
     state = {"kind": "cricket", "format": "Test", "teams": [{"id": "1", "name": "India", "abbr": "IND", "score": "311/4"}, {"id": "2", "name": "Australia", "abbr": "AUS", "score": "445"}],
              "innings": [{"team": "Australia", "runs": 445, "wickets": 10, "overs": 120.2, "batting": False}, {"team": "India", "runs": 311, "wickets": 4, "overs": 88.0, "batting": True}]}
 
@@ -279,3 +279,36 @@ def test_a_test_match_at_stumps_takes_its_card_down_for_the_night_and_puts_it_up
     # ESPN says it its own way.
     livecards.polled(test, day("Day 3 · Stumps"))
     assert [kind for _, kind, _ in cards.sent][-1] == "end"
+
+
+def test_a_limited_overs_match_stopped_past_its_days_play_takes_its_card_down_till_play_resumes(fake_fcm, redis, cards):  # noqa: F811
+    # BUG-302: a T20 stopped by rain ("Delayed") past its day's play, carried to its reserve day, had its unchanged card
+    # go again every REFRESH all night. Within its day's play a stop is a break, and the card stays up: play may resume.
+    start = datetime.fromtimestamp(cards.clock.now, timezone.utc)
+    t20 = SimpleNamespace(id=10, sport="Cricket", competition="Asia Cup", key="sportmonks_cricket:71400", title="India v Pakistan", start_utc=start)
+    state = {"kind": "cricket", "format": "T20I", "teams": [{"id": "1", "name": "India", "abbr": "IND", "score": "88/2"}, {"id": "2", "name": "Pakistan", "abbr": "PAK", "score": ""}],
+             "innings": [{"team": "India", "runs": 88, "wickets": 2, "overs": 11.0, "batting": True}]}
+
+    def kinds() -> list[str]:
+        return [kind for _, kind, _ in cards.sent]
+
+    livecards.polled(t20, Snapshot("live", "IND 88/2 (11 ov)", "1st Innings", state))
+    cards.clock.now += 3600  # an hour in, rain
+    livecards.polled(t20, Snapshot("live", "IND 88/2 (11 ov)", "Delayed", state))
+    cards.clock.now += livecards.REFRESH + 1
+    livecards.polled(t20, Snapshot("live", "IND 88/2 (11 ov)", "Delayed", state))
+    assert kinds() == ["live", "live", "live"]  # a break: kept up
+    cards.clock.now += 4 * 3600  # still raining, five hours after the start: no more play today
+    livecards.polled(t20, Snapshot("live", "IND 88/2 (11 ov)", "Delayed", state))
+    assert kinds() == ["live", "live", "live", "end"]
+    for _ in range(3):  # the night's polls: nothing goes
+        cards.clock.now += livecards.REFRESH + 1
+        livecards.polled(t20, Snapshot("live", "IND 88/2 (11 ov)", "Delayed", state))
+    assert kinds() == ["live", "live", "live", "end"]
+    cards.clock.now += 12 * 3600  # the reserve day: play resumes, the card goes up again at once
+    livecards.polled(t20, Snapshot("live", "IND 89/2 (11.1 ov)", "1st Innings", state))
+    assert kinds() == ["live", "live", "live", "end", "live"]
+    # A Test stopped by rain is stopped for a while, its days are many: its stumps say when the day's over.
+    long = SimpleNamespace(**{**vars(t20), "id": 11, "start_utc": start - timedelta(days=1)})
+    livecards.polled(long, Snapshot("live", "IND 88/2 (31 ov)", "Delayed", {**state, "format": "Test"}))
+    assert cards.sent[-1][:2] == (11, "live")

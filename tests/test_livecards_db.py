@@ -23,13 +23,15 @@ import pytest
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import sessionmaker
 
-from sports_follow import bus, livecards, notify, server, structured
+from sports_follow import bus, livecards, notify, predictions, server, structured
+from sports_follow.adapters import sportmonks_cricket as sc
 from sports_follow.adapters.base import Line, Snapshot
 from sports_follow.models import (Event, EventPlayer, EventState, EventTeam, Follow, MatchFollow, Notification, NotificationMute, Player, PlayerLine,
                                   PushSubscription, Team, TeamFollow)
 
 from .test_fcm import TOKEN, fake_fcm  # noqa: F401  (the fixture)
 from .test_livecards import Redis
+from .test_sportmonks_cricket import AFG, FIRST, IND, OPENER, SEAMER, SPINNER, _bat, _picked, _row
 
 URL = os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="needs SPORTS_FOLLOW_TEST_DATABASE_URL: a throwaway database at alembic head")
@@ -289,6 +291,35 @@ def test_the_poller_takes_down_the_card_of_a_fan_who_stopped_following(db, fake_
     db.commit()
     assert poll("live", "51'", 2) == [("gooner", "end"), ("keen", "live"), ("off", "live")]
     assert poll("final", "FT", 2) == [(fan, "end") for fan in sorted(("keen", "results", "off", "muted", "lapsed"))]
+
+
+def test_a_player_the_xi_leaves_out_brings_his_fans_no_live_card(db, fake_fcm, monkeypatch):  # noqa: F811
+    """BUG-303: a cricketer the XI leaves out isn't in the game (Sport.left_out): his page doesn't show it live, and his
+    fans hear nothing of it. But the poller sent them its live card till his next fixtures read took him out of it, up
+    to half an hour of play. A fan of his who follows the game itself has the game's card, naming none of theirs."""
+    monkeypatch.setattr(bus, "_sync", Redis())
+    monkeypatch.setattr(structured, "_polled", lambda event_id, cadence: True)
+    monkeypatch.setattr(notify, "dispatch", lambda ids: None)  # moments aren't this test's
+    monkeypatch.setattr(predictions, "polled", lambda *args: None)  # nor questions
+
+    def at_once(fn, *args):
+        done: Future = Future()
+        done.set_result(fn(*args))
+        return done
+
+    monkeypatch.setattr(livecards, "_pool", SimpleNamespace(submit=at_once))
+    db.add_all([Player(id=20, slug="rohit-opener", name="Rohit Opener", sport="Cricket"), Player(id=21, slug="dropped-seamer", name="Dropped Seamer", sport="Cricket"),
+                Event(id=2, key="sportmonks_cricket:71215", sport="Cricket", title="India v Afghanistan", status="live", start_utc=NOW)])
+    db.flush()
+    db.add_all([EventPlayer(event_id=2, player_id=20), EventPlayer(event_id=2, player_id=21), Follow(fan_id="rohit", player_id=20, alert_rules={}),
+                Follow(fan_id="dropped", player_id=21, alert_rules={}), Follow(fan_id="game", player_id=21, alert_rules={}), MatchFollow(fan_id="game", event_id=2, alert_rules={})])
+    db.add_all([PushSubscription(fan_id=fan, transport="fcm", endpoint=phone(fan)) for fan in ("rohit", "dropped", "game")])
+    db.commit()
+    xi = [_picked(OPENER, IND), _picked(SPINNER, AFG)]
+    row = _row("1st Innings", [{**FIRST, "score": 30, "wickets": 0, "overs": 3}], xi, batting=[_bat(OPENER, 22, 14, None)])
+    binding = {"adapter": "sportmonks_cricket", "locator": {"fixture": "71215"}, "cadence": 10}
+    structured.apply_poll(2, binding, sc.SportmonksCricket(), [(20, str(OPENER)), (21, str(SEAMER))], sc.parse_match(row))
+    assert {m["token"].split("-")[0]: json.loads(m["data"]["players"] or "[]") for m in fake_fcm.sent} == {"rohit": ["Rohit Opener · 22* (14)"], "game": []}
 
 
 def test_a_games_card_reaches_its_fans_among_more_followers_than_a_query_can_name(db, fake_fcm):  # noqa: F811

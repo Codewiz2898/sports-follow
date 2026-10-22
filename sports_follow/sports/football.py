@@ -245,6 +245,7 @@ class Football(Sport):
         "more": ("yellow cards", "yellow cards"),
     }
     kind_words = {"goal": "Goal", "red": "Red card"}
+    priorities = {"goal": 85, "assist": 65, "red": 80, "yellow": 20, "on": 30}
 
     def matchup(self, state: dict[str, Any]) -> str:
         names = [(state.get(side) or {}).get("name") for side in ("home", "away")]
@@ -369,6 +370,12 @@ class Football(Sport):
         if (was_line or {}).get("headline") == "On the bench" and (now.line or {}).get("headline") not in (None, "On the bench"):
             found.append(Found("on", "minor", f"{who} comes on", where))
         return found
+
+    def told_by_several(self, kind: str, detail: str, title: str, who: str, names: str) -> str:
+        """A double substitution: "Rice and Saka come on"."""
+        if kind == "on" and title == f"{who} comes on":
+            return f"{names} come on"
+        return super().told_by_several(kind, detail, title, who, names)
 
     def taken_back(self, who: str, athlete_id: str, before: Seen, now: Seen, told: list[tuple[str, str]]) -> list[Found]:
         """A goal fans were told about that VAR has ruled out, and the assist on it: one that doesn't stand

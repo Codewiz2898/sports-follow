@@ -57,6 +57,7 @@ class Basketball(Sport):
         "key": ("30 points and the result", "Anyone reaching 30, 40 or 50 points, triple-doubles, tip-off and the result"),
         "more": ("20 points and double-doubles", "anyone's 20 points and double-doubles"),
     }
+    priorities = {"points": 30, "double": 30, "triple": 85}
 
     def team_ok(self, label: str) -> bool:
         return not label.lower().endswith(" football")  # a club's football side (Real Madrid's)
@@ -119,7 +120,7 @@ class Basketball(Sport):
         made = []
         if sum(1 for k in TENS if got.get(k, 0) >= 10) >= 3:
             head = re.match(r"\d+ PTS · \d+ REB · \d+ AST", line.get("headline") or "")
-            made.append(Poster("Triple-double", head[0] if head else versus, priority=85))  # moments.PRIORITY's
+            made.append(Poster("Triple-double", head[0] if head else versus, priority=85))  # a triple-double's (priorities)
         if (points := got.get("PTS", 0)) >= 30:
             made.append(Poster(f"{points} points", versus, priority=_points(max(k for k in MARKS if k <= points))))
         return max(made, key=lambda p: p.priority, default=None)

@@ -35,6 +35,7 @@ class Tennis(Sport):
         "more": ("every set", "each set"),
     }
     kind_words = {"set": "Set"}
+    priorities = {"set": 30, "upset": 90}
     stats_title = "Overview"
     games = ("match", "matches")
 

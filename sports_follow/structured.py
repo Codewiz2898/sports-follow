@@ -1241,6 +1241,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
     game_kept: tuple[str, str, int] | None = None  # the game's own poll, for Redis once this one is committed
     several = False  # a fixture of a game under several (boards), which notes it's told its side once committed
     new_moments: list[int] = []
+    left_out: set[int] = set()  # the followed players its team sheet leaves out: not in the game (Sport.left_out)
     with session() as db:
         event = db.get(Event, event_id)
         if event is None:
@@ -1255,9 +1256,11 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
         # minutes before kick-off); whether polling had a gap comes from the polls themselves.
         recent = _polled(event_id, int(live_binding.get("cadence") or 10))
         opened = opened_live(adapter, event, latest, now)
-        snap = hold_result(rules, snap, latest)
+        # A first look at a game long over tells nothing: by the source's own word, so it isn't held for its result as one
+        # still on, to be told as news the poll after (BUG-259).
+        old_news = long_over(rules, event, snap, now)
+        snap = snap if old_news else hold_result(rules, snap, latest)
         reopens = reopened(adapter, latest, snap)
-        old_news = long_over(rules, event, snap, now)  # a first look at it tells nothing
         if rules.engine:
             _evaluate(rules, db, event_id, snap, latest, [w[0] for w in watchers])
         if snap.squad:
@@ -1298,13 +1301,15 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
                 told = notify.told(db, player_id, event_id) if before else []  # what a source may take back (a goal VAR rules out)
                 if before is not None or not old_news:
                     new_moments += notify.record(db, player_id, event_id, moments.detect(sport, name, athlete_id, before, seen, told))
+            # A player the team sheet leaves out (Sport.left_out) isn't in the game: their page doesn't show it live, nor
+            # its result as theirs (it's taken down if it went up before the sheet was out), nor their fans its live card.
+            out = snap.status in ("live", "final") and sports.of(sport).left_out(seen)
+            if out:
+                left_out.add(player_id)
             card_row = db.get(PlayerCard, player_id)
             if card_row is None or card_row.status != "ready":
                 continue
             card_row.live_checked_at = now
-            # A player the team sheet leaves out (Sport.left_out) isn't in the game: their page doesn't show it live, nor
-            # its result as theirs; it's taken down if it went up before the sheet was out.
-            out = snap.status in ("live", "final") and sports.of(sport).left_out(seen)
             if out:
                 if ((card_row.card or {}).get("live") or {}).get("event_id") != event.id:
                     continue
@@ -1344,7 +1349,7 @@ def apply_poll(event_id: int, live_binding: dict[str, Any], adapter: Adapter, wa
     if published_game is not None:
         bus.publish_match(event_id, {"type": "match", "event_id": event_id, "match": published_game})
     notify.dispatch(new_moments)
-    livecards.polled(event, snap)  # its live card on Android phones, or its end
+    livecards.polled(event, snap, left_out)  # its live card on Android phones, or its end
     if published:
         log.info("poll %s: %s | %s -> %d card(s)", event_id, snap.score_label, snap.clock_label, len(published))
     wait = int(live_binding.get("cadence") or 10) if snap.status == "live" else 60
@@ -1385,7 +1390,7 @@ def _game_moments(db: Session, event: Event, adapter: Adapter, snap: Snapshot, r
     if before is None and old_news:
         found = []  # a first look at a game long over: its result is old news
     for f in found:
-        f.priority = f.priority or moments.PRIORITY.get(f.kind, 50)
+        f.priority = f.priority or moments.priority(rules, f.kind)
     gap = max(POLL_GAP, 3 * int((event.live_binding or {}).get("cadence") or 10))
     value = json.dumps({k: getattr(now, k) for k in ("status", "state", "score", "clock", "events", "lines")}, default=str)
     return notify.record_game(db, event.id, found, f"/match/{match_path(event.key)}"), (key, value, gap)
@@ -1398,7 +1403,7 @@ def hold_result(rules: sports.Sport, snap: Snapshot, latest: EventState | None) 
     """A poll of a finished game whose result is still to come from its source (Sport.result_pending: cricket's
     "Result" before "India won by 57 runs"), as it's applied: still on, for up to HOLD_RESULT polls in a row, so it's
     polled again and its fans hear who won; then over, however it reads. Its state counts the polls held ("held").
-    One already over here isn't held."""
+    One already over here isn't held, nor one long over (apply_poll: long_over), whose result is old news."""
     if snap.status != "final" or (latest is not None and latest.status == "final") or not rules.result_pending(snap.state, snap.score_label, snap.clock_label):
         return snap
     polls = int(((latest.state if latest is not None else None) or {}).get("held") or 0)

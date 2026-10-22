@@ -346,6 +346,10 @@ class Sport:
     # The big word an Android scorecard gives a moment of one of its own kinds (notify.word_and_line), where neither
     # high() nor the moment's title says one: football's "goal" is "Goal". The kinds every sport has are notify's.
     kind_words: dict[str, str] = {}
+    # How much a moment of one of its own kinds is worth interrupting a fan for, 0 to 100, where its rule doesn't say
+    # (moments.priority): a goal 85, a yellow card 20. The kinds every sport has (a start, a result, a line-up) are
+    # moments.PRIORITY's.
+    priorities: dict[str, int] = {}
     stats_title = "Season"  # the Stats tab's first view: a season's numbers, or an overview (ranking, form)
     keeps_names = False  # a player's sport is shown as written ("CS2"), not title-cased (esports' games)
 
@@ -439,8 +443,22 @@ class Sport:
         names = [t.get("name") for t in state.get("teams") or []]
         return " v ".join(n for n in names if n) if len(names) == 2 and all(names) else ""
 
-    def lineup_title(self, who: str, starting: bool) -> str:
+    def lineup_title(self, who: str, starting: bool, several: bool = False) -> str:
+        """A player's line-up moment's title ("Saka starts", "Saka is on the bench"), or `several` players' at once
+        (told_by_several: "Rice and Saka start")."""
+        if several:
+            return f"{who} start" if starting else f"{who} are on the bench"
         return f"{who} starts" if starting else f"{who} is on the bench"
+
+    def told_by_several(self, kind: str, detail: str, title: str, who: str, names: str) -> str:
+        """A moment several of a fan's players tell alike as one line naming them all (alerts.fold), from one's title, which
+        names them as `who`, and all their names (`names`: "Declan Rice and Bukayo Saka"): a line-up in its words for
+        several (lineup_title), anything else with the names in place of theirs, which reads right after a colon or as a
+        possessive ("TenZ and zekken: Sentinels win 2–0", "Rice and Saka's game has started"). A sport whose own words for
+        one player don't (football's "comes on") says them for several here (BUG-300)."""
+        if kind == "lineup" and detail in ("starting", "bench"):
+            return self.lineup_title(names, detail == "starting", several=True)
+        return names + title[len(who):] if who and title.startswith(who) else title
 
     def starts_unlisted(self, now: Seen) -> bool:
         """Whether a game starting is told for a player with no line in it yet (one player a side)."""
@@ -470,9 +488,10 @@ class Sport:
         long after this tells nothing, its result old news (structured.long_over). None without a start."""
         return start + self.lasts if start is not None else None
 
-    def paused(self, state: dict[str, Any], score: str, clock: str) -> bool:
-        """Whether a game that's on has stopped for the day, to go on tomorrow (a Test at stumps): its Android live card
-        comes down till play resumes (livecards.py), rather than go again all night. False for a break in play."""
+    def paused(self, state: dict[str, Any], score: str, clock: str, start: datetime | None = None, now: datetime | None = None) -> bool:
+        """Whether a game that's on has stopped for the day, to go on tomorrow (a Test at stumps), as its board says at
+        `now`, for a game that started at `start`: its Android live card comes down till play resumes (livecards.py),
+        rather than go again all night. False for a break in play."""
         return False
 
     def start(self, who: str, now: Seen) -> Found:
