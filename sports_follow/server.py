@@ -2694,15 +2694,20 @@ async def my_stream(request: Request, fan: str = Depends(fan_id)) -> StreamingRe
     they follow by themselves, and of their teams' games on now or soon (teams.event_ids), with their teams."""
     ids, games = await in_db(lambda db: (db.scalars(select(Follow.player_id).where(Follow.fan_id == fan)).all(),
                                          list(dict.fromkeys([*matches.event_ids(db, fan), *teams.event_ids(db, fan)]))))
+
+    async def first() -> list[dict[str, Any]]:
+        return [{"type": "following", "players": await _following(fan), "matches": await in_db(matches.mine, fan), "teams": await in_db(teams.mine, fan)}]
+
     if not ids and not games:
         async def idle():
+            # Nothing to hear yet, but the fan's list still comes first, as on any stream: an app whose fan was signed
+            # out elsewhere (it reads as nobody now), or stopped following everyone there, drops what it shows (BUG-162).
+            for event in await first():
+                yield f"data: {json.dumps(event, default=str)}\n\n"
             while not await request.is_disconnected():
                 yield PING
                 await asyncio.sleep(HEARTBEAT)
         return _sse(idle())
-
-    async def first() -> list[dict[str, Any]]:
-        return [{"type": "following", "players": await _following(fan), "matches": await in_db(matches.mine, fan), "teams": await in_db(teams.mine, fan)}]
 
     return _sse(_stream([*(bus.channel(i) for i in ids), *(bus.match_channel(e) for e in games)], first, request))
 
