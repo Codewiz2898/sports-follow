@@ -30,10 +30,10 @@ jobs:
           --health-cmd "pg_isready -U sports -d sports_follow"
           --health-interval 5s --health-timeout 3s --health-retries 10
     env:
-      # One throwaway database: migrated to head, then the tests that need Postgres empty it themselves.
+      # One throwaway database, migrated to head; each test worker works on a copy of it (tests/conftest.py),
+      # and the tests that need Postgres empty their copy themselves.
       DATABASE_URL: postgresql+psycopg://sports:sports@localhost:5432/sports_follow
       SPORTS_FOLLOW_TEST_DATABASE_URL: postgresql+psycopg://sports:sports@localhost:5432/sports_follow
-      SPORTS_FOLLOW_STOCKFISH: /usr/games/stockfish
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -45,8 +45,6 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22  # as in the web and mobile jobs
-      - name: Install Stockfish
-        run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends stockfish
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: Migrations have one head
@@ -58,9 +56,10 @@ jobs:
         run: alembic upgrade head
       - name: Models match the migrations
         run: alembic check
-      # Includes tests/test_web_names.py: web/src names sports and sources no more than it did.
+      # Includes tests/test_web_names.py: web/src names sports and sources no more than it did. Four workers
+      # (pytest-xdist), each on its own copy of the database: the tests mostly wait on Postgres, not the CPU.
       - name: Tests
-        run: python -m pytest -q -rs
+        run: python -m pytest -q -rs -n 4
 
   lint:
     name: Lint and types

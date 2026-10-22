@@ -1295,6 +1295,7 @@ FAN_READS = sorted(r.path for r in server.app.routes if isinstance(r, server.API
 def test_every_read_that_takes_a_fan_answers_without_a_cookie_and_sets_none(api, monkeypatch, path):
     """BUG-152 (BHA-473): what used to make a fan on the way works for nobody (the fan stream's is test_streams')."""
     monkeypatch.setattr(server.player_search, "run", lambda db, q, sport, fan, may_ask: {"query": q, "results": [], "partial": []})
+    monkeypatch.setattr(server.player_search, "preview", lambda system, athlete_id, league: None)  # else it asks Lichess
     answer = api.call("GET", path.format(**PATH_VALUES) + ("?q=someone" if path == "/api/search" else ""))
     assert answer.status_code < 500 and "sf_fan" not in answer.cookies, (answer.status_code, answer.text[:300])
 

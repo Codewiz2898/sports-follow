@@ -7,6 +7,44 @@ import tempfile
 import threading
 from pathlib import Path
 
+
+def _on_server(url: str, sql: str) -> None:
+    """Runs one statement on the test database's server, from its `postgres` database."""
+    from sqlalchemy import create_engine, make_url, text
+
+    engine = create_engine(make_url(url).set(database="postgres"), isolation_level="AUTOCOMMIT")
+    with engine.connect() as c:
+        c.execute(text(sql))
+    engine.dispose()
+
+
+def _copy_of(url: str, suffix: str) -> str:
+    """A copy of the test database for one pytest-xdist worker, dropped when its session ends.
+
+    The database tests empty their tables before each test: workers sharing one database would empty each
+    other's rows mid-test. The copy is at the migration the test database is at; nothing may be connected to
+    that one while the copies are made."""
+    from sqlalchemy import make_url
+
+    base = make_url(url)
+    copy = base.set(database=f"{base.database}_{suffix}")
+    _on_server(url, f'CREATE DATABASE "{copy.database}" TEMPLATE "{base.database}"')
+    return copy.render_as_string(hide_password=False)
+
+
+_COPY: str | None = None
+if os.environ.get("SPORTS_FOLLOW_TEST_DATABASE_URL") and os.environ.get("PYTEST_XDIST_WORKER"):
+    # Named for the run as well as the worker: two runs on one test database never drop each other's copies.
+    _COPY = _copy_of(os.environ["SPORTS_FOLLOW_TEST_DATABASE_URL"], f"{os.environ.get('PYTEST_XDIST_TESTRUNUID', '')[:8]}_{os.environ['PYTEST_XDIST_WORKER']}")
+    os.environ["SPORTS_FOLLOW_TEST_DATABASE_URL"] = _COPY
+
+
+def pytest_sessionfinish(session):
+    if _COPY:
+        from sqlalchemy import make_url
+
+        _on_server(_COPY, f'DROP DATABASE IF EXISTS "{make_url(_COPY).database}" WITH (FORCE)')
+
 # A run on a developer's machine is the run CI makes: no Redis (CI has none), the test database or none, and
 # none of ~/.config/sports-follow's keys. Else a test that goes further than its fakes reaches the main stack's
 # Redis, the dev database, a paid source or a real phone's notifications. Set before sports_follow is imported:
