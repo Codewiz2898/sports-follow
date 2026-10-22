@@ -5,7 +5,7 @@ import { json, request } from '../api'
 
 /** A sport: whether the server's settings let it run (SPORTS_FOLLOW_SPORTS), whether the panel has it on, its running
  * sources, and the group it's one of ("Esports" for each game; "" for none). */
-export interface AdminSport { key: string; label: string; group: string; allowed: boolean; on: boolean; running: boolean; sources: string[] }
+export interface AdminSport { key: string; label: string; group: string; allowed: boolean; on: boolean; running: boolean; sources: string[]; offered: boolean }
 
 /** A source this app knows, and why it does or doesn't run. */
 export interface AdminSource {

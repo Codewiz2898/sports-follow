@@ -62,8 +62,11 @@ function groups(sports: AdminSport[]): [string, AdminSport[]][] {
   return [...out]
 }
 
+/** What a sport's switch means now. One on with no source running and research off has nothing to show: fans
+ * aren't offered it (sports.offered on the server), and it should be turned off. */
 function sportStatus(s: AdminSport): string {
   if (!s.allowed) return "Off in the server's settings (SPORTS_FOLLOW_SPORTS)"
   if (!s.on) return 'Off'
-  return s.sources.length ? `On · from ${s.sources.join(', ')}` : 'On · no source runs: AI-built pages only'
+  if (s.sources.length) return `On · from ${s.sources.join(', ')}`
+  return s.offered ? 'On · no source runs: AI-built pages only' : 'On · no source runs and research is off: nothing to show; turn it off'
 }
