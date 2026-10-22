@@ -1076,6 +1076,8 @@ async def campaign_picture(slug: str) -> Response:
 # ---------------------------------------------------------------- where fans come from
 
 TAG_MOST = 60  # a link's tag, in characters (FanSource's columns)
+SOURCES_PER_ADDRESS = 100  # visits kept a UTC day from one client address: a script can't fill a campaign's numbers
+SOURCES_UNKNOWN_ADDRESS = 1000  # a day, from every client without a public address together
 
 
 def _tag(value: Any) -> str | None:
@@ -1086,17 +1088,30 @@ def _tag(value: Any) -> str | None:
 
 
 @app.post("/api/me/source")
-def visit_source(body: dict = Body(...), fan: str = Depends(fan_id), db: Session = Depends(get_db)) -> dict[str, bool]:
+async def visit_source(request: Request, body: dict = Body(...), fan: str = Depends(fan_id), signed: accounts.Signed | None = Depends(account_of)) -> dict[str, bool]:
     """Where this fan came from: the tags on the first link they opened (s=, utm_source, utm_medium,
     utm_campaign) and its page, kept once (FanSource); a later link's are not. A tag in any other shape is
-    left out (_tag), and a visit with none isn't kept."""
+    left out (_tag), and a visit with none isn't kept. Nor is one from a fan the request itself made up (no
+    cookie: the app's page, and the Android app's first request, make the device's fan before it tells this),
+    nor past SOURCES_PER_ADDRESS a day from one address: a script can't fill the launch numbers."""
     tags = {key: tag for key in ("s", "utm_source", "utm_medium", "utm_campaign") if (tag := _tag(body.get(key)))}
     landing = body.get("path")
     if not tags or not isinstance(landing, str) or not landing.startswith("/") or len(landing) > 200 or not landing.isprintable():
         return {"ok": True}
+    if signed is None and _cookie_fan(request) != fan:
+        return {"ok": True}
+    address = client_address(request)
+    key = f"sources:{address or 'unknown'}:{int(time.time() // DAY)}"
+    used = await state["redis"].incr(key)
+    await state["redis"].expire(key, 2 * DAY)
+    if used > (SOURCES_PER_ADDRESS if address else SOURCES_UNKNOWN_ADDRESS):
+        return {"ok": True}
     row = {"fan_id": fan, "tag": tags.get("s"), "utm_source": tags.get("utm_source"), "utm_medium": tags.get("utm_medium"), "utm_campaign": tags.get("utm_campaign"), "landing": landing}
-    db.execute(insert(FanSource).values(**row).on_conflict_do_nothing(index_elements=["fan_id"]))
-    db.commit()
+
+    def keep(db: Session) -> None:
+        db.execute(insert(FanSource).values(**row).on_conflict_do_nothing(index_elements=["fan_id"]))
+
+    await in_db(keep)
     return {"ok": True}
 
 

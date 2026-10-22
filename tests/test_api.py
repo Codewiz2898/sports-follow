@@ -1818,6 +1818,21 @@ def _sources(api: Api) -> list[dict]:
     return [{k: _param(s, k) for k in ("fan_id", "tag", "utm_source", "utm_medium", "utm_campaign", "landing")} for s in api.statements if isinstance(s, Insert) and s.table.name == "fan_source"]
 
 
+def test_where_fans_came_from_is_kept_for_fans_with_their_cookie_so_many_a_day_from_one_address(api, monkeypatch):
+    """BUG-149: a script with no cookie wrote a row each request (each one a new fan), inflating any campaign's launch
+    numbers without end. A visit is kept now only for a fan whose cookie came with it (the app's page makes one before
+    the app tells where it came from), and so many a day from one address."""
+    monkeypatch.setattr(server, "SOURCES_PER_ADDRESS", 3, raising=False)
+    body = {"utm_source": "h1probe", "path": "/gukesh"}
+    for _ in range(3):
+        assert api.call("POST", "/api/me/source", address=PUBLIC, body=body).json() == {"ok": True}
+    assert _sources(api) == []
+    for i in range(4):
+        api.call("POST", "/api/me/source", fan=f"fan-{i}", address=PUBLIC, body=body)
+    api.call("POST", "/api/me/source", fan="fan-9", address="81.2.69.143", body=body)  # another address isn't held up
+    assert [row["fan_id"] for row in _sources(api)] == ["fan-0", "fan-1", "fan-2", "fan-9"]
+
+
 def test_a_links_tags_are_kept_as_typed_spaces_and_all(api):
     """BUG-194: a tag with a space or a "|" ("Gukesh v Sindarov", "wcc|day1") was dropped, and a visit tagged only so
     wasn't kept at all. Any printable text is a tag now, its spaces trimmed and made single, up to 60 characters."""
