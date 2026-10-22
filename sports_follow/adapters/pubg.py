@@ -156,3 +156,9 @@ def match(match_id: str, summarize: Any) -> dict[str, Any] | None:
     summary = summarize(doc)
     _keep(key, summary, KEEP)
     return summary
+
+
+def kept(match_id: str) -> dict[str, Any] | None:
+    """One match as match() kept it, without asking PUBG: for a match it has dropped (14 days on), which it would
+    only answer with a 404. Empty for one PUBG had nothing at when it was read; None for one never read."""
+    return _cached(f"pubg:m:{match_id}")
