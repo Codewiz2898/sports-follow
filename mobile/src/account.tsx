@@ -1,6 +1,10 @@
 // Who this phone is signed in as (sports_follow/accounts.py), as the web's account.tsx: asked once at start,
 // which also renews the session. Signing in, out or deleting the account starts the app over: every list and
 // cached answer belonged to the fan this phone was a moment ago (the fan's providers start over on `epoch`).
+//
+// The first request at start is POST /api/me/start, which also makes this phone's anonymous fan (its cookie) if it
+// has none: a read makes none (server._fan), so until a phone has its fan the screens wait for that answer, and the
+// requests they send together are all one fan's (BUG-152).
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { router } from 'expo-router'
@@ -10,6 +14,10 @@ import { api, type Account, type Me, type ServerConfig } from './api'
 import { CloseIcon } from './icons'
 import { t } from './theme'
 import { Notice } from './ui'
+
+const HAS_FAN = 'stann.has-fan' // this phone has had its fan made: its screens needn't wait at start
+const LONGEST_MS = 4000 // the most a first start waits for its fan (offline: the screens start without one)
+const SIGNED_OUT = 'This device was signed out. Sign in again to see your players.'
 
 interface AccountState {
   me: Me | null // null until the server answers
@@ -31,29 +39,36 @@ function welcome(added: number): string {
 
 export function AccountProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null)
+  const [ready, setReady] = useState(false) // the fan's screens wait for this phone's fan, the first time
   const [config, setConfig] = useState<ServerConfig | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [epoch, setEpoch] = useState(0)
 
-  const ask = useCallback(() => api.account().then((answer) => {
+  /** Who this phone is, its fan made if it has none (POST /api/me/start). */
+  const start = useCallback(() => api.start().then((answer) => {
     setMe(answer)
-    if (answer.signed_in === false && answer.reason === 'signed_out') setNotice((said) => said ?? 'This device was signed out. Sign in again to see your players.')
-  }).catch(() => setMe({ signed_in: false })), [])
+    AsyncStorage.setItem(HAS_FAN, '1').catch(() => {})
+    if (answer.signed_in === false && answer.reason === 'signed_out') setNotice((said) => said ?? SIGNED_OUT)
+  }).catch(() => setMe((was) => was ?? { signed_in: false })), [])
 
   useEffect(() => {
-    ask()
+    let waiting = true
+    const go = () => { if (waiting) { waiting = false; setReady(true) } }
+    const timer = setTimeout(go, LONGEST_MS)
+    AsyncStorage.getItem(HAS_FAN).then((had) => { if (had) go() }).catch(go)
+    start().finally(go)
     api.config().then(setConfig).catch(() => {})
-  }, [ask])
+    return () => clearTimeout(timer)
+  }, [start])
 
-  /** Forget what this phone showed as the fan it was, and start the app over at `path`. */
+  /** Forget what this phone showed as the fan it was, and start the app over at `path`, as who it is now. */
   const startOver = useCallback((path: string, said: string | null) => {
-    AsyncStorage.removeItem('stann.alerts-seen').catch(() => {}).finally(() => {
+    AsyncStorage.removeItem('stann.alerts-seen').catch(() => {}).then(start).finally(() => {
       setNotice(said)
       setEpoch((n) => n + 1)
-      ask()
       router.replace(path as never)
     })
-  }, [ask])
+  }, [start])
 
   const dismissNotice = useCallback(() => setNotice(null), [])
   const signedIn = useCallback((account: Account) => startOver('/account', welcome(account.players_added ?? 0)), [startOver])
@@ -70,7 +85,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     () => ({ me, config, epoch, notice, dismissNotice, signedIn, signOut, deleteAccount }),
     [me, config, epoch, notice, dismissNotice, signedIn, signOut, deleteAccount],
   )
-  return <AccountContext value={value}>{children}</AccountContext>
+  return <AccountContext value={value}>{ready ? children : null}</AccountContext>
 }
 
 export function useAccount(): AccountState {

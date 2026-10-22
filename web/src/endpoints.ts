@@ -100,6 +100,8 @@ export function endpoints(request: Request) {
     mute: (eventId: number, muted: boolean) => request<{ event_id: number; muted: boolean }>(`/api/me/mutes/${eventId}`, { method: muted ? 'PUT' : 'DELETE' }),
     config: () => request<ServerConfig>('/api/config'),
     account: () => request<Me>('/api/me/account'),
+    /** The Android app's first request: who this device is, as `account`, and its anonymous fan made if it has none. */
+    start: () => request<Me>('/api/me/start', { method: 'POST' }),
     emailStart: (email: string) => request<{ ok: boolean; resend_in: number }>('/api/auth/email/start', json('POST', { email })),
     emailVerify: (email: string, code: string) => request<Account>('/api/auth/email/verify', json('POST', { email, code })),
     signOut: (everywhere = false) => request<{ signed_in: false }>('/api/auth/signout', json('POST', { everywhere })),
