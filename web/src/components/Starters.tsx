@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, type SearchResult, type StarterSport } from '../api'
 import { sportKey } from '../sports'
 import { starterReason } from '../today'
@@ -78,13 +78,15 @@ export function StarterPicker({ sports, chips = false, note }: { sports: Starter
   const [shown, setShown] = useState(sports.some((s) => s.key === lastChip) ? lastChip : sports[0]?.key ?? '')
   const { followed, toggle, busy: pendingFor, error } = useFollowToggle()
 
-  const groups = chips ? sports.filter((s) => s.key === shown) : sports
+  // The list can change under it (a game picked on Today, a third player followed): a chip no longer in it shows the first.
+  const current = sports.some((s) => s.key === shown) ? shown : sports[0]?.key ?? ''
+  const groups = chips ? sports.filter((s) => s.key === current) : sports
   return (
     <div className="stack" style={{ gap: 12 }}>
       {chips && sports.length > 1 && (
         <div className="chips" role="group" aria-label="Sport">
           {sports.map((s) => (
-            <button key={s.key} type="button" className="chip" data-sport={s.key} aria-pressed={shown === s.key} onClick={() => { lastChip = s.key; setShown(s.key) }}>
+            <button key={s.key} type="button" className="chip" data-sport={s.key} aria-pressed={current === s.key} onClick={() => { lastChip = s.key; setShown(s.key) }}>
               <span className="dot" />{s.label}
             </button>
           ))}
@@ -123,9 +125,11 @@ export function StarterPicker({ sports, chips = false, note }: { sports: Starter
 export function StartersSection({ few, game = null }: { few: boolean; game?: string | null }) {
   const { sports } = useStarters()
   const { cards, teams, sports: yours } = useFollowing()
+  const stays = useRef(new Set<string>())  // the fan's sports offered on this visit: following one from it keeps it
   if (!sports?.length) return null
   const followed = followedSports(cards, teams, sportKey)
-  const offered = startersOffered(sports, yours, followed, few, game)
+  const offered = startersOffered(sports, yours, followed, few, game, stays.current)
+  for (const s of offered) if (yours.includes(s.key)) stays.current.add(s.key)
   if (!offered.length) return null
   const note = (s: StarterSport) => (yours.includes(s.key) && !followed.has(s.key) ? `In ${s.label}, one of your sports. You follow nobody in it yet.` : null)
   return (

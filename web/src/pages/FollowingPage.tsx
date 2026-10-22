@@ -7,6 +7,7 @@ import { BackIcon, PlusIcon } from '../components/Icons'
 import { YourSportsRow } from '../components/YourSports'
 import { tileOrder, useFollowing } from '../following'
 import { sportInfo } from '../sports'
+import { yoursShown } from '../yourSports'
 import { LoadFailed } from './TodayPage'
 
 /** Every team and player the fan follows, as a grid of their sport's colours (Today's strip opens it; on a
@@ -17,7 +18,7 @@ export function FollowingPage() {
   const now = useNow()
   const live = cards.filter((c) => c.live.is_live).length + teams.filter((t) => t.live?.is_live).length
   const shown = useMemo(() => ({ cards, teams }), [cards, teams])  // a newer list of either tries again after a bad tile
-  const ownSports = sports.filter((k) => sportInfo(k).on).length
+  const ownSports = yoursShown(sports, sportInfo).length  // as the row shows them
   const counted = [ownSports && `${ownSports} ${ownSports === 1 ? 'sport' : 'sports'}`, cards.length && `${cards.length} ${cards.length === 1 ? 'player' : 'players'}`,
     teams.length && `${teams.length} ${teams.length === 1 ? 'team' : 'teams'}`].filter(Boolean)
   return (

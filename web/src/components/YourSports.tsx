@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { longestWordEms } from '../format'
 import { useFollowing } from '../following'
 import { runningSports, sportInfo, sportKey, type SportInfo } from '../sports'
-import { followedSports, sheetSummary, tickedAtFirst, tileGroups, toggled, toSave } from '../yourSports'
+import { followedSports, sheetSummary, tickedAtFirst, tileGroups, toggled, toSave, yoursShown } from '../yourSports'
 import { CheckIcon, EditIcon, PlusIcon } from './Icons'
 
 /**
@@ -95,7 +95,7 @@ export function YourSportsRow() {
   const { sports, sportsLoaded } = useFollowing()
   const [editing, setEditing] = useState(false)
   if (!sportsLoaded) return null
-  const shown = sports.map((key) => sportInfo(key)).filter((s, i) => s.on && s.key === sports[i])
+  const shown = yoursShown(sports, sportInfo)
   return (
     <section className="your-sports" aria-label="Your sports">
       <div className="your-sports-head">

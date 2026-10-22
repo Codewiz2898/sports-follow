@@ -28,7 +28,7 @@ const catalog = [sport('football'), sport('cricket'), sport('valorant', true, 'e
 const card = (sport) => ({ player: { sport } })
 const starters = [{ key: 'football', label: 'Football', players: [] }, { key: 'cricket', label: 'Cricket', players: [] }, { key: 'chess', label: 'Chess', players: [] }]
 const followed = y.followedSports([card('Cricket'), card('CRICKET')], [{ sport: 'chess' }], keyOf)
-const offered = (yours, few, game = null) => y.startersOffered(starters, yours, followed, few, game).map((s) => s.key)
+const offered = (yours, few, game = null, stays) => y.startersOffered(starters, yours, followed, few, game, stays).map((s) => s.key)
 const games = [{ k: 1, sport: 'chess' }, { k: 2, sport: 'football' }, { k: 3, sport: 'Cricket' }, { k: 4, sport: 'football' }, { k: 5, sport: 'golf' }]
 const order = (yours, arrange) => y.yoursFirst(games, (g) => g.sport, yours, keyOf, arrange).map((g) => g.k)
 const label = (k) => k[0].toUpperCase() + k.slice(1)
@@ -37,11 +37,13 @@ const here = f.gamesOnToday(blocks, keyOf)
 console.log(JSON.stringify({
   groups: y.tileGroups(catalog).map((g) => [g.group, g.sports.map((s) => s.key)]),
   followed: [...followed].sort(),
-  firstTicks: [y.tickedAtFirst([], followed, catalog), y.tickedAtFirst(['valorant', 'football'], followed, catalog)],
+  firstTicks: [y.tickedAtFirst([], followed, catalog), y.tickedAtFirst(['valorant', 'football'], followed, catalog), y.tickedAtFirst(['apex', 'chess'], followed, catalog), y.tickedAtFirst(['apex'], followed, catalog)],
+  shown: y.yoursShown(['chess', 'apex', 'basketball', 'cs2'], (k) => catalog.find((s) => s.key === k) ?? { key: 'other', on: true }).map((s) => s.key),
   toggled: [y.toggled(['chess'], 'football'), y.toggled(['chess', 'football'], 'chess')],
   toSave: [y.toSave(['football'], ['valorant', 'cricket', 'cs2'], catalog.filter((s) => s.key !== 'cs2')), y.toSave(['cs2'], ['cs2'], catalog.filter((s) => s.key !== 'cs2'))],
   summary: [y.sheetSummary(['cricket', 'chess', 'valorant', 'football'], ['cricket', 'chess', 'valorant'], label), y.sheetSummary(['chess'], ['cricket', 'chess', 'valorant'], label), y.sheetSummary([], ['chess'], label), y.sheetSummary(['chess'], ['chess'], label)],
-  starters: [offered(['football', 'cricket'], true), offered(['football', 'cricket'], false), offered([], false), offered(['football'], true, 'chess'), offered(['football'], false, 'cricket')],
+  starters: [offered(['football', 'cricket'], true), offered(['football', 'cricket'], false), offered([], false), offered(['football'], true, 'chess'), offered(['football'], false, 'cricket'),
+             offered(['football', 'cricket'], false, null, new Set(['cricket']))],
   first: [order(['football']), order([]), order(['cricket', 'chess']), order(['chess'], (lot) => [...lot].reverse())],
   inOrder: y.inYourOrder(['football', 'cricket', 'chess', 'cs2'], (k) => k, ['cs2', 'chess']),
   moved: [y.yoursMovedUp(games, (g) => g.sport, ['chess'], keyOf), y.yoursMovedUp(games.slice(0, 1), (g) => g.sport, ['chess'], keyOf), y.yoursMovedUp(games, (g) => g.sport, ['golf2'], keyOf)],
@@ -67,7 +69,11 @@ def test_the_tiles_are_every_sport_on_a_groups_games_after_under_its_name(found)
 
 def test_edit_ticks_the_fans_sports_else_those_of_who_they_follow(found):
     assert found["followed"] == ["chess", "cricket"]
-    assert found["firstTicks"] == [["cricket", "chess"], ["valorant", "football"]]  # in the tiles' order; theirs as saved
+    assert found["firstTicks"][:2] == [["cricket", "chess"], ["valorant", "football"]]  # in the tiles' order; theirs as saved
+    # One this app has no tile for isn't ticked (Save sends it back anyway); with only that, still nothing else ticked.
+    assert found["firstTicks"][2:] == [["chess"], []]
+    # Following's row, and its count: a sport this app's copy of the list doesn't know, or has off, isn't shown.
+    assert found["shown"] == ["chess", "cs2"]
     assert found["toggled"] == [["chess", "football"], ["football"]]  # a tick goes at the end of their order
 
 
@@ -85,7 +91,8 @@ def test_starters_past_the_first_few_are_of_their_sports_they_follow_nobody_in(f
     """A fan who picked football and followed three cricketers is still offered footballers; none of cricket, whose
     players they follow; none of a sport they didn't pick. With a game picked on Today, its own alone: chess while they
     follow few, but cricket's none once they follow some cricketers."""
-    assert found["starters"] == [["football", "cricket", "chess"], ["football"], [], ["chess"], []]
+    assert found["starters"] == [["football", "cricket", "chess"], ["football"], [], ["chess"], [], ["football", "cricket"]]
+    # The last: cricket was offered on this visit, so following a cricketer from it doesn't take it away (the review's).
 
 
 def test_the_fans_sports_come_first_each_lot_as_it_was(found):

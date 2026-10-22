@@ -175,6 +175,7 @@ function GameChips({ row, game, onPick }: { row: GameRow; game: SportInfo | null
   const box = useRef<HTMLDivElement>(null)
   const [finding, setFinding] = useState(false)
   const [editing, setEditing] = useState(false)
+  const { sportsLoaded } = useFollowing()  // the fan's sports as the server has them, before the sheet can save over them
   const picked = game?.key
   useEffect(() => {
     const line = box.current
@@ -203,16 +204,17 @@ function GameChips({ row, game, onPick }: { row: GameRow; game: SportInfo | null
           <SearchIcon width={18} height={18} />
         </button>
       )}
-      {finding && <FindGame games={row.more} onPick={onPick} onClose={() => setFinding(false)} onYourSports={() => setEditing(true)} />}
+      {finding && <FindGame games={row.more} onPick={onPick} onClose={() => setFinding(false)} onYourSports={sportsLoaded ? () => setEditing(true) : undefined} />}
       {editing && <YourSportsSheet onClose={() => setEditing(false)} />}
     </div>
   )
 }
 
 /** The row's search: the other games with something on Today, narrowed as the fan types; a tap shows that one. At
- * its foot, the way to the fan's sports (`onYourSports`: the Edit sheet, in its place), so a game they came looking
- * for gets a chip every day. From the bottom on a phone, a box in the middle on a desktop, as the Feed's "…" sheet. */
-function FindGame({ games, onPick, onClose, onYourSports }: { games: SportInfo[]; onPick: (key: string) => void; onClose: () => void; onYourSports: () => void }) {
+ * its foot, the way to the fan's sports (`onYourSports`: the Edit sheet, in its place, once their sports have come),
+ * so a game they came looking for gets a chip every day. From the bottom on a phone, a box in the middle on a
+ * desktop, as the Feed's "…" sheet. */
+function FindGame({ games, onPick, onClose, onYourSports }: { games: SportInfo[]; onPick: (key: string) => void; onClose: () => void; onYourSports?: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const [words, setWords] = useState('')
   useEffect(() => {
@@ -238,13 +240,15 @@ function FindGame({ games, onPick, onClose, onYourSports }: { games: SportInfo[]
           ))}
           {!found.length && <span className="muted small">No game by that name on today</span>}
         </div>
-        <button type="button" className="your-sports-link" aria-haspopup="dialog" onClick={() => { dialog.current?.close(); onYourSports() }}>
-          <span className="stack" style={{ gap: 3, flex: 1, minWidth: 0 }}>
-            <span className="title">Want one in your row every day?</span>
-            <span className="small muted">Add it to your sports: it gets a chip, and players to follow.</span>
-          </span>
-          <span className="go">Your sports</span>
-        </button>
+        {onYourSports && (
+          <button type="button" className="your-sports-link" aria-haspopup="dialog" onClick={() => { dialog.current?.close(); onYourSports() }}>
+            <span className="stack" style={{ gap: 3, flex: 1, minWidth: 0 }}>
+              <span className="title">Want one in your row every day?</span>
+              <span className="small muted">Add it to your sports: it gets a chip, and players to follow.</span>
+            </span>
+            <span className="go">Your sports</span>
+          </button>
+        )}
         <button type="button" className="btn primary" onClick={() => dialog.current?.close()}>Close</button>
       </div>
     </dialog>

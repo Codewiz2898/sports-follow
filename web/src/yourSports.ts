@@ -25,10 +25,15 @@ export function followedSports(cards: Card[], teams: FollowedTeam[], keyOf: KeyO
   return new Set([...cards.map((c) => keyOf(c.player.sport)), ...teams.map((t) => keyOf(t.sport))])
 }
 
-/** What the Edit sheet ticks as it opens: the fan's sports, or, with none saved yet, the sports of who they follow
- * (`followed`), in the tiles' order. Nothing is saved until Save. */
+/** What the Edit sheet ticks as it opens: the fan's sports it has a tile for, or, with none saved yet, the sports of
+ * who they follow (`followed`), in the tiles' order. Nothing is saved until Save. */
 export function tickedAtFirst(saved: string[], followed: Set<string>, tiles: SportInfo[]): string[] {
-  return saved.length ? saved : tiles.filter((s) => followed.has(s.key)).map((s) => s.key)
+  return saved.length ? saved.filter((k) => tiles.some((s) => s.key === k)) : tiles.filter((s) => followed.has(s.key)).map((s) => s.key)
+}
+
+/** The fan's sports as this app knows them (`info`: its copy of GET /api/sports), on: what Following's row shows. */
+export function yoursShown(saved: string[], info: (key: string) => SportInfo): SportInfo[] {
+  return saved.map(info).filter((s, i) => s.on && s.key === saved[i])
 }
 
 /** A tile tapped: ticked at the end of the fan's order, or unticked. */
@@ -81,10 +86,12 @@ export function yoursMovedUp<T>(items: T[], sportOf: (item: T) => string | null 
 /**
  * Today's "Players to follow": each sport's starters (GET /api/starters), the fan's sports first. While the fan
  * follows few players (`few`), every sport's; after, only those of the fan's sports they follow nobody in
- * (`followed`), so a fan who picked football and followed three cricketers is still offered footballers. With a game
- * picked on Today, its own alone.
+ * (`followed`), so a fan who picked football and followed three cricketers is still offered footballers, and those of
+ * theirs it already offered on this visit (`stays`), so following one from a sport doesn't take the rest away. With a
+ * game picked on Today, its own alone.
  */
-export function startersOffered(starters: StarterSport[], yours: readonly string[], followed: Set<string>, few: boolean, game: string | null): StarterSport[] {
-  const offered = inYourOrder(starters, (s) => s.key, yours).filter((s) => few || (yours.includes(s.key) && !followed.has(s.key)))
+export function startersOffered(starters: StarterSport[], yours: readonly string[], followed: Set<string>, few: boolean, game: string | null,
+  stays: ReadonlySet<string> = new Set()): StarterSport[] {
+  const offered = inYourOrder(starters, (s) => s.key, yours).filter((s) => few || (yours.includes(s.key) && (!followed.has(s.key) || stays.has(s.key))))
   return game ? offered.filter((s) => s.key === game) : offered
 }

@@ -32,7 +32,8 @@ interface FollowingState {
   isFollowingTeam: (teamId: number) => boolean
   setTeamAlerts: (teamId: number, level: AlertLevel) => Promise<void>
   // The sports the fan said they watch, in their order (sports_follow/fansports.py: those the server offers now), and
-  // whether they've come; saving the list (the welcome's Next, Following's Edit), or the error's the caller's.
+  // whether the server has said them (not while its answer fails: no list then, rather than an empty one to save
+  // over theirs); saving the list (the welcome's Next, Following's Edit), or the error's the caller's.
   sports: string[]
   sportsLoaded: boolean
   saveSports: (keys: string[]) => Promise<void>
@@ -118,6 +119,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const [sports, setSports] = useState<string[]>([])
   const [sportsLoaded, setSportsLoaded] = useState(false)
   const savingSports = useRef(0)  // saves of the fan's sports under way: a list from before one isn't taken meanwhile
+  const sportsSaves = useRef(0)  // and how many there have been: an answer asked for before the latest isn't taken
   const idsKey = cards.map((c) => c.player_id).sort((a, b) => a - b).join(',')
   const gamesKey = matches.map((m) => m.event_id).sort((a, b) => a - b).join(',')
   // A followed team's games are on the stream from a day and a half before (teams.event_ids): a follow, or one of
@@ -167,8 +169,30 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
   const reloadMatches = useCallback(() => api.matches().then((r) => setMatches(r.matches), () => {}).finally(() => setMatchesLoaded(true)), [])
   useEffect(() => { reloadMatches() }, [reloadMatches])
 
-  const reloadSports = useCallback(() => api.mySports().then((r) => { if (!savingSports.current) setSports(r.sports) }, () => {}).finally(() => setSportsLoaded(true)), [])
-  useEffect(() => { reloadSports() }, [reloadSports])
+  /** The fan's sports as the server has them now; true once it has said them (a list asked for before a save of this
+   * app's says what it replaced, so it isn't taken). */
+  const reloadSports = useCallback(() => {
+    const asked = sportsSaves.current
+    return api.mySports().then((r) => {
+      if (savingSports.current || asked !== sportsSaves.current) return true
+      setSports(r.sports)
+      setSportsLoaded(true)
+      return true
+    }, () => false)
+  }, [])
+  // Until they've come, try again: soon, then less often (as the follow list does).
+  useEffect(() => {
+    let wait = RETRY_MS
+    let stopped = false
+    let timer: number | undefined
+    const ask = () => reloadSports().then((ok) => {
+      if (ok || stopped) return
+      timer = window.setTimeout(ask, wait)
+      wait = Math.min(wait * 2, RETRY_MAX_MS)
+    })
+    void ask()
+    return () => { stopped = true; window.clearTimeout(timer) }
+  }, [reloadSports])
 
   // Until the list loads, try again: soon, then less often, and at once on coming back online or to the app.
   useEffect(() => {
@@ -373,6 +397,7 @@ export function FollowingProvider({ children }: { children: ReactNode }) {
 
   const saveSports = useCallback(async (keys: string[]) => {
     savingSports.current++
+    sportsSaves.current++
     try {
       const r = await api.setMySports(keys)
       setSports(r.sports)

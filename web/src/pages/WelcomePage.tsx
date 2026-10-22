@@ -6,7 +6,7 @@ import { StarterPicker, useFollowToggle, useStarters } from '../components/Start
 import { SportTiles } from '../components/YourSports'
 import { CheckIcon, SearchIcon } from '../components/Icons'
 import { useFollowing } from '../following'
-import { runningSports, sportInfo } from '../sports'
+import { askAgain, catalogKnown, runningSports, sportInfo } from '../sports'
 import { inYourOrder, toggled, toSave } from '../yourSports'
 
 const WELCOMED = 'sf-welcomed'
@@ -48,8 +48,23 @@ export function WelcomePage() {
   }
 
   if (!offering) {
-    markWelcomed()  // no sport on to pick: Today's own start, finding a player
-    return <Navigate to="/" replace />
+    const known = catalogKnown()
+    if (known === 'known') {
+      markWelcomed()  // no sport on to pick: Today's own start, finding a player
+      return <Navigate to="/" replace />
+    }
+    if (known === 'asking') return <span className="spinner" aria-label="Loading" />
+    // Not marked unless skipped: the welcome comes back once the server answers.
+    return (
+      <div className="stack" style={{ gap: 12 }}>
+        <div className="error-box">Couldn't load the sports. Try again in a moment, or find a player yourself.</div>
+        <div className="row">
+          <button type="button" className="btn link" onClick={finish}>Skip</button>
+          <button type="button" className="btn" onClick={askAgain}>Try again</button>
+          <Link to="/search" className="btn primary">Find a player</Link>
+        </div>
+      </div>
+    )
   }
   const next = () => {
     setStep(2)
