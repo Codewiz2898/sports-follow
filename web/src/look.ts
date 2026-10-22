@@ -11,6 +11,7 @@ export interface Look { logo: string | null; short: string; colours: TeamColours
 
 const MOST = 80  // keys one ask carries (logos.LOOKS_MOST)
 const WAIT_MS = 20  // keys asked for this close together go in one ask
+const AGAIN_MS = 60_000  // after a failed ask, its keys are asked again this long after
 const kept = new Map<string, Look | null>()  // null: asked, and the registry hasn't the team
 const asking = new Set<string>()
 const heard = new Set<() => void>()
@@ -31,7 +32,10 @@ function flush() {
     const some = keys.slice(i, i + MOST)
     request<{ looks: Record<string, Look> }>(`/api/looks?teams=${some.map(encodeURIComponent).join(',')}`).then(
       (r) => { for (const k of some) kept.set(k, r.looks[k] ?? null) },
-      () => { for (const k of some) kept.set(k, null) },  // badges and the sport's band, until the page is opened again
+      () => {  // badges and the sport's band for now; asked again by a screen a minute on
+        for (const k of some) kept.set(k, null)
+        setTimeout(() => { for (const k of some) if (kept.get(k) === null) kept.delete(k) }, AGAIN_MS)
+      },
     ).finally(() => {
       for (const k of some) asking.delete(k)
       for (const fn of heard) fn()

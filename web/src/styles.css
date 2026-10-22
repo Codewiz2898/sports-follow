@@ -641,7 +641,7 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 @keyframes crest-in-l { from { transform: translateX(-220px) rotate(-16deg); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes crest-in-r { from { transform: translateX(220px) rotate(16deg); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes v-pop { from { transform: scale(0); } to { transform: scale(1); } }
-@keyframes rise { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes rise { from { translate: 0 12px; opacity: 0; } to { translate: 0 0; opacity: 1; } }  /* translate: a name keeps its slant (.dsp) */
 
 /* The band in the two teams' colours (7a): split on a slant, each team's accent a stripe at the seam, each half
    sweeping in from its side. What's the game's, not a side's, sits in a pill or a card of its own. */

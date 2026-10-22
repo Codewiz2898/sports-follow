@@ -129,7 +129,7 @@ function GameTeams({ teams }: { teams: GameTeam[] }) {
           return (
             <li key={t.team_id} className="result">
               <Link to={`/team/${t.team_id}`} className="result-main">
-                <Crest look={t.key ? looks[t.key] : null} name={t.name} size={44} />
+                <Crest look={t.key ? looks[t.key] : null} name={t.name} size={44} disc={discFor(t.key ? looks[t.key] : null, '#ffffff')} />
                 <span className="stack">
                   <span className="title">{t.name}</span>
                   <span className="small muted">{on ? 'Every game of theirs, from both sides' : t.can_follow ? 'Follow every game of theirs' : "Its games can't be followed here now"}</span>
@@ -213,7 +213,10 @@ export function MatchPage() {
   const soon = startsIn(match, now)
   // Its sides' looks: the band in their colours where both have them, else the sport's; until they're known, neither.
   const pending = faced != null && faced.some((t) => looks[t.key] === undefined)
-  const sides = faced && !pending ? sidesOf(looks[faced[0].key], looks[faced[1].key]) : null
+  // Home and away as the server sends them, for the clash rule (the away side changes), then in the board's order.
+  const flipped = faced != null && faced[0] !== match.teams?.[0]
+  const paired = faced && !pending ? sidesOf(looks[(flipped ? faced[1] : faced[0]).key], looks[(flipped ? faced[0] : faced[1]).key]) : null
+  const sides: [Side, Side] | null = paired && flipped ? [paired[1], paired[0]] : paired
   const colours = sides
     ? ({ '--l': sides[0].fill, '--la': sides[0].accent, '--ra': sides[1].accent, '--r': sides[1].fill, '--l-ink': sides[0].ink, '--r-ink': sides[1].ink } as CSSProperties)
     : undefined
