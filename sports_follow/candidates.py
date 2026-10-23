@@ -123,9 +123,9 @@ def phrases(players: list[Followed]) -> dict[int, set[tuple[str, ...]]]:
       other of these players has in any of their names;
     - a one-word nickname, and the last word of their name and of each alias that's a form of it (shares a word with
       it: "Dommaraju Gukesh", not "The Wall"), when it's at least SHORT_NAME letters and no other of these players
-      has that word in any of their names (two Sharmas followed: "Sharma" names neither). An initial is never one:
-      the word before it is the last, and a name that ends in one ("Gukesh D", as FIDE writes it) gives its first
-      word too ("Gukesh").
+      has that word in any of their names (two Sharmas followed: "Sharma" names neither). An initial (a letter,
+      not a digit) is never one: the word before it is the last, and a name that ends in one ("Gukesh D", as FIDE
+      writes it) gives its first word too ("Gukesh").
     """
     owners: dict[str, set[int]] = {}
     for p in players:
@@ -154,21 +154,27 @@ def phrases(players: list[Followed]) -> dict[int, set[tuple[str, ...]]]:
                 words = _named(spelling)
                 if len(spelling) < 2 or not own & set(words):
                     continue
-                ends = {words[-1], words[0]} if len(spelling[-1]) == 1 else {words[-1]}
+                ends = {words[-1], words[0]} if _initial(spelling[-1]) else {words[-1]}
                 found.update((w,) for w in ends if theirs(w, p.player_id))
         out[p.player_id] = found
     return out
 
 
+def _initial(word: str) -> bool:
+    """Whether a name's word is an initial: a letter alone ("d"), never a digit ("dota 6" doesn't end in one, so it
+    isn't "Dota" in every title of the game)."""
+    return len(word) == 1 and word.isalpha()
+
+
 def _named(spelling: list[str]) -> list[str]:
     """A name's words without its initials ("d", "m", "s"): no one is named by a letter."""
-    return [w for w in spelling if len(w) > 1]
+    return [w for w in spelling if not _initial(w)]
 
 
 def _without_initials(name: str) -> str | None:
     """A name that ends in initials as FIDE writes it, "Gukesh D", without them ("Gukesh"); None for any other."""
     parts = name.split()
-    while parts and (letters := naming.words(parts[-1])) and all(len(w) == 1 for w in letters):
+    while parts and (letters := naming.words(parts[-1])) and all(_initial(w) for w in letters):
         parts.pop()
     return " ".join(parts) if parts and len(parts) < len(name.split()) else None
 

@@ -183,8 +183,8 @@ def test_what_youtube_says_is_left_of_the_days_searches_counts_too(fake):
 
 def test_the_default_caps_are_inside_the_days_searches_and_their_reads_inside_its_units():
     """40 moment searches and the sweeps' 39 a day, and the pool sweep's 10 (BHA-382), are 89 of the 95 spendable
-    searches; the channel poll's day (each channel's uploads playlist read every half hour: 101
-    channels, 4,848 units, and once more for a restart), the other reads and a videos.list read for each search's finds
+    searches; the channel poll's day (each channel's uploads playlist read every half hour: 102
+    channels, 4,896 units, and once more for a restart), the other reads and a videos.list read for each search's finds
     stay inside the 9,000 spendable units, with room for the 70 more channels the README says fit."""
     from sports_follow import config
 
