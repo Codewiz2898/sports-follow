@@ -618,7 +618,7 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
    white ring) where it has none or its sport's logos are off. */
 .crest { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: var(--crest, 40px); height: var(--crest, 40px); }
 .crest img { width: 100%; height: 100%; object-fit: contain; border-radius: calc(var(--crest, 40px) * 0.08); }  /* a flag's corners; a crest's are clear */
-.crest.disc { border-radius: 50%; }
+.crest.disc { border-radius: 50%; background: var(--disc); }
 .crest.disc img { width: 70%; height: 70%; }
 .crest.badge { border-radius: 50%; background: #fff; color: #0d0d0d; box-shadow: inset 0 0 0 max(2px, calc(var(--crest, 40px) / 22)) #0d0d0d; font-family: var(--display); font-size: calc(var(--crest, 40px) * 0.34); line-height: 1; text-transform: uppercase; letter-spacing: 0.01em; }
 .crest.badge.long { font-size: calc(var(--crest, 40px) * 0.27); }
@@ -681,6 +681,39 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
   .match-band.duo::before, .match-band.duo::after, .faceoff-side .crest, .faceoff-v > span, .faceoff-name { animation: none; }
 }
 @media (min-width: 640px) { .match-verdict { font-size: 44px; } }
+
+/* A team's page (BHA-681): the band is its banner (9c), in its colour with its second past a seam on 7a's slant, its
+   crest on the seam and its name at the foot. Once its look is known (shown) its colours sweep in as 7a's halves do,
+   and its crest slides in; a team with none wears its sport's, with an ink second. */
+.team-band { --fill: var(--sport); --accent: #0d0d0d; --seam: #fff; --seam-at: 40px; --mark: 132px; --mark-y: 84px; isolation: isolate; min-height: 380px; }
+.team-band > .stack { margin-top: auto; max-width: calc(100% - var(--seam-at) - 116px); }  /* clear of the seam at its foot */
+.team-band.shown { background: #e8e8e2; }
+.team-band.shown::before, .team-band.shown::after { content: ""; position: absolute; z-index: -1; pointer-events: none; }
+.team-band.shown::before { inset: 0; background: var(--fill); animation: half-in-l 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+/* The second colour: a block from --seam-at in from the right edge at the top, leaning back 18° (7a's 108deg), its
+   left edge the seam. It slides in on translate: its transform is the lean. */
+.team-band.shown::after { top: 0; bottom: 0; left: calc(100% - var(--seam-at)); width: 200%; border-left: 6px solid var(--seam); background: var(--accent); transform: skewX(-18deg); transform-origin: top left; animation: wedge-in 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) 0.08s both; }
+@keyframes wedge-in { from { translate: 100vw 0; } to { translate: 0 0; } }
+.team-band.coloured { color: var(--ink); --focus: var(--ink); }
+.team-band.coloured .player-meta { color: color-mix(in srgb, var(--ink) 82%, transparent); }
+.team-band > .stack > .tag.soft { align-self: flex-start; display: inline-flex; align-items: center; height: 26px; padding: 0 11px; border-radius: 999px; background: var(--sport); color: var(--on-sport); box-shadow: 0 0 0 2px #fff; }
+/* White buttons, so they show on any team's colour, as on 7a's band. */
+.team-band > .bar .btn, .team-band > .bar .btn:hover { border-color: #0d0d0d; background: #fff; color: #0d0d0d; }
+.team-band > .bar .btn[aria-pressed='true'] { background: #0d0d0d; color: #fff; }
+.team-band > .bar .btn.icon { box-shadow: inset 0 0 0 2px #0d0d0d; }  /* ringed, so it shows on a white side (Real Madrid) */
+.team-band > .bar .btn.icon[aria-expanded='true'] { box-shadow: inset 0 0 0 2px #0d0d0d, 0 0 0 3px #fff, 0 0 0 5px #0d0d0d; }
+/* The crest: on the seam where it crosses the crest's middle, in a disc ringed in the seam's colour; a flag a
+   rectangle. */
+.team-band > .team-mark { position: absolute; top: var(--mark-y); right: calc(var(--seam-at) - 3px + 0.3249 * (var(--mark-y) + var(--mark) / 2) - var(--mark) / 2); display: flex; align-items: center; justify-content: center; width: var(--mark); height: var(--mark); }
+.team-mark .crest { width: var(--mark); height: var(--mark); box-shadow: 0 0 0 4px var(--seam); animation: crest-in-r 0.8s cubic-bezier(0.2, 1.25, 0.35, 1) 0.32s both; }
+.team-mark .crest.badge { box-shadow: inset 0 0 0 max(2px, calc(var(--crest, 40px) / 22)) #0d0d0d, 0 0 0 4px var(--seam); }
+.team-mark .crest.wide { width: calc(var(--mark) * 1.1); height: calc(var(--mark) * 0.74); border-radius: 14px; background: none; overflow: hidden; }
+.team-mark .crest.wide img { width: 100%; height: 100%; object-fit: cover; border-radius: 0; }
+@media (min-width: 640px) { .team-band { --seam-at: max(56px, 18%); --mark: 148px; } }  /* a wide band keeps both colours in sight */
+@media (min-width: 1024px) { .team-band { --mark-y: 88px; } }
+@media (prefers-reduced-motion: reduce) {
+  .team-band.shown::before, .team-band.shown::after, .team-mark .crest { animation: none; }
+}
 .match-sides { gap: 16px; }
 .match-sides .who { display: flex; flex-wrap: wrap; gap: 6px; }
 /* Watch live (components/Watch.tsx): the first stream a block of the sport's colour, its player a tap away (16:9 at

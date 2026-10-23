@@ -524,18 +524,19 @@ export function PlayerRow({ card, progress }: { card: Card; progress?: string[] 
 }
 
 /** The top of a player's page (and an athlete's preview): a block of their sport's colour, with their
- * photo and its credit when there is one (.with-photo keeps the words off it). */
-export function PlayerBand({ name, sport, meta, photo, back, actions, crest, children }: { name: string; sport?: string | null; meta?: string; photo?: Photo | null; back: ReactNode; actions?: ReactNode; crest?: ReactNode; children?: ReactNode }) {
+ * photo and its credit when there is one (.with-photo keeps the words off it). A team's page draws its banner on it
+ * (className, style) and puts its crest on the banner's seam (crest). */
+export function PlayerBand({ name, sport, meta, photo, back, actions, crest, className, style, children }: { name: string; sport?: string | null; meta?: string; photo?: Photo | null; back: ReactNode; actions?: ReactNode; crest?: ReactNode; className?: string; style?: CSSProperties; children?: ReactNode }) {
   const [shown, drop] = usePhoto(photo)
   return (
-    <header className={`player-band${shown ? ' with-photo' : ''}`} data-sport={sportKey(sport)}>
+    <header className={`player-band${shown ? ' with-photo' : ''}${className ? ` ${className}` : ''}`} data-sport={sportKey(sport)} style={style}>
       {shown && <PlayerPhoto photo={shown} onError={drop} />}
       <div className="bar">
         {back}
         <span className="row" style={{ gap: 8 }}>{actions}</span>
       </div>
+      {crest}
       <div className="stack" style={{ gap: 10 }}>
-        {crest}
         {sport && <span className="tag soft">{sportName(sport)}</span>}
         <h1 className="dsp player-name" style={{ '--ems': longestWordEms(name) } as CSSProperties}>{name}</h1>
         {meta && <span className="player-meta">{meta}</span>}

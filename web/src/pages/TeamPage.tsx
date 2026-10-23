@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useActivity } from '../activity'
 import { APP_NAME } from '../app'
 import { api, ApiError, type TeamPage as Team } from '../api'
 import { useNow } from '../clock'
-import { TeamCrest } from '../components/Crest'
+import { Crest, onColour } from '../components/Crest'
 import { FormStrip, LiveScoreboard, PlayerBand, ResultsList, SectionHead, UpcomingList } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon } from '../components/Icons'
@@ -13,6 +13,7 @@ import { ShareButton } from '../components/Share'
 import { useFollowToggle } from '../components/Starters'
 import { relative } from '../format'
 import { useFollowing } from '../following'
+import { bannerOf, useLooks } from '../look'
 import { EVERY, nextLook } from '../match'
 import { AlertLevels, LEVELS, teamLevelText } from '../notifications'
 import { shareTeam } from '../share'
@@ -60,8 +61,8 @@ function useTeam(teamId: number): { team: Team | null; failed: string | null; ag
 }
 
 /**
- * One team (sports_follow/teams.py): a block of its sport's colour with its name, what it plays in, Follow and,
- * once followed, its alert level and "Mute this game" for its game on now. Then its game on now (the board, to
+ * One team (sports_follow/teams.py): its banner (its two colours, its crest on the seam) with its name, what it plays
+ * in, Follow and, once followed, its alert level and "Mute this game" for its game on now. Then its game on now (the board, to
  * its match page), its games to come and its last results from its side with its form, and its squad, each
  * player followed with a tap. Following the team doesn't follow its players.
  */
@@ -69,6 +70,7 @@ export function TeamPage() {
   const params = useParams()
   const teamId = /^\d+$/.test(params.id ?? '') ? Number(params.id) : NaN
   const { team, failed, again } = useTeam(teamId)
+  const looks = useLooks([team?.key])
   const following = useFollowing()
   // A followed team's games read anew (a follow's first read, a page that asked) reach Following too: its tile,
   // and which of its games the fan stream carries.
@@ -95,6 +97,11 @@ export function TeamPage() {
   const isFollowing = following.loaded ? mine != null : team.following
   const level = mine?.alerts ?? team.alerts
   const live = team.live?.is_live ? team.live : null
+  // Its banner (9c): its colours, or its sport's with an ink second where it has none; its sport's alone, and no crest,
+  // until its look is known.
+  const look = team.key ? looks[team.key] : null
+  const banner = bannerOf(look)
+  const colours = banner ? ({ '--fill': banner.fill, '--accent': banner.accent, '--seam': banner.seam, '--ink': banner.ink } as CSSProperties) : undefined
   const attempt = (work: () => Promise<unknown>) => { setError(null); return work().catch((e: Error) => setError(e.message)) }
   const toggle = async () => {
     setBusy(true)
@@ -113,7 +120,9 @@ export function TeamPage() {
         sport={team.sport}
         meta={[team.detail, team.followers ? `${team.followers} following` : ''].filter(Boolean).join(' · ')}
         back={back}
-        crest={<TeamCrest teamKey={team.key} name={team.name} size={96} coloured />}
+        className={`team-band${look !== undefined ? ' shown' : ''}${banner ? ' coloured' : ''}`}
+        style={colours}
+        crest={look !== undefined && <span className="team-mark"><Crest look={look} name={team.name} size={132} disc={onColour(look)} eager /></span>}
         actions={
           <>
             <ShareButton {...shareTeam(team.team_id, team.name, APP_NAME)} />

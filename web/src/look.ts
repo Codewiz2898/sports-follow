@@ -122,3 +122,16 @@ export function sidesOf(home: Look | null | undefined, away: Look | null | undef
   const side = (c: TeamColours, look: Look | null | undefined): Side => ({ fill: c.fill, accent: c.accent, ink: inkOn(c.fill), disc: discFor(look, c.fill) })
   return [side(h, home), side(a, away)]
 }
+
+/** A team's banner on its page (9c): its colour, its second past a slant, the ink on its colour, and the seam
+ * between them. */
+export interface Banner { fill: string; accent: string; ink: string; seam: string }
+
+/** A team's banner, or null where it has no colours (its sport's, with an ink second). The seam is white, or ink where
+ * either colour is near white already (Real Madrid's white and gold). */
+export function bannerOf(look: Look | null | undefined): Banner | null {
+  const c = look?.colours
+  if (!c) return null
+  const pale = (x: string) => apart(x, '#ffffff') < CLASH
+  return { fill: c.fill, accent: c.accent, ink: inkOn(c.fill), seam: pale(c.fill) || pale(c.accent) ? '#0d0d0d' : '#ffffff' }
+}
