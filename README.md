@@ -267,7 +267,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   taps play, the web and the Android app show the platform's own picture of the stream where it has one
   (`Player.poster`: a live Twitch channel's latest frame from static-cdn.jtvnw.net, a YouTube video's
   thumbnail; Kick has no address for one), darkened under "Watch on Twitch", and the sport's colour while it
-  loads or without one. A stream's `embed.poster` is `/api/watch/<player>/<id>/poster`, which sends the page
+  loads or without one; its play button is in the middle, it and the words sized by the player's width so a
+  phone's keeps them apart. The privacy page says the picture comes from the platform's servers. A stream's `embed.poster` is `/api/watch/<player>/<id>/poster`, which sends the page
   on to the picture only once the platform has said there is one (`watch.pictured`, a HEAD): Twitch's
   address for a channel that isn't live, which Watch live shows half an hour before the start, sends to its
   grey "offline" picture instead, so that's a 404. The server asks a platform about a stream at most once

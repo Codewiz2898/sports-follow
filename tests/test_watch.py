@@ -171,17 +171,25 @@ def test_a_twitch_channel_and_a_youtube_video_have_their_platforms_picture_and_k
 
 
 def pictured(answer: httpx.Response | Exception) -> tuple[bool, list[httpx.Request]]:
-    """watch.pictured, with the platform answering this; and what it was asked."""
+    """watch.pictured, with the platform answering this for the poster's address, and Twitch's grey "offline" picture
+    there as an image, as it is (so a client that followed Twitch's redirect would call that a picture); and what it
+    was asked. The client is watch's own, with only where it sends swapped."""
     asked: list[httpx.Request] = []
 
     def platform(request: httpx.Request) -> httpx.Response:
         asked.append(request)
+        if request.url.path.startswith("/ttv-static/404_preview"):
+            return httpx.Response(200, headers={"content-type": "image/jpeg"})
         if isinstance(answer, Exception):
             raise answer
         return answer
 
     real = watch._client
-    watch._client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(platform))
+    made = real()
+    asyncio.run(made.aclose())
+    assert made.follow_redirects is False  # the offline check is that Twitch's redirect isn't followed
+    watch._client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(platform), headers=made.headers, timeout=made.timeout,
+                                              follow_redirects=made.follow_redirects)
     try:
         return asyncio.run(watch.pictured("https://static-cdn.jtvnw.net/previews-ttv/live_user_riotgames-640x360.jpg")), asked
     finally:
@@ -190,9 +198,10 @@ def pictured(answer: httpx.Response | Exception) -> tuple[bool, list[httpx.Reque
 
 def test_a_picture_is_one_only_where_the_platform_serves_an_image_and_not_elsewhere():
     there, asked = pictured(httpx.Response(200, headers={"content-type": "image/jpeg"}))
-    assert there and [r.method for r in asked] == ["HEAD"]  # asked, not fetched
+    assert there and [(r.method, r.headers["user-agent"]) for r in asked] == [("HEAD", watch.USER_AGENT)]  # asked, not fetched
     # A Twitch channel that isn't live: its address sends to Twitch's grey "offline" picture, which isn't of it.
-    assert not pictured(httpx.Response(302, headers={"location": "https://static-cdn.jtvnw.net/ttv-static/404_preview-640x360.jpg"}))[0]
+    offline, asked = pictured(httpx.Response(302, headers={"location": "https://static-cdn.jtvnw.net/ttv-static/404_preview-640x360.jpg"}))
+    assert not offline and len(asked) == 1  # not followed there
     assert not pictured(httpx.Response(404, headers={"content-type": "image/jpeg"}))[0]  # a YouTube video that isn't there
     assert not pictured(httpx.Response(200, headers={"content-type": "text/html"}))[0]
     assert not pictured(httpx.ConnectTimeout("too slow"))[0]  # a platform that can't be reached: none for now

@@ -42,6 +42,11 @@ export function Watch({ streams, tone, playing, onPlay }: {
   // it does, and for good where it doesn't.
   const [opened] = useState(Date.now)
   const [shown, setShown] = useState<string | null>(null)
+  // The play button in the middle and the words at the foot, both by the player's width, as on the web, so a
+  // phone's (some 190 tall) keeps them apart.
+  const [wide, setWide] = useState(0)
+  const button = Math.min(64, Math.max(44, wide * 0.14))
+  const words = Math.min(40, Math.max(18, wide * 0.065))
   // The stream playing stays first while it's listed, though another comes to the top of the list meanwhile; one no
   // longer listed stops.
   const first = streams.find((x) => x.url === playing) ?? streams[0]
@@ -61,7 +66,7 @@ export function Watch({ streams, tone, playing, onPlay }: {
       <SectionHead title="Watch live" />
       {page ? (
         <>
-          <View style={[s.frame, { backgroundColor: tone.sport }]}>
+          <View style={[s.frame, { backgroundColor: tone.sport }]} onLayout={(e) => setWide(e.nativeEvent.layout.width)}>
             {/* Over the whole screen, it isn't here as well: one player at a time. */}
             {on ? expanded ? <View style={s.web} /> : <Player page={page} platform={first.platform} onOut={out} onGone={stop} /> : (
               <Pressable onPress={() => { setExpanded(false); onPlay(first.url) }} accessibilityRole="button" accessibilityLabel={`Play on ${first.platform}${note ? `, ${note}` : ''}`}
@@ -71,9 +76,13 @@ export function Watch({ streams, tone, playing, onPlay }: {
                     style={[StyleSheet.absoluteFill, !pictured && { opacity: 0 }]} accessibilityIgnoresInvertColors />
                 ) : null}
                 {pictured ? <LinearGradient colors={['rgba(0,0,0,0.05)', 'rgba(0,0,0,0.2)', 'rgba(0,0,0,0.78)']} locations={[0, 0.45, 1]} style={StyleSheet.absoluteFill} /> : null}
-                <View style={[s.play, { backgroundColor: tone.on }, pictured && s.lifted]}><PlayIcon size={26} color={tone.sport} /></View>
+                <View style={s.middle} pointerEvents="none">
+                  <View style={[s.play, { width: button, height: button, borderRadius: button / 2, backgroundColor: tone.on }, pictured && s.lifted]}>
+                    <PlayIcon size={Math.round(button * 0.4)} color={tone.sport} />
+                  </View>
+                </View>
                 <View style={{ gap: 4 }}>
-                  <Text style={[dsp(34), { color: pictured ? '#FFFFFF' : tone.on }]}>Watch on {first.platform}</Text>
+                  <Text style={[dsp(words), { color: pictured ? '#FFFFFF' : tone.on }]}>Watch on {first.platform}</Text>
                   {note ? <Text style={[t.tag, { color: pictured ? 'rgba(255,255,255,0.85)' : tone.onSoft }]}>{note}</Text> : null}
                 </View>
               </Pressable>
@@ -223,8 +232,9 @@ function WholeScreen({ page, platform, onOut, onCollapse, onGone }: {
 const s = StyleSheet.create({
   section: { gap: 10 },
   frame: { aspectRatio: 16 / 9, borderRadius: RADIUS_TILE, overflow: 'hidden' },  // the poster, then the player, in the page
-  poster: { flex: 1, justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, paddingVertical: 16, paddingHorizontal: 18 },
-  play: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center' },
+  poster: { flex: 1, justifyContent: 'flex-end', alignItems: 'flex-start', paddingVertical: 16, paddingHorizontal: 18 },  // the words at the foot
+  middle: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },  // the play button in the middle
+  play: { alignItems: 'center', justifyContent: 'center' },  // as big as the player's width says (Watch)
   lifted: { elevation: 8, shadowColor: '#000000', shadowOpacity: 0.35, shadowRadius: 12, shadowOffset: { width: 0, height: 8 } },  // the play button over the picture
   under: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },  // "Open on Twitch", Expand
   big: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, minHeight: 96, paddingVertical: 16, paddingHorizontal: 18, borderRadius: RADIUS_TILE },

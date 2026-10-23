@@ -34,6 +34,9 @@ export default function PrivacyScreen() {
         <P>The Feed's videos are YouTube's: we find them and check them through the YouTube API Services, and our requests to them name no fan. A video plays in YouTube's own embedded player, which loads only once the video plays (when you tap it, or as it comes on screen if videos play as you scroll). The player, and the video's picture before it, come from YouTube's servers, and YouTube's player may set cookies and collect data on your device as Google's Privacy Policy says: <Text onPress={() => Linking.openURL(GOOGLE_PRIVACY)} style={t.link}>policies.google.com/privacy</Text>.</P>
         <P>Watching them, you agree to YouTube's Terms of Service: see <Text onPress={() => router.push('/terms')} style={t.link}>Terms</Text>.</P>
       </Part>
+      <Part title="Live streams">
+        <P>A game's Watch live plays its broadcast in Twitch's, Kick's or YouTube's own player, which loads only once you tap play, and may set cookies and collect data on your device as that platform's privacy policy says. Before that, the match page shows the platform's picture of it (a live Twitch channel's latest frame, a YouTube video's thumbnail), which your device loads from the platform's servers.</P>
+      </Part>
       <Part title="Deleting it">
         <P>Signed in: <Text onPress={() => router.push('/account')} style={t.link}>Account</Text>, then Delete account. Everything above goes at once, and our daily backups are kept for 14 days.</P>
         <P>Without an account: unfollow your players, teams and games, untick your sports in Following, and turn alerts off in Alerts, then clear this site's data in your browser, or uninstall the Android app.</P>
