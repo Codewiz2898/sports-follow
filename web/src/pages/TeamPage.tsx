@@ -4,6 +4,7 @@ import { useActivity } from '../activity'
 import { APP_NAME } from '../app'
 import { api, ApiError, type TeamPage as Team } from '../api'
 import { useNow } from '../clock'
+import { TeamCrest } from '../components/Crest'
 import { FormStrip, LiveScoreboard, PlayerBand, ResultsList, SectionHead, UpcomingList } from '../components/Blocks'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon } from '../components/Icons'
@@ -112,6 +113,7 @@ export function TeamPage() {
         sport={team.sport}
         meta={[team.detail, team.followers ? `${team.followers} following` : ''].filter(Boolean).join(' · ')}
         back={back}
+        crest={<TeamCrest teamKey={team.key} name={team.name} size={96} coloured />}
         actions={
           <>
             <ShareButton {...shareTeam(team.team_id, team.name, APP_NAME)} />

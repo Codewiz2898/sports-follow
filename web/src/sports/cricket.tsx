@@ -1,8 +1,15 @@
 import { cricket as facts, inningsScore, type CricketPage, type CricketState } from './facts/cricket'
+import { TeamCrest } from '../components/Crest'
+import { teamKey } from '../look'
 import { MatchSection } from './section'
 import type { BoardProps, MatchProps, SportView } from './view'
 
-function CricketBoard({ state, clock, compact }: BoardProps<CricketState>) {
+function CricketBoard({ state, clock, compact, live, explore }: BoardProps<CricketState>) {
+  // Each innings' side's crest (a national side's flag), but on the match page, where its band shows them big.
+  const crest = (team: string) => {
+    const t = state.teams.find((x) => x.name === team)
+    return !explore && t ? <TeamCrest teamKey={teamKey(live.match, t.id)} name={t.name} size={26} /> : null
+  }
   if (!state.innings.length) {
     return (
       <div className="stack">
@@ -14,10 +21,11 @@ function CricketBoard({ state, clock, compact }: BoardProps<CricketState>) {
   return (
     <div className="stack" style={{ gap: 8 }}>
       {state.innings.map((i) => (
-        <div key={`${i.team}-${i.period}`} className="row" style={{ alignItems: 'baseline' }}>
-          <span className="title" style={{ color: i.batting ? 'var(--text)' : 'var(--muted)' }}>
+        <div key={`${i.team}-${i.period}`} className="row" style={{ alignItems: 'center' }}>
+          <span className="title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: i.batting ? 'var(--text)' : 'var(--muted)' }}>
+            {crest(i.team)}
             {i.abbr || i.team}
-            {i.batting && <span className="tiny live-note" style={{ marginLeft: 8 }}>batting</span>}
+            {i.batting && <span className="tiny live-note">batting</span>}
           </span>
           <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
             <span className={i.batting ? 'num score' : 'num'} style={i.batting ? undefined : { fontSize: 26, color: 'var(--muted)' }}>

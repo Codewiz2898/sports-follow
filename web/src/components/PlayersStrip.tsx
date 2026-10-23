@@ -1,8 +1,10 @@
 import { Link } from 'react-router-dom'
 import type { Card, FollowedTeam } from '../api'
 import { shortName } from '../format'
+import { useLooks } from '../look'
 import { sportKey } from '../sports'
 import { liveShort, nextWhen, teamNextWhen, teamOrder, tileOrder } from '../today'
+import { Crest, onColour } from './Crest'
 import { ChevronIcon } from './Icons'
 import { Rail } from './Rail'
 
@@ -28,9 +30,11 @@ function PlayerPill({ card, now }: { card: Card; now: number }) {
 function TeamPill({ team, now }: { team: FollowedTeam; now: number }) {
   const live = Boolean(team.live?.is_live)
   const said = live && team.live ? liveShort(team.live) : teamNextWhen(team, now)
+  const look = useLooks([team.key])[team.key]
   return (
-    <Link to={`/team/${team.team_id}`} className="strip-pill" data-sport={sportKey(team.sport)}>
+    <Link to={`/team/${team.team_id}`} className={`strip-pill${look ? ' with-crest' : ''}`} data-sport={sportKey(team.sport)}>
       {live && <span className="live-dot" aria-hidden="true" />}
+      {look && <Crest look={look} name={team.name} size={28} disc={onColour(look)} />}
       <span className="dsp">{team.name}</span>
       {live && <span className="sr-only">, live</span>}
       {said && <span className="when">{said}</span>}

@@ -8,6 +8,7 @@ import { sharedLook, useShared } from '../shared'
 import { leagueAbout, leagueComing } from '../today'
 import { Backdrop, sportKey } from '../sports'
 import { CallTag } from './Calls'
+import { CrestPair } from './Crest'
 
 const SOON = 5_000  // when the server says a read is under way, the next look
 const EVERY = 15 * 60_000  // otherwise, while the page is in view: results come in through the day
@@ -56,7 +57,7 @@ export function LeagueResultCard({ game, now, calls = null }: { game: LeagueGame
   return (
     <LeagueCard game={game} className="league-card league-result" label={[`${game.competition}: ${game.line || game.title}, ${word}`, callWords(call)].filter(Boolean).join('. ')}>
       <Backdrop sport={key} seed={game.key} />
-      <span className="sport-tag">{game.competition}</span>
+      <span className="card-top"><span className="sport-tag">{game.competition}</span><CrestPair keys={game.team_keys} /></span>
       <span className="dsp word" style={{ '--word': `${wordSize(word)}px` } as CSSProperties}>{word}</span>
       <span className="stack" style={{ gap: 2 }}>
         {word !== game.title && <span className="line strong">{game.line || game.title}</span>}
@@ -76,7 +77,7 @@ export function LeagueComingCard({ game, now, calls = null }: { game: LeagueGame
   return (
     <LeagueCard game={game} className="league-card league-coming" label={[`${game.competition}: ${game.title}, ${shortWhen(game.start_utc, now)}`, callWords(call)].filter(Boolean).join('. ')}>
       <Backdrop sport={key} seed={game.key} />
-      <span className="sport-tag">{game.competition}</span>
+      <span className="card-top"><span className="sport-tag">{game.competition}</span><CrestPair keys={game.team_keys} /></span>
       <span className="dsp count">{big}</span>
       <span className="stack" style={{ gap: 2 }}>
         <span className="line strong">{game.title}</span>

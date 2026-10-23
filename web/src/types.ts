@@ -92,6 +92,7 @@ export interface UpcomingEvent {
   event_id?: number
   match?: string | null  // its match page's address after /match/, where a source has the game
   game_key?: string | null  // the game it's one fixture of, as a live game's (LiveStatus): a chess board once it's paired
+  team_keys?: string[]  // its teams as "system:team id", for their crests (look.ts); none from a server before them
 }
 
 export interface RecentResult {
@@ -110,6 +111,7 @@ export interface RecentResult {
   // Won, drew or lost from the player's side, told by the server from the side they played for (null: it can't
   // say); missing on a result it didn't tell (format.ts: resultOutcome).
   outcome?: 'W' | 'D' | 'L' | null
+  team_keys?: string[]  // its teams as "system:team id", for their crests (look.ts); none from a server before them
 }
 
 /** A page of a player's results history, newest first (sports_follow/results.py). */
@@ -536,6 +538,7 @@ export interface LeagueGame {
   why: string  // "1st v 3rd", "Final", "Tier S"
   event_ids: number[]  // the events it is here: a fan's player in one makes it theirs
   match?: string | null  // its match page's address after /match/, where it has one
+  team_keys?: string[]  // its teams as "system:team id", for their crests (look.ts); none from a server before them
 }
 
 export interface League {

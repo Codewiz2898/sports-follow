@@ -1,10 +1,14 @@
 import { football as facts, timelineKind, type FootballPage, type FootballSide, type FootballState } from './facts/football'
+import { TeamCrest } from '../components/Crest'
+import { teamKey } from '../look'
 import { MatchSection } from './section'
 import type { BoardProps, MatchProps, SportView } from './view'
 
-function FootballBoard({ state, clock, compact }: BoardProps<FootballState>) {
+function FootballBoard({ state, clock, compact, live, explore }: BoardProps<FootballState>) {
+  // Each side's crest, but on the match page, where its band shows them big.
   const side = (s: FootballSide, align: 'left' | 'right') => (
     <div className="stack" style={{ alignItems: align === 'left' ? 'flex-start' : 'flex-end', textAlign: align, minWidth: 0 }}>
+      {!explore && <TeamCrest teamKey={teamKey(live.match, s.id)} name={s.name} size={compact ? 28 : 36} />}
       <span className="title">{s.name}</span>
       {!compact && s.scorers.map((g) => <span key={g} className="tiny muted">{g}</span>)}
     </div>

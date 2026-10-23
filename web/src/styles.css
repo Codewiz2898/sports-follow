@@ -622,6 +622,17 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 .crest.disc img { width: 70%; height: 70%; }
 .crest.badge { border-radius: 50%; background: #fff; color: #0d0d0d; box-shadow: inset 0 0 0 max(2px, calc(var(--crest, 40px) / 22)) #0d0d0d; font-family: var(--display); font-size: calc(var(--crest, 40px) * 0.34); line-height: 1; text-transform: uppercase; letter-spacing: 0.01em; }
 .crest.badge.long { font-size: calc(var(--crest, 40px) * 0.27); }
+/* A game's two crests at a card's corner, the second over the first; each ringed in the card's colour. */
+.crest-pair { display: inline-flex; flex-shrink: 0; }
+.crest-pair .crest { box-shadow: 0 0 0 2px var(--crest-ring, var(--sport)); }
+.crest-pair .crest + .crest { margin-left: -8px; }
+.crest-pair .crest.badge { box-shadow: inset 0 0 0 2px #0d0d0d, 0 0 0 2px var(--crest-ring, var(--sport)); }  /* the badge keeps its ring */
+.league-card .crest-pair { --crest-ring: var(--text); }  /* on the outlined card's white, an ink edge */
+.card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.card-top .sport-tag { min-width: 0; align-self: center; }
+.strip-pill.with-crest { padding-left: 6px; }
+.tile .corner .crest.disc { box-shadow: 0 0 0 2px color-mix(in srgb, var(--on-sport) 30%, transparent); }
+.pick-option .crest { margin-right: 2px; }
 
 /* Its two sides, face to face at the band's top: each crest slides in from its side, the V pops, the names rise. */
 .faceoff { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; padding-top: 4px; }
