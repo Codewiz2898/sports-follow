@@ -5,18 +5,21 @@
 // content's width, 16:9, as on the web, with "Open on Twitch" under it and Expand beside that: Expand turns it
 // sideways over the whole screen, and Collapse (or Back) puts it back in the page. On a phone the page's player is
 // smaller than Twitch's stated minimum for an embedded one (400×300): Bharath chose on 21 Oct to have it play in the
-// page anyway, as on the web. Any other opens outside the app, in its platform's app or the browser, as the rows do.
+// page anyway, as on the web. Till it's played, it shows the platform's picture of it once that loads (`embed.poster`:
+// a live Twitch channel's latest frame, a YouTube video's thumbnail), darkened under the words, as on the web, and the
+// sport's colour without one. Any other opens outside the app, in its platform's app or the browser, as the rows do.
 // The player is the site's page of it alone (/watch/<player>/<id>) in a WebView: Twitch's must sit in a page on the
 // site it's told, which an app isn't. Which stream plays is the page's (`playing`, its address), so a player started
 // stays while the page is open, though the game is called over before its broadcast has shown the end.
 
+import { LinearGradient } from 'expo-linear-gradient'
 import * as ScreenOrientation from 'expo-screen-orientation'
 import { useIsFocused } from 'expo-router'
 import { useEffect, useState } from 'react'
-import { ActivityIndicator, AppState, Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, AppState, Image, Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { WebView } from 'react-native-webview'
-import { watchPage } from '../../web/src/endpoints'
+import { watchPage, watchPoster } from '../../web/src/endpoints'
 import { safeHref } from '../../web/src/format'
 import { streamNote } from '../../web/src/match'
 import { API_URL, type MatchStream } from './api'
@@ -35,6 +38,10 @@ export function Watch({ streams, tone, playing, onPlay }: {
 }) {
   // Over the whole screen (Expand) while it plays; a player stopped, however, starts in the page the next time.
   const [expanded, setExpanded] = useState(false)
+  // The poster's picture that has loaded, as of when the page opened (watchPoster says why): the sport's colour till
+  // it does, and for good where it doesn't.
+  const [opened] = useState(Date.now)
+  const [shown, setShown] = useState<string | null>(null)
   // The stream playing stays first while it's listed, though another comes to the top of the list meanwhile; one no
   // longer listed stops.
   const first = streams.find((x) => x.url === playing) ?? streams[0]
@@ -44,6 +51,8 @@ export function Watch({ streams, tone, playing, onPlay }: {
   const more = streams.filter((x) => x !== first)
   const note = streamNote(first)
   const page = first.embed ? API_URL + watchPage(first.embed) : null
+  const poster = first.embed?.poster ? API_URL + watchPoster(first.embed.poster, opened) : null
+  const pictured = poster != null && shown === poster
   const out = open(first.url)
   const on = playing === first.url
   const stop = () => { setExpanded(false); onPlay(null) }
@@ -57,10 +66,15 @@ export function Watch({ streams, tone, playing, onPlay }: {
             {on ? expanded ? <View style={s.web} /> : <Player page={page} platform={first.platform} onOut={out} onGone={stop} /> : (
               <Pressable onPress={() => { setExpanded(false); onPlay(first.url) }} accessibilityRole="button" accessibilityLabel={`Play on ${first.platform}${note ? `, ${note}` : ''}`}
                 style={({ pressed }) => [s.poster, pressed && { opacity: 0.85 }]}>
-                <View style={[s.play, { backgroundColor: tone.on }]}><PlayIcon size={26} color={tone.sport} /></View>
+                {poster ? (
+                  <Image source={{ uri: poster }} resizeMode="cover" onLoad={() => setShown(poster)} onError={() => setShown(null)}
+                    style={[StyleSheet.absoluteFill, !pictured && { opacity: 0 }]} accessibilityIgnoresInvertColors />
+                ) : null}
+                {pictured ? <LinearGradient colors={['rgba(0,0,0,0.05)', 'rgba(0,0,0,0.2)', 'rgba(0,0,0,0.78)']} locations={[0, 0.45, 1]} style={StyleSheet.absoluteFill} /> : null}
+                <View style={[s.play, { backgroundColor: tone.on }, pictured && s.lifted]}><PlayIcon size={26} color={tone.sport} /></View>
                 <View style={{ gap: 4 }}>
-                  <Text style={[dsp(34), { color: tone.on }]}>Watch on {first.platform}</Text>
-                  {note ? <Text style={[t.tag, { color: tone.onSoft }]}>{note}</Text> : null}
+                  <Text style={[dsp(34), { color: pictured ? '#FFFFFF' : tone.on }]}>Watch on {first.platform}</Text>
+                  {note ? <Text style={[t.tag, { color: pictured ? 'rgba(255,255,255,0.85)' : tone.onSoft }]}>{note}</Text> : null}
                 </View>
               </Pressable>
             )}
@@ -211,6 +225,7 @@ const s = StyleSheet.create({
   frame: { aspectRatio: 16 / 9, borderRadius: RADIUS_TILE, overflow: 'hidden' },  // the poster, then the player, in the page
   poster: { flex: 1, justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, paddingVertical: 16, paddingHorizontal: 18 },
   play: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center' },
+  lifted: { elevation: 8, shadowColor: '#000000', shadowOpacity: 0.35, shadowRadius: 12, shadowOffset: { width: 0, height: 8 } },  // the play button over the picture
   under: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },  // "Open on Twitch", Expand
   big: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, minHeight: 96, paddingVertical: 16, paddingHorizontal: 18, borderRadius: RADIUS_TILE },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },

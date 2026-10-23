@@ -11,6 +11,11 @@ and what that plays (`embed.id`: a Twitch or Kick channel, a YouTube video). The
 itself, as only it knows the page's host, which Twitch's player must be told. The Android app can't be that host,
 so it shows the site's own page of the player alone (page, at /watch/<player>/<id>) in a WebView. Every other is a
 link: "Watch on Douyu". A platform is one entry in PLATFORMS; an address on none is named by its host.
+
+Till a fan plays it, a stream the app plays shows the platform's own picture of it where the platform has one
+(`embed.poster`, the API's address for it: Player.poster): a live Twitch channel's latest frame, a YouTube video's
+thumbnail. Twitch answers for a channel that isn't live with its grey "offline" picture, so the API sends the page
+there only once the platform has said there's a picture (pictured), and else the page keeps its own poster.
 """
 
 from __future__ import annotations
@@ -23,10 +28,13 @@ from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
+import httpx
+
 from .adapters import Stream
-from .config import APP_NAME
+from .config import APP_NAME, USER_AGENT
 
 SHOWN = 8  # the most of a game's streams a page lists: a world final has dozens of co-streams
+POSTER_FOR = 300  # seconds a platform's word on whether a stream has a picture is kept: Twitch's is 5 minutes old at most
 
 
 @dataclass(frozen=True)
@@ -37,6 +45,9 @@ class Player:
     ids: re.Pattern[str]  # what it plays (a channel's name, a video's id), as a stream's address and /watch take it
     origin: str  # "https://player.twitch.tv": the one frame its /watch page may hold
     address: Callable[[str, str], str]  # (what it plays, the page's host) -> the player's address
+    # (what it plays) -> its picture on the platform's own image host, for the page till it's played; None for a
+    # platform that has no address for one (Kick's is in its API alone)
+    poster: Callable[[str], str] | None = None
 
 
 # (its platform's player, and a stream's host, path and query) -> what that player plays
@@ -81,12 +92,14 @@ PLATFORMS = (
     Platform("Twitch", ("twitch.tv",), Player(
         "twitch", re.compile(r"[A-Za-z0-9_]{1,25}"), "https://player.twitch.tv",
         lambda plays, host: "https://player.twitch.tv/?" + urlencode({"channel": plays, "parent": host, "autoplay": "true"}),
+        lambda plays: f"https://static-cdn.jtvnw.net/previews-ttv/live_user_{plays.lower()}-640x360.jpg",
     ), _channel("twitch.tv", {
         "directory", "videos", "search", "settings", "downloads", "jobs", "turbo", "p", "subscriptions", "inventory", "wallet",
         "drops", "login", "signup", "friends", "messages", "store", "prime", "bits"})),
     Platform("YouTube", ("youtube.com", "youtu.be"), Player(
         "youtube", re.compile(r"[A-Za-z0-9_-]{11}"), "https://www.youtube-nocookie.com",
         lambda plays, host: f"https://www.youtube-nocookie.com/embed/{quote(plays)}?autoplay=1&rel=0&playsinline=1",
+        lambda plays: f"https://i.ytimg.com/vi/{quote(plays)}/hqdefault.jpg",  # as a feed video's (feed.VideoSource.picture)
     ), _youtube),
     Platform("Kick", ("kick.com",), Player(
         "kick", re.compile(r"[A-Za-z0-9_-]{1,40}"), "https://player.kick.com",
@@ -135,7 +148,8 @@ def ordered(streams: list[Stream]) -> list[Stream]:
 
 def offer(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """A read's streams (Stream's fields) for the match page: those at a web address, each once, in order (ordered),
-    SHOWN at most, each named by its platform and language and, where the app plays it in the page, with what."""
+    SHOWN at most, each named by its platform and language and, where the app plays it in the page, with what, and
+    the API's address of its picture where its platform has one (the page shows it only once it loads)."""
     seen, streams = set(), []
     for r in raw:
         url = str(r.get("url") or "").strip() if isinstance(r, dict) else ""
@@ -157,9 +171,37 @@ def offer(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "language_name": language(s.language),
             "official": s.official,
             "main": s.main,
-            "embed": {"player": found.player.name, "id": play} if found and found.player and play else None,
+            "embed": {"player": found.player.name, "id": play, "poster": poster_path(found.player, play)} if found and found.player and play else None,
         })
     return out
+
+
+def poster_path(player: Player, plays: str) -> str | None:
+    """The API's address of what a player plays' picture (server.watch_poster), where its platform has one."""
+    return f"/api/watch/{player.name}/{quote(plays, safe='')}/poster" if player.poster else None
+
+
+def poster(player: str, plays: str) -> str | None:
+    """Where the platform serves a picture of what one of the app's players plays (Player.poster); None for a player
+    the app doesn't have, one without pictures, or what isn't of the shape its player plays."""
+    found = PLAYERS.get(player)
+    return found.poster(plays) if found and found.poster and found.ids.fullmatch(plays) else None
+
+
+def _client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(headers={"user-agent": USER_AGENT}, timeout=5)  # follows no redirect, which is the point
+
+
+async def pictured(address: str) -> bool:
+    """Whether the platform has a picture at a poster's address now: an image, there and not elsewhere. Twitch's for
+    a channel that isn't live sends to its grey "offline" picture (ttv-static/404_preview), which isn't one of it; a
+    platform that can't be reached has none for now."""
+    try:
+        async with _client() as client:
+            got = await client.head(address)
+    except httpx.HTTPError:
+        return False
+    return got.status_code == 200 and got.headers.get("content-type", "").startswith("image/")
 
 
 # The /watch page: its player over the whole of it, on black. Its one style, allowed by its hash (POLICY).

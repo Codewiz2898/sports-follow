@@ -5,7 +5,7 @@ import { report } from './errors'
 import type { StreamEvent } from './types'
 
 export type * from './types'
-export { json } from './endpoints'
+export { json, watchPoster } from './endpoints'
 
 /** A refusal from the API: its message for the fan, and the HTTP status. */
 export class ApiError extends Error {

@@ -29,7 +29,7 @@ JOURNEYS = [
                         r"|/api/me/matches/[^/]+/alerts"),
     ("Call it and leagues", r"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?"),
     ("Clips", r"/api/clips(/[^/]+(/(done|report))?)?"),
-    ("Pictures", r"/api/(photos|logos)/[^/]+|/api/(.+/)?share\.png"),
+    ("Pictures", r"/api/(photos|logos)/[^/]+|/api/(.+/)?share\.png|/api/watch/[^/]+/[^/]+/poster"),
     ("Admin panel", r"/api/admin/.+"),
 ]
 

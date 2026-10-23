@@ -691,6 +691,17 @@ a.wire-row:hover .wire-text { text-decoration: underline; text-underline-offset:
 .watch-start { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 16px 18px; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; }
 .watch-play { display: flex; align-items: center; justify-content: center; width: 64px; height: 64px; border-radius: 50%; background: var(--on-sport); color: var(--sport); transition: transform 0.12s; }
 .watch-start:hover .watch-play { transform: scale(1.06); }
+/* The platform's picture of the stream once it loads (Watch.tsx), darkened from the foot up under the words, which go
+   white, and the play button lifted off it. */
+.watch-start { isolation: isolate; }
+.watch-start > span { position: relative; z-index: 1; }
+.watch-pic { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.2s; }
+.watch-start.pictured { color: #fff; }
+.watch-start.pictured .watch-pic { opacity: 1; }
+.watch-start.pictured::after { content: ''; position: absolute; inset: 0; background: linear-gradient(to top, rgba(0, 0, 0, 0.78), rgba(0, 0, 0, 0.2) 55%, rgba(0, 0, 0, 0.05)); }
+.watch-start.pictured .watch-play { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+.watch-start.pictured .watch-note { color: rgba(255, 255, 255, 0.85); }
+@media (prefers-reduced-motion: reduce) { .watch-pic { transition: none; } }
 .watch-big { font-size: 34px; line-height: 1; overflow-wrap: anywhere; }
 .watch-note { color: var(--on-sport-soft); }
 .watch-link { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 96px; padding: 16px 18px; border-radius: var(--radius-tile); background: var(--sport); color: var(--on-sport); }

@@ -253,7 +253,8 @@ def test_where_to_watch_a_game_comes_with_its_read_the_organisers_main_broadcast
     match.read("pitch", "100", NOW + timedelta(seconds=10))
     page, _ = match.view(db, "fan", "pitch", "100", NOW + timedelta(seconds=20))
     assert [(s["platform"], s["language_name"], s["official"], s["embed"]) for s in page["streams"]] == [
-        ("Kick", "English", True, {"player": "kick", "id": "league_en"}), ("Twitch", "Spanish", False, {"player": "twitch", "id": "costreamer"})]
+        ("Kick", "English", True, {"player": "kick", "id": "league_en", "poster": None}),
+        ("Twitch", "Spanish", False, {"player": "twitch", "id": "costreamer", "poster": "/api/watch/twitch/costreamer/poster"})]
     assert json.loads(redis["match:pitch:100"])["game"]["streams"][0] == {"url": "https://www.twitch.tv/costreamer", "language": "es", "official": False, "main": False}
 
 

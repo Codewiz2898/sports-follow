@@ -511,7 +511,8 @@ export interface Match {
 
 /** One broadcast of a game (sports_follow/watch.py): its page, the platform it's on and the language it's called in,
  * whether the event's organiser runs it (and it's their main one), and, where the app plays it inside the page,
- * which of its players and what that plays: "twitch" and a channel, "youtube" and a video. */
+ * which of its players and what that plays: "twitch" and a channel, "youtube" and a video, and the API's address of
+ * its platform's picture of it, where it has one (a 404 while there's none: a Twitch channel that isn't live). */
 export interface MatchStream {
   url: string
   platform: string  // "Twitch", "Kick"
@@ -519,7 +520,7 @@ export interface MatchStream {
   language_name: string  // "English"
   official: boolean
   main: boolean
-  embed: { player: string; id: string } | null
+  embed: { player: string; id: string; poster?: string | null } | null  // poster: a server before them sends none
 }
 
 /** A game in the competitions the sources cover, whoever follows it (GET /api/league): finished, or to come.

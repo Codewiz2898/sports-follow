@@ -1,4 +1,5 @@
-import type { MatchStream } from '../api'
+import { useState } from 'react'
+import { watchPoster, type MatchStream } from '../api'
 import { safeHref } from '../format'
 import { streamNote } from '../match'
 import { SectionHead } from './Blocks'
@@ -20,7 +21,9 @@ const play = <svg width={26} height={26} viewBox="0 0 24 24" fill="currentColor"
  * Where to watch a game while it's on or about to be (sports_follow/watch.py; match.ts's watchable says when): its
  * first stream, the organiser's main one where there is one, big in the sport's colour, and its others as links.
  * Where the app has a player for the first's platform, a tap plays it inside the page, at the column's width, 16:9,
- * with a link to the platform beside it; the player's own full-screen button makes it bigger. Else it's a link,
+ * with a link to the platform beside it; the player's own full-screen button makes it bigger. Till then it shows the
+ * platform's picture of it once that loads (`embed.poster`: a live Twitch channel's latest frame, a YouTube video's
+ * thumbnail), darkened under the words, and the sport's colour without one (Kick, a channel not live yet). Else it's a link,
  * "Watch on Douyu", opening the platform's own page. On a phone that player is smaller than Twitch's stated minimum
  * for an embedded one (400×300): Bharath chose on 21 Oct to have it play in the page anyway, rather than over the
  * whole screen. A phone never autoplays it either, so there the fan taps the player's own play too. Which stream
@@ -30,12 +33,18 @@ const play = <svg width={26} height={26} viewBox="0 0 24 24" fill="currentColor"
 export function Watch({ streams, title, sport, playing, onPlay }: {
   streams: MatchStream[]; title: string; sport: string; playing: string | null; onPlay: (url: string | null) => void
 }) {
+  // The poster's picture that has loaded, as of when the page opened: the sport's colour till it does, and for good
+  // where it doesn't.
+  const [opened] = useState(Date.now)
+  const [shown, setShown] = useState<string | null>(null)
   // The stream playing stays first while it's listed, though another comes to the top of the list meanwhile.
   const first = streams.find((s) => s.url === playing) ?? streams[0]
   if (!first) return null
   const more = streams.filter((s) => s !== first)
   const embed = first.embed
   const src = embed ? playerUrl(embed) : null
+  const poster = embed?.poster ? watchPoster(embed.poster, opened) : null
+  const loaded = (img: HTMLImageElement | null) => { if (poster && img?.complete && img.naturalWidth > 0) setShown(poster) }
   const note = streamNote(first)
   return (
     <section className="section" aria-label="Watch live" data-sport={sport}>
@@ -46,7 +55,8 @@ export function Watch({ streams, title, sport, playing, onPlay }: {
             {playing === first.url ? (
               <iframe src={src} title={`${title} on ${first.platform}`} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" />
             ) : (
-              <button type="button" className="watch-start" onClick={() => onPlay(first.url)} aria-label={`Play on ${first.platform}${note ? `, ${note}` : ''}`}>
+              <button type="button" className={poster && shown === poster ? 'watch-start pictured' : 'watch-start'} onClick={() => onPlay(first.url)} aria-label={`Play on ${first.platform}${note ? `, ${note}` : ''}`}>
+                {poster && <img ref={loaded} className="watch-pic" src={poster} alt="" decoding="async" referrerPolicy="no-referrer" onLoad={(e) => loaded(e.currentTarget)} />}
                 <span className="watch-play">{play}</span>
                 <span className="stack" style={{ gap: 4 }}>
                   <span className="dsp watch-big">Watch on {first.platform}</span>

@@ -1,22 +1,25 @@
 """Where a game can be watched (watch.py): each stream named by the platform its address is on, with what the
 app's own player plays where it has one, and in the order a fan wants them. The site's /watch page, which the
 Android app plays in its match page, is one of the app's own players alone, playing only what's of its shape, and
-may hold that player's frame and nothing else."""
+may hold that player's frame and nothing else. Till it's played, a stream shows its platform's picture of it, once
+the platform has said there is one."""
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import re
 from html import unescape
 from pathlib import Path
 
+import httpx
 import pytest
 
-from sports_follow import watch
+from sports_follow import server, watch
 from sports_follow.adapters import Stream
 
-from .test_api import api  # noqa: F401  (the fixture)
+from .test_api import PUBLIC, api  # noqa: F401  (the fixture)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -33,9 +36,9 @@ def test_each_stream_is_named_by_its_platform_and_twitch_kick_and_youtube_play_i
         raw("https://www.douyu.com/9441366?dyshid=0-ac10", "en", True, True),
     ])
     assert twitch == {"url": "https://www.twitch.tv/riotgames", "platform": "Twitch", "language": "en", "language_name": "English", "official": True, "main": True,
-                      "embed": {"player": "twitch", "id": "riotgames"}}
-    assert (kick["platform"], kick["embed"]) == ("Kick", {"player": "kick", "id": "cct_cs2"})
-    assert (video["platform"], video["embed"]) == ("YouTube", {"player": "youtube", "id": "dQw4w9WgXcQ"})
+                      "embed": {"player": "twitch", "id": "riotgames", "poster": "/api/watch/twitch/riotgames/poster"}}
+    assert (kick["platform"], kick["embed"]) == ("Kick", {"player": "kick", "id": "cct_cs2", "poster": None})  # Kick has no address for a picture
+    assert (video["platform"], video["embed"]) == ("YouTube", {"player": "youtube", "id": "dQw4w9WgXcQ", "poster": "/api/watch/youtube/dQw4w9WgXcQ/poster"})
     assert (channel["platform"], channel["embed"]) == ("YouTube", None)  # a channel's live page names no video to play
     assert (other["platform"], other["embed"]) == ("Douyu", None)  # a link: "Watch on Douyu"
     assert watch.offer([raw("https://www.nimo.tv/esports")])[0]["platform"] == "nimo.tv"  # a platform it doesn't know: by its host
@@ -43,7 +46,8 @@ def test_each_stream_is_named_by_its_platform_and_twitch_kick_and_youtube_play_i
 
 def test_only_a_channels_own_page_or_a_videos_plays_in_the_page():
     def embed(url: str) -> dict | None:
-        return watch.offer([raw(url)])[0]["embed"]
+        found = watch.offer([raw(url)])[0]["embed"]
+        return found and {k: v for k, v in found.items() if k != "poster"}
 
     assert embed("https://m.twitch.tv/Gaules") == {"player": "twitch", "id": "Gaules"}
     assert embed("https://www.twitch.tv/directory") is None and embed("https://www.twitch.tv/riotgames/videos") is None
@@ -153,3 +157,108 @@ def test_the_web_plays_a_stream_in_the_page_at_any_width_and_its_players_own_ful
     assert "createPortal" not in web
     page = api.call("GET", "/watch/twitch/riotgames").text
     assert "allowfullscreen" not in page.lower() and "fullscreen" not in re.findall(r'allow="([^"]*)"', page)[0]
+
+
+# ---------------------------------------------------------------- its picture till it's played (embed.poster)
+
+
+def test_a_twitch_channel_and_a_youtube_video_have_their_platforms_picture_and_kick_none():
+    assert watch.poster("twitch", "Gaules") == "https://static-cdn.jtvnw.net/previews-ttv/live_user_gaules-640x360.jpg"  # Twitch's names are lower case there
+    assert watch.poster("youtube", "dQw4w9WgXcQ") == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+    assert watch.poster("kick", "cct_cs2") is None  # Kick's is in its API alone
+    assert watch.poster("twitch", "riot.games") is None and watch.poster("vimeo", "riotgames") is None and watch.poster("youtube", "short") is None
+    assert {name for name, p in watch.PLAYERS.items() if p.poster} == {"twitch", "youtube"}
+
+
+def pictured(answer: httpx.Response | Exception) -> tuple[bool, list[httpx.Request]]:
+    """watch.pictured, with the platform answering this; and what it was asked."""
+    asked: list[httpx.Request] = []
+
+    def platform(request: httpx.Request) -> httpx.Response:
+        asked.append(request)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    real = watch._client
+    watch._client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(platform))
+    try:
+        return asyncio.run(watch.pictured("https://static-cdn.jtvnw.net/previews-ttv/live_user_riotgames-640x360.jpg")), asked
+    finally:
+        watch._client = real
+
+
+def test_a_picture_is_one_only_where_the_platform_serves_an_image_and_not_elsewhere():
+    there, asked = pictured(httpx.Response(200, headers={"content-type": "image/jpeg"}))
+    assert there and [r.method for r in asked] == ["HEAD"]  # asked, not fetched
+    # A Twitch channel that isn't live: its address sends to Twitch's grey "offline" picture, which isn't of it.
+    assert not pictured(httpx.Response(302, headers={"location": "https://static-cdn.jtvnw.net/ttv-static/404_preview-640x360.jpg"}))[0]
+    assert not pictured(httpx.Response(404, headers={"content-type": "image/jpeg"}))[0]  # a YouTube video that isn't there
+    assert not pictured(httpx.Response(200, headers={"content-type": "text/html"}))[0]
+    assert not pictured(httpx.ConnectTimeout("too slow"))[0]  # a platform that can't be reached: none for now
+
+
+def platform_says(monkeypatch, there: bool) -> list[str]:
+    asked: list[str] = []
+
+    async def pictured(address: str) -> bool:
+        asked.append(address)
+        return there
+
+    monkeypatch.setattr(watch, "pictured", pictured)
+    return asked
+
+
+def test_the_poster_sends_the_page_to_the_platforms_picture_and_asks_the_platform_once_for_everyone(api, monkeypatch):
+    asked = platform_says(monkeypatch, True)
+    kept, put = {}, api.redis.set
+
+    async def set(key, value, nx=False, ex=None):
+        kept[key] = ex
+        return await put(key, value, nx=nx, ex=ex)
+
+    monkeypatch.setattr(api.redis, "set", set)
+    for fan in ("one", "two"):
+        got = api.call("GET", "/api/watch/twitch/riotgames/poster", fan=fan)
+        assert got.status_code == 302 and got.headers["location"] == "https://static-cdn.jtvnw.net/previews-ttv/live_user_riotgames-640x360.jpg"
+        assert got.headers["cache-control"] == f"public, max-age={watch.POSTER_FOR}"
+    assert asked == ["https://static-cdn.jtvnw.net/previews-ttv/live_user_riotgames-640x360.jpg"]
+    assert kept == {"watch:poster:" + asked[0]: watch.POSTER_FOR}  # asked again once it's that old
+    offered = watch.offer([raw("https://www.twitch.tv/riotgames")])[0]["embed"]["poster"]
+    assert api.call("GET", offered).status_code == 302  # a stream's embed.poster is this
+
+
+def test_a_channel_that_isnt_live_has_no_poster_and_the_page_keeps_its_own(api, monkeypatch):
+    asked = platform_says(monkeypatch, False)
+    for _ in range(2):
+        got = api.call("GET", "/api/watch/twitch/riotgames/poster")
+        assert got.status_code == 404 and "location" not in got.headers
+        assert got.headers["cache-control"] == f"public, max-age={watch.POSTER_FOR}"
+    assert len(asked) == 1
+
+
+@pytest.mark.parametrize("path", [
+    "/api/watch/kick/cct_cs2/poster",  # a player without pictures
+    "/api/watch/vimeo/riotgames/poster", "/api/watch/Twitch/riotgames/poster",  # a player the app hasn't
+    "/api/watch/twitch/riot.games/poster", "/api/watch/youtube/short/poster", "/api/watch/twitch/%3Cscript%3E/poster",  # not of its shape
+])
+def test_no_poster_for_what_the_app_doesnt_play_or_has_no_picture_of_and_the_platform_isnt_asked(api, monkeypatch, path):
+    asked = platform_says(monkeypatch, True)
+    assert api.call("GET", path).status_code == 404 and asked == []
+
+
+def test_one_address_has_the_platform_asked_so_many_times_an_hour_and_what_was_asked_still_answers(api, monkeypatch):
+    asked = platform_says(monkeypatch, True)
+    monkeypatch.setattr(server, "POSTERS_PER_ADDRESS", 2)
+    got = [api.call("GET", f"/api/watch/twitch/name{n}/poster", address=PUBLIC).status_code for n in range(3)]
+    assert got == [302, 302, 429] and len(asked) == 2
+    assert api.call("GET", "/api/watch/twitch/name0/poster", address=PUBLIC).status_code == 302  # kept: nothing asked
+    assert api.call("GET", "/api/watch/twitch/name2/poster", address="81.2.69.143").status_code == 302  # another address isn't held up
+
+
+def test_the_apps_ask_for_a_poster_anew_as_often_as_the_server_asks_the_platform():
+    # endpoints.ts's watchPoster: the Android app keeps a picture by its address for good, so the address changes
+    # every watch.POSTER_FOR seconds (the server ignores what it adds).
+    web = (ROOT / "web" / "src" / "endpoints.ts").read_text()
+    every = re.search(r"export const watchPoster = .*Math\.floor\(opened / ([\d_]+)\)", web)
+    assert every and int(every[1].replace("_", "")) == watch.POSTER_FOR * 1000
