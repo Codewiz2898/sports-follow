@@ -17,7 +17,8 @@ assert spec is not None and spec.loader is not None
 ops = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ops)
 
-# API routes that belong to no journey: the web app's error reports, and an /api/ address no route has.
+# API routes that belong to no journey: the web app's error reports, and an /api/ address no route has. (Requests
+# turned away before routing have no route at all: Other too.)
 OTHER = {"/api/errors", "/{path:path}"}
 
 
@@ -39,20 +40,36 @@ def test_every_route_fans_call_is_in_one_journey():
         assert len(homes) == (0 if route in OTHER else 1), (route, homes)
 
 
+def alternatives(pattern: str) -> list[str]:
+    """A regular expression's top-level alternatives: "a|b(c|d)" is "a" and "b(c|d)"."""
+    parts, depth, start = [], 0, 0
+    for i, char in enumerate(pattern):
+        depth += {"(": 1, ")": -1}.get(char, 0)
+        if char == "|" and depth == 0:
+            parts.append(pattern[start:i])
+            start = i + 1
+    return [*parts, pattern[start:]]
+
+
 def test_journeys_name_only_routes_the_api_has():
+    """Each alternative of each journey still matches a route, so a removed route leaves none behind; and none
+    looks around, which Python's re takes and Prometheus's and Loki's RE2 refuse."""
     for name, routes in ops.JOURNEYS:
-        assert any(re.fullmatch(routes, route) for route in measured_routes()), name
+        assert not re.search(r"\(\?(?:[=!]|<[=!])", routes), name
+        for part in alternatives(routes):
+            assert any(re.fullmatch(part, route) for route in measured_routes()), (name, part)
 
 
 def test_every_journey_query_groups_the_routes_alike():
-    """Each query by journey takes the routes from JOURNEYS, in its order, as label_replace sees them."""
+    """Each query by journey, of the metric (http_route) or the log lines (route), takes the routes from JOURNEYS, in
+    its order, as label_replace sees them."""
     expected = [(name, routes.replace("\\", "\\\\")) for name, routes in ops.JOURNEYS]
     chains = 0
     for name in ops.BOARDS:
         board = json.loads((GRAFANA / "dashboards" / name).read_text())
         for panel in board["panels"]:
             for target in panel.get("targets", []):
-                got = re.findall(r'"journey", "([^"]+)", "http_route", "((?:[^"\\]|\\.)*)"\)', target["expr"])
+                got = re.findall(r'"journey", "([^"]+)", "(?:http_route|route)", "((?:[^"\\]|\\.)*)"\)', target["expr"])
                 assert got == expected * (len(got) // len(expected)), (board["uid"], panel["title"], target["refId"])
                 chains += len(got) // len(expected)
     assert chains >= 10  # the tables, the charts by journey

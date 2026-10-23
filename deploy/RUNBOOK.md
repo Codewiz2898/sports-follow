@@ -2,7 +2,7 @@
 
 What to look at to know production (stann.in) is working for fans, how often, what's normal, and what to do when
 an alert emails. Everything here is in the stack's Grafana (Grafana Cloud), in the **Sports Follow** folder:
-each dashboard has a **Runbook** link back to this page and a **Sports Follow** menu to the others.
+every dashboard has a **Sports Follow** menu to the others, and Health and Performance a **Runbook** link back here.
 
 Reading is always safe: dashboards, logs, traces, `c ps`, `c logs`. Anything that changes production (a restart,
 a deploy or rollback, a write to the database or Redis, spending a source's or the model's quota, a test push) is
@@ -13,8 +13,8 @@ On the server, `c` is `docker compose -f deploy/compose.yaml` in `/opt/sports-fo
 
 Open **Health**, last 24 hours. Green everywhere means done.
 
-1. **Top row.** Reachable from outside at 99.9% or more; API answers without a server error at 100% (or
-   99.9%); Server errors 0. Errors logged: open the **Errors** dashboard if it's more than yesterday; a group
+1. **Top row.** Reachable from outside at 99.5% or more (a probe's blip or two a day is normal); API answers
+   without a server error at 100% (or 99.9%); Server errors 0. Errors logged: open the **Errors** dashboard if it's more than yesterday; a group
    first seen today is new.
 2. **Alerts firing now.** Empty, or each one is in [When an alert emails](#when-an-alert-emails).
 3. **Fans' journeys.** Every journey's Answered is green. Read it with its Requests: with 2 sign-ins a day, one
@@ -35,7 +35,8 @@ Then **Performance**, last 24 hours:
 - **Performance, last 7 days.** Each journey's p95 against the week before (the time picker's **‹** moves the
   range back). Slower with the same traffic: the slowest routes table says where, and its traces say why.
 - **Sources, last 7 days.** Allowance used by source and bucket: one at 90% most hours needs a bigger plan or
-  a smaller budget (`/admin`, Sources). 429s and errors by source.
+  a smaller budget (`/admin`, Sources). 429s and errors by source and status: a source answering 401 or 403
+  has refused our key, and no alert fires on that ("A source keeps failing" counts only 5xx and no answer).
 - **Feed.** Coverage by sport (followed players with something to watch this week), and where the funnel
   drops.
 - **Errors, last 7 days.** A group that keeps coming back is a Linear issue.
@@ -78,6 +79,10 @@ A launch, a final, anything many fans follow live.
 | **Notifications** | alerts fans did or didn't get | moments found; pushes delivered, failed (by push service and status) and opened; moment to push |
 | **Sources** | a source failing or slowing us | requests, errors, 429s and time by source; requests by lane; allowance used and left; pauses |
 | **Feed** | the Feed going stale | the funnel by sport (read, matched, kept, judged, passed, served); refusals by reason; coverage; the judge; moment searches; YouTube's quota |
+
+Health's counts come from each API request's log line, so they're exact. Times come from the request metric's
+buckets (Performance), which are approximate, and which miss each process's first request on a route: a rare
+route can be missing from the slowest routes until it's been asked a few times.
 
 Also in Grafana: **Testing & synthetics** (the uptime check's results by probe, with each failure's reason) and
 **Explore** (any log line or trace: the `debug` skill has the queries).
@@ -128,7 +133,7 @@ that's his to take or approve.
 | The worker stopped reporting | `c ps worker`, `c logs --since 30m worker`. Until it's back the other app alerts see nothing | Restart the worker (**Bharath**); if it runs, its metrics can't reach Grafana (`otlp.env`) |
 | The API is failing requests | Health: which journey. API dashboard: Failed requests, each with its trace. Errors: the group (`error`, `place`) | Fix the cause; if a deploy started it, roll back (**Bharath**) |
 | The API is slow | Performance: which journey and route. Its traces: `{span.http.route="<route>" && duration>1s}` in Explore (Tempo): a slow query, or a source called while the fan waits. Server CPU and memory | Fix the slow part |
-| A source keeps failing | Sources: errors by status. The provider's status page | Wait for it (live scores from it are late); a 401 or 403 means its key: **Bharath** |
+| A source keeps failing | Sources: errors by status. The provider's status page. It counts 5xx and no answer only: a refused key (401, 403) never fires it, so the weekly look checks those | Wait for it: live scores from it are late |
 | A source keeps telling us to slow down | Sources: requests by lane; `c exec worker python -m sports_follow.usage` | Lower its budget in `/admin` or raise the plan (**Bharath**) |
 | A source's allowance is nearly used; a source says its allowance is nearly gone | Sources: used and left by bucket. "Nearly gone" while we've used little: another key or app shares it | Background refreshes stop by themselves; live games and fans keep the rest. If it's often: the plan (**Bharath**) |
 | A live game isn't being polled | Jobs and live polls: the queue and the worker's warnings; the `debug` skill's `live.md` | A game its source stopped returning (a fixture outside the plan) stays behind until it's closed 6 days after its start: known, nothing to do |
@@ -154,8 +159,10 @@ API dashboard.
 
 ## The journeys
 
-What Health and Performance call a journey, and the API routes in it. A route in none is Other (today only the
-web app's error reports, `/api/errors`). Health checks and live streams (`/stream`) aren't counted.
+What Health and Performance call a journey, and the API routes in it. Other is the rest: the web app's error
+reports (`/api/errors`), an `/api/` address no route has, and requests turned away before routing (a write from
+another site). Health checks and live streams (`/stream`) aren't counted. A journey goes by route, not method:
+deleting an account (`DELETE /api/me/account`) counts in App start.
 
 | Journey | Routes |
 |---|---|

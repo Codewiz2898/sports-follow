@@ -17,6 +17,16 @@
   "templating": {
     "list": [
       {
+        "name": "loki",
+        "label": "Logs",
+        "type": "datasource",
+        "query": "loki",
+        "regex": "/^(?!.*(alert-state-history|usage)).*$/",
+        "hide": 0,
+        "current": {},
+        "refresh": 1
+      },
+      {
         "name": "prom",
         "label": "Metrics",
         "type": "datasource",
@@ -476,22 +486,20 @@
       "title": "Time taken by journey over the range",
       "description": "Each fan journey's requests and how long they took (the runbook lists each journey's routes). A p95 over 1 s on a journey fans use often is worth a look; over 3 s for 10 minutes, \"The API is slow\" fires.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "${prom}"
+        "type": "datasource",
+        "uid": "-- Mixed --"
       },
       "targets": [
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (http_route) (increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\"}[$__range])), \"journey\", \"Sign in\", \"http_route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"http_route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"http_route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"http_route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"http_route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"http_route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"http_route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"http_route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"http_route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"http_route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"http_route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"http_route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) > 0",
+          "expr": "sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" [$__range])), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) > 0",
           "legendFormat": "requests",
           "editorMode": "code",
-          "instant": true,
-          "range": false,
-          "format": "table"
+          "queryType": "instant"
         },
         {
           "refId": "B",
@@ -714,6 +722,22 @@
           }
         },
         {
+          "id": "filterByValue",
+          "options": {
+            "type": "exclude",
+            "match": "any",
+            "filters": [
+              {
+                "fieldName": "p95",
+                "config": {
+                  "id": "isNull",
+                  "options": {}
+                }
+              }
+            ]
+          }
+        },
+        {
           "id": "sortBy",
           "options": {
             "sort": [
@@ -736,24 +760,22 @@
     {
       "type": "table",
       "title": "Slowest routes over the range",
-      "description": "Every API route that answered in the range, slowest first by p95. A route with a handful of requests can top this on one slow one: read it with its count.",
+      "description": "Every API route that answered in the range, slowest first by p95. A route with a handful of requests can top this on one slow one: read it with its count. A route whose few requests the metric hasn't timed (a process's first of each isn't) isn't listed; Health counts every request.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "${prom}"
+        "type": "datasource",
+        "uid": "-- Mixed --"
       },
       "targets": [
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "sum by (http_route) (increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\"}[$__range])) > 0",
+          "expr": "sum by (http_route) (label_replace(sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" | route != \"\" [$__range])), \"http_route\", \"$1\", \"route\", \"(.+)\")) > 0",
           "legendFormat": "requests",
           "editorMode": "code",
-          "instant": true,
-          "range": false,
-          "format": "table"
+          "queryType": "instant"
         },
         {
           "refId": "B",
@@ -973,6 +995,22 @@
               "Value #C": 3,
               "Value #D": 4
             }
+          }
+        },
+        {
+          "id": "filterByValue",
+          "options": {
+            "type": "exclude",
+            "match": "any",
+            "filters": [
+              {
+                "fieldName": "p95",
+                "config": {
+                  "id": "isNull",
+                  "options": {}
+                }
+              }
+            ]
           }
         },
         {

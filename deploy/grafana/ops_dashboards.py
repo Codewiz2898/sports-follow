@@ -36,7 +36,11 @@ JOURNEYS = [
 HERE = Path(__file__).resolve().parent
 API = 'job="sports-follow-api"'
 REQ = "http_server_request_duration_seconds"  # metrics.request: by http_route and http_response_status_code
-RANGE, STEP = "$__range", "$__rate_interval"
+# Each API request's log line (server.RequestLog), by its route and status: counts come from these, exactly. The
+# metric's increase() misses each series' first request (metrics.seed says why), which on a quiet day is most of
+# them: one 5xx, or the day's sign-ins. Times come from the metric's buckets, which a missed request barely moves.
+LINES = '{service_name="sports-follow-api"} | scope_name="sports_follow.requests" | route != "/api/health" | route !~ ".*/stream"'
+RANGE, STEP, AUTO = "$__range", "$__rate_interval", "$__auto"
 PROM = {"type": "prometheus", "uid": "${prom}"}
 LOKI = {"type": "loki", "uid": "${loki}"}
 Json = dict[str, Any]
@@ -44,32 +48,36 @@ Json = dict[str, Any]
 
 # ---------------------------------------------------------------- queries by journey
 
-def journeys(by_route: str) -> str:
-    """A vector by http_route, each series labelled with its route's journey, else Other."""
+def journeys(by_route: str, label: str = "http_route") -> str:
+    """A vector by route (the metric's http_route, a log line's route), each series labelled with its route's
+    journey, else Other. label_replace matches whole values, in PromQL and LogQL alike."""
     expr = by_route
     for name, routes in JOURNEYS:
         quoted = routes.replace("\\", "\\\\")
-        expr = f'label_replace({expr}, "journey", "{name}", "http_route", "{quoted}")'
+        expr = f'label_replace({expr}, "journey", "{name}", "{label}", "{quoted}")'
     return f'label_replace({expr}, "journey", "Other", "journey", "")'
 
 
-def requests_by(window: str, statuses: str = "") -> str:
-    """Requests by route in the window (only those answered with statuses, a regular expression, if given)."""
-    matchers = f'{API}, http_response_status_code=~"{statuses}"' if statuses else API
-    return f"sum by (http_route) (increase({REQ}_count{{{matchers}}}[{window}]))"
+def lines(more: str = "", window: str = RANGE) -> str:
+    """API requests in the window, from their log lines (more: label filters, " | status >= 500")."""
+    return f"sum(count_over_time({LINES}{more} [{window}]))"
 
 
-def by_journey(window: str, statuses: str = "") -> str:
-    """Requests by journey; with statuses, 0 for a journey that had requests and none of those."""
-    if not statuses:
-        return f"sum by (journey) ({journeys(requests_by(window))})"
-    some = f"sum by (http_route) (increase({REQ}_count{{{API}}}[{window}]) > 0)"
-    return f"sum by (journey) ({journeys(f'({requests_by(window, statuses)} or 0 * {some})')})"
+def lines_by_route(window: str, more: str = "") -> str:
+    return f"sum by (route) (count_over_time({LINES}{more} [{window}]))"
+
+
+def by_journey(window: str, more: str = "") -> str:
+    """Requests by journey, from their log lines; with more, 0 for a journey that had requests and none of those."""
+    if not more:
+        return f"sum by (journey) ({journeys(lines_by_route(window), 'route')})"
+    filled = f"({lines_by_route(window, more)} or 0 * ({lines_by_route(window)} > 0))"
+    return f"sum by (journey) ({journeys(filled, 'route')})"
 
 
 def answered_by_journey(window: str) -> str:
     """The share of each journey's requests not answered with a server error."""
-    return f"1 - {by_journey(window, '5..')} / ({by_journey(window)} > 0)"
+    return f"1 - {by_journey(window, ' | status >= 500')} / ({by_journey(window)} > 0)"
 
 
 def time_by_journey(q: float, window: str) -> str:
@@ -85,8 +93,9 @@ def api_time(q: float, window: str) -> str:
     return f"histogram_quantile({q}, sum by (le) (rate({REQ}_bucket{{{API}}}[{window}])))"
 
 
-def sign_ins(route: str, statuses: str, window: str = RANGE) -> str:
-    return f'sum(increase({REQ}_count{{{API}, http_route=~"{route}", http_response_status_code=~"{statuses}"}}[{window}]))'
+def sign_ins(route: str, status: str) -> str:
+    """Requests to a sign-in route (or routes, a regular expression) answered with a status (status filters)."""
+    return lines(f' | route =~ "{route}" | status {status}')
 
 
 # ---------------------------------------------------------------- panels
@@ -102,7 +111,9 @@ def target(expr: str, ref: str = "A", legend: str = "", instant: bool = True, ds
 
 def panel(kind: str, title: str, description: str, targets: list[Json], pos: tuple[int, int, int, int], **rest: Any) -> Json:
     x, y, w, h = pos
-    return {"type": kind, "title": title, "description": description, "datasource": targets[0]["datasource"] if targets else PROM,
+    kinds = {t["datasource"]["type"] for t in targets}
+    ds = targets[0]["datasource"] if len(kinds) == 1 else {"type": "datasource", "uid": "-- Mixed --"} if kinds else PROM
+    return {"type": kind, "title": title, "description": description, "datasource": ds,
             "targets": targets, **rest, "gridPos": {"x": x, "y": y, "w": w, "h": h}}
 
 
@@ -152,9 +163,11 @@ def series(title: str, description: str, targets: list[Json], pos: tuple[int, in
 
 def table(title: str, description: str, targets: list[Json], pos: tuple[int, int, int, int], key: str, names: dict[str, str],
           sort: tuple[str, bool], columns: list[Json]) -> Json:
-    """One row per value of the label key, a column per target (named by its refId in names), joined by Grafana."""
+    """One row per value of the label key, a column per target (named by its refId in names), joined by Grafana. A row
+    without a value to sort by is left out: Grafana sorts no further past one."""
     for t in targets:
-        t["format"] = "table"
+        if t["datasource"] is PROM:
+            t["format"] = "table"
     rename = {f"Value #{ref}": name for ref, name in names.items()} | {key: "Route" if key == "http_route" else key.capitalize()}
     width = {"matcher": {"id": "byName", "options": rename[key]}, "properties": [{"id": "custom.width", "value": 230 if key == "http_route" else 180}]}
     return panel("table", title, description, targets, pos,
@@ -163,6 +176,8 @@ def table(title: str, description: str, targets: list[Json], pos: tuple[int, int
                  transformations=[{"id": "merge", "options": {}},
                                   {"id": "organize", "options": {"excludeByName": {"Time": True}, "renameByName": rename,
                                                                   "indexByName": {key: 0, **{f"Value #{ref}": i for i, ref in enumerate(names, 1)}}}},
+                                  {"id": "filterByValue", "options": {"type": "exclude", "match": "any",
+                                                                      "filters": [{"fieldName": sort[0], "config": {"id": "isNull", "options": {}}}]}},
                                   {"id": "sortBy", "options": {"sort": [{"field": sort[0], "desc": sort[1]}]}}])
 
 
@@ -199,17 +214,16 @@ def board(uid: str, title: str, description: str, panels: list[Json], logs: bool
 
 def health() -> Json:
     probe = 'job="sports-follow-uptime"'
-    errors = f'(sum(increase({REQ}_count{{{API}, http_response_status_code=~"5.."}}[{RANGE}])) or vector(0))'
+    errors = f'({lines(" | status >= 500")} or vector(0))'
     pushes = 'job=~"sports-follow-(api|worker)"'
     p = [
         stat("Reachable from outside", "Share of Grafana's uptime checks (Mumbai and Singapore, each minute) that got a healthy answer from /api/health over the range: DNS, the certificate, Caddy and the API together. Under 100%: the Synthetics page says which probe and why.",
              f"sum(increase(probe_all_success_sum{{{probe}}}[{RANGE}])) / sum(increase(probe_all_success_count{{{probe}}}[{RANGE}]))",
-             (0, 0, 6, 4), unit="percentunit", thresholds=ANSWERED, no_value="No checks", decimals=2),
+             (0, 0, 6, 4), unit="percentunit", thresholds=steps(("red", None), ("orange", 0.99), ("green", 0.995)), no_value="No checks", decimals=2),
         stat("API answers without a server error", "Share of API requests over the range not answered with a 5xx (health checks and live streams aren't counted). Few requests make this jumpy: read it with the count beside it.",
-             f"1 - {errors} / (sum(increase({REQ}_count{{{API}}}[{RANGE}])) > 0)", (6, 0, 6, 4), unit="percentunit", thresholds=ANSWERED,
-             no_value="No requests", decimals=2),
+             f"1 - {errors} / ({lines()} > 0)", (6, 0, 6, 4), unit="percentunit", thresholds=ANSWERED, no_value="No requests", decimals=2, ds=LOKI),
         stat("Server errors (5xx)", "API requests answered with a server error over the range. Each is on the API dashboard's Failed requests, with its trace.",
-             errors, (12, 0, 6, 4), thresholds=NONE_GOOD, links=link("API dashboard", "sports-follow-api")),
+             errors, (12, 0, 6, 4), thresholds=NONE_GOOD, ds=LOKI, links=link("API dashboard", "sports-follow-api")),
         stat("Errors logged", "Exceptions logged by the API and worker, and errors the web app reported, over the range. The Errors dashboard groups them by what failed and where.",
              'sum(count_over_time({service_name=~"sports-follow-(api|worker)"} | error != "" [$__range]))', (18, 0, 6, 4),
              thresholds=steps(("green", None), ("orange", 1)), ds=LOKI, links=link("Errors dashboard", "sports-follow-errors")),
@@ -220,32 +234,32 @@ def health() -> Json:
                        "alertName": "", "alertInstanceLabelFilter": "", "folder": {"uid": "sports-follow", "title": "Sports Follow"},
                        "stateFilter": {"firing": True, "pending": True, "noData": False, "normal": False, "error": True}}),
         table("Fans' journeys over the range", "Each thing fans do, by the API routes it calls (the runbook lists them): its requests, how many were answered with a server error (5xx) or refused (4xx: a wrong code, a missing page), and the share answered without a server error.",
-              [target(f"{by_journey(RANGE)} > 0", "A", "requests"), target(by_journey(RANGE, "5.."), "B", "5xx"),
-               target(by_journey(RANGE, "4.."), "C", "4xx"), target(answered_by_journey(RANGE), "D", "answered")],
+              [target(f"{by_journey(RANGE)} > 0", "A", "requests", ds=LOKI), target(by_journey(RANGE, " | status >= 500"), "B", "5xx", ds=LOKI),
+               target(by_journey(RANGE, " | status >= 400 | status < 500"), "C", "4xx", ds=LOKI), target(answered_by_journey(RANGE), "D", "answered", ds=LOKI)],
               (8, 4, 16, 16), "journey", {"A": "Requests", "B": "Server errors", "C": "Refused", "D": "Answered"}, ("Answered", False),
               [column("Answered", "percentunit", ANSWERED, 2), column("Server errors", "short", NONE_GOOD)]),
         series("Answered without a server error, by journey", "The share of each journey's requests not answered with a 5xx, each interval of the chart (10 minutes or more). A gap: no requests then.",
-               [target(answered_by_journey(STEP), legend="{{journey}}", instant=False)], (0, 20, 12, 14), unit="percentunit", high=1, soft_low=0.95,
+               [target(answered_by_journey(AUTO), legend="{{journey}}", instant=False, ds=LOKI)], (0, 20, 12, 14), unit="percentunit", high=1, soft_low=0.95,
                thresholds=ANSWERED),
         series("Requests, by journey", "Requests each interval of the chart (10 minutes or more).",
-               [target(by_journey(STEP), legend="{{journey}}", instant=False)], (12, 20, 12, 14), bars=True),
+               [target(by_journey(AUTO), legend="{{journey}}", instant=False, ds=LOKI)], (12, 20, 12, 14), bars=True),
 
         stat("Codes sent", "Sign-in codes emailed over the range (POST /api/auth/email/start answered 200; a second tap within the minute counts again).",
-             f"{sign_ins('/api/auth/email/start', '200')} or vector(0)", (0, 34, 4, 4)),
+             f"{sign_ins('/api/auth/email/start', '= 200')} or vector(0)", (0, 34, 4, 4), ds=LOKI),
         stat("Signed in", "Codes that signed a fan in (POST /api/auth/email/verify answered 200).",
-             f"{sign_ins('/api/auth/email/verify', '200')} or vector(0)", (4, 34, 4, 4)),
+             f"{sign_ins('/api/auth/email/verify', '= 200')} or vector(0)", (4, 34, 4, 4), ds=LOKI),
         stat("Codes used", "Sign-ins by code for each code sent, over the range. Low: codes aren't arriving (Resend, the spam folder) or fans give up. Few sign-ins make it jumpy.",
-             f"({sign_ins('/api/auth/email/verify', '200')} or vector(0)) / ({sign_ins('/api/auth/email/start', '200')} > 0)", (8, 34, 4, 4),
-             unit="percentunit", thresholds=steps(("orange", None), ("green", 0.5)), no_value="No codes sent", decimals=0),
+             f"({sign_ins('/api/auth/email/verify', '= 200')} or vector(0)) / ({sign_ins('/api/auth/email/start', '= 200')} > 0)", (8, 34, 4, 4),
+             unit="percentunit", thresholds=steps(("orange", None), ("green", 0.5)), no_value="No codes sent", decimals=0, ds=LOKI),
         stat("Wrong codes", "Codes refused at sign-in (verify answered 400: wrong, run out, or not 6 digits).",
-             f"{sign_ins('/api/auth/email/verify', '400')} or vector(0)", (12, 34, 4, 4)),
+             f"{sign_ins('/api/auth/email/verify', '= 400')} or vector(0)", (12, 34, 4, 4), ds=LOKI),
         stat("Code limits hit", "Sign-in requests refused with 429: an address or network asked for too many codes or tried too many wrong ones, or the day's codes ran out (fans read \"has sent all the sign-in codes it can today\").",
-             f"{sign_ins('/api/auth/email/.+', '429')} or vector(0)", (16, 34, 4, 4), thresholds=steps(("green", None), ("orange", 1))),
+             f"{sign_ins('/api/auth/email/.+', '= 429')} or vector(0)", (16, 34, 4, 4), thresholds=steps(("green", None), ("orange", 1)), ds=LOKI),
         stat("Send failed", "email/start answered 502 (Resend refused or didn't answer) or 503 (email isn't set up on the server). Fans can't sign in by email while this grows.",
-             f"{sign_ins('/api/auth/email/start', '5..')} or vector(0)", (20, 34, 4, 4), thresholds=NONE_GOOD),
+             f"{sign_ins('/api/auth/email/start', '>= 500')} or vector(0)", (20, 34, 4, 4), thresholds=NONE_GOOD, ds=LOKI),
         series("Sign-in requests, by step and answer", "Each interval of the chart: start = a code asked for, verify = a code tried, google/start and google/callback = Continue with Google (the callback always answers 303: its failures are in the API's warnings).",
-               [target(f'sum by (step, http_response_status_code) (label_replace(increase({REQ}_count{{{API}, http_route=~"/api/auth/.+"}}[{STEP}]), "step", "$1", "http_route", "/api/auth/(?:email/)?(.+)"))',
-                       legend="{{step}} {{http_response_status_code}}", instant=False)], (0, 38, 24, 10), bars=True),
+               [target(f'sum by (step, status) (label_replace(sum by (route, status) (count_over_time({LINES} | route =~ "/api/auth/.+" [{AUTO}])), "step", "$1", "route", "/api/auth/(?:email/)?(.+)"))',
+                       legend="{{step}} {{status}}", instant=False, ds=LOKI)], (0, 38, 24, 10), bars=True),
 
         stat("Games behind", "Live games not polled for three of their rounds (at least 3 minutes), now: their scores and alerts are late. The Jobs and live polls dashboard shows why.",
              'sum(sports_follow_live_games_behind{job="sports-follow-worker"})', (0, 48, 4, 4), thresholds=NONE_GOOD, no_value="No reading"),
@@ -295,11 +309,11 @@ def performance() -> Json:
              thresholds=steps(("green", None), ("orange", 30), ("red", 120)), no_value="No jobs", decimals=1),
 
         table("Time taken by journey over the range", "Each fan journey's requests and how long they took (the runbook lists each journey's routes). A p95 over 1 s on a journey fans use often is worth a look; over 3 s for 10 minutes, \"The API is slow\" fires.",
-              [target(f"{by_journey(RANGE)} > 0", "A", "requests"),
+              [target(f"{by_journey(RANGE)} > 0", "A", "requests", ds=LOKI),
                *(target(f"{time_by_journey(q, RANGE)} >= 0", ref, label) for ref, (q, label) in zip("BCD", quantiles))],
               (0, 4, 12, 16), "journey", {"A": "Requests", "B": "p50", "C": "p95", "D": "p99"}, ("p95", True), times),
-        table("Slowest routes over the range", "Every API route that answered in the range, slowest first by p95. A route with a handful of requests can top this on one slow one: read it with its count.",
-              [target(f"{requests_by(RANGE)} > 0", "A", "requests"),
+        table("Slowest routes over the range", "Every API route that answered in the range, slowest first by p95. A route with a handful of requests can top this on one slow one: read it with its count. A route whose few requests the metric hasn't timed (a process's first of each isn't) isn't listed; Health counts every request.",
+              [target(f'sum by (http_route) (label_replace({lines_by_route(RANGE, ' | route != ""')}, "http_route", "$1", "route", "(.+)")) > 0', "A", "requests", ds=LOKI),
                *(target(f"{time_by_route(q, RANGE)} >= 0", ref, label) for ref, (q, label) in zip("BCD", quantiles))],
               (12, 4, 12, 16), "http_route", {"A": "Requests", "B": "p50", "C": "p95", "D": "p99"}, ("p95", True), times),
 
@@ -337,7 +351,7 @@ def performance() -> Json:
     ]
     return board("sports-follow-performance", "Sports Follow · Performance",
                  "How fast is it? API time taken (p50, p95, p99) overall, by fan journey and by route; from outside, by phase; moment to push; worker jobs' time and queue wait; the sources' time; the server's CPU, memory and load. deploy/RUNBOOK.md says what's normal.",
-                 p)
+                 p, logs=True)
 
 
 BOARDS = {"health.json": health, "performance.json": performance}

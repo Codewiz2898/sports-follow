@@ -99,7 +99,7 @@
               },
               {
                 "color": "green",
-                "value": 0.999
+                "value": 0.995
               }
             ]
           },
@@ -136,21 +136,20 @@
       "title": "API answers without a server error",
       "description": "Share of API requests over the range not answered with a 5xx (health checks and live streams aren't counted). Few requests make this jumpy: read it with the count beside it.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "${prom}"
+        "type": "loki",
+        "uid": "${loki}"
       },
       "targets": [
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "1 - (sum(increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\", http_response_status_code=~\"5..\"}[$__range])) or vector(0)) / (sum(increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\"}[$__range])) > 0)",
+          "expr": "1 - (sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" | status >= 500 [$__range])) or vector(0)) / (sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" [$__range])) > 0)",
           "legendFormat": "",
           "editorMode": "code",
-          "instant": true,
-          "range": false
+          "queryType": "instant"
         }
       ],
       "fieldConfig": {
@@ -206,21 +205,20 @@
       "title": "Server errors (5xx)",
       "description": "API requests answered with a server error over the range. Each is on the API dashboard's Failed requests, with its trace.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "${prom}"
+        "type": "loki",
+        "uid": "${loki}"
       },
       "targets": [
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "(sum(increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\", http_response_status_code=~\"5..\"}[$__range])) or vector(0))",
+          "expr": "(sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" | status >= 500 [$__range])) or vector(0))",
           "legendFormat": "",
           "editorMode": "code",
-          "instant": true,
-          "range": false
+          "queryType": "instant"
         }
       ],
       "links": [
@@ -387,61 +385,53 @@
       "title": "Fans' journeys over the range",
       "description": "Each thing fans do, by the API routes it calls (the runbook lists them): its requests, how many were answered with a server error (5xx) or refused (4xx: a wrong code, a missing page), and the share answered without a server error.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "${prom}"
+        "type": "loki",
+        "uid": "${loki}"
       },
       "targets": [
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (http_route) (increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\"}[$__range])), \"journey\", \"Sign in\", \"http_route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"http_route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"http_route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"http_route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"http_route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"http_route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"http_route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"http_route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"http_route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"http_route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"http_route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"http_route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) > 0",
+          "expr": "sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" [$__range])), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) > 0",
           "legendFormat": "requests",
           "editorMode": "code",
-          "instant": true,
-          "range": false,
-          "format": "table"
+          "queryType": "instant"
         },
         {
           "refId": "B",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace((sum by (http_route) (increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\", http_response_status_code=~\"5..\"}[$__range])) or 0 * sum by (http_route) (increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\"}[$__range]) > 0)), \"journey\", \"Sign in\", \"http_route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"http_route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"http_route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"http_route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"http_route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"http_route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"http_route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"http_route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"http_route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"http_route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"http_route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"http_route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\"))",
+          "expr": "sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace((sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" | status >= 500 [$__range])) or 0 * (sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" [$__range])) > 0)), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\"))",
           "legendFormat": "5xx",
           "editorMode": "code",
-          "instant": true,
-          "range": false,
-          "format": "table"
+          "queryType": "instant"
         },
         {
           "refId": "C",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace((sum by (http_route) (increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\", http_response_status_code=~\"4..\"}[$__range])) or 0 * sum by (http_route) (increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\"}[$__range]) > 0)), \"journey\", \"Sign in\", \"http_route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"http_route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"http_route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"http_route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"http_route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"http_route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"http_route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"http_route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"http_route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"http_route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"http_route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"http_route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\"))",
+          "expr": "sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace((sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" | status >= 400 | status < 500 [$__range])) or 0 * (sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" [$__range])) > 0)), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\"))",
           "legendFormat": "4xx",
           "editorMode": "code",
-          "instant": true,
-          "range": false,
-          "format": "table"
+          "queryType": "instant"
         },
         {
           "refId": "D",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "1 - sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace((sum by (http_route) (increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\", http_response_status_code=~\"5..\"}[$__range])) or 0 * sum by (http_route) (increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\"}[$__range]) > 0)), \"journey\", \"Sign in\", \"http_route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"http_route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"http_route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"http_route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"http_route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"http_route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"http_route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"http_route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"http_route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"http_route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"http_route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"http_route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) / (sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (http_route) (increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\"}[$__range])), \"journey\", \"Sign in\", \"http_route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"http_route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"http_route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"http_route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"http_route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"http_route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"http_route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"http_route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"http_route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"http_route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"http_route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"http_route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) > 0)",
+          "expr": "1 - sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace((sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" | status >= 500 [$__range])) or 0 * (sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" [$__range])) > 0)), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) / (sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" [$__range])), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) > 0)",
           "legendFormat": "answered",
           "editorMode": "code",
-          "instant": true,
-          "range": false,
-          "format": "table"
+          "queryType": "instant"
         }
       ],
       "fieldConfig": {
@@ -575,6 +565,22 @@
           }
         },
         {
+          "id": "filterByValue",
+          "options": {
+            "type": "exclude",
+            "match": "any",
+            "filters": [
+              {
+                "fieldName": "Answered",
+                "config": {
+                  "id": "isNull",
+                  "options": {}
+                }
+              }
+            ]
+          }
+        },
+        {
           "id": "sortBy",
           "options": {
             "sort": [
@@ -599,21 +605,20 @@
       "title": "Answered without a server error, by journey",
       "description": "The share of each journey's requests not answered with a 5xx, each interval of the chart (10 minutes or more). A gap: no requests then.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "${prom}"
+        "type": "loki",
+        "uid": "${loki}"
       },
       "targets": [
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "1 - sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace((sum by (http_route) (increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\", http_response_status_code=~\"5..\"}[$__rate_interval])) or 0 * sum by (http_route) (increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\"}[$__rate_interval]) > 0)), \"journey\", \"Sign in\", \"http_route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"http_route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"http_route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"http_route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"http_route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"http_route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"http_route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"http_route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"http_route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"http_route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"http_route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"http_route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) / (sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (http_route) (increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\"}[$__rate_interval])), \"journey\", \"Sign in\", \"http_route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"http_route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"http_route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"http_route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"http_route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"http_route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"http_route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"http_route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"http_route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"http_route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"http_route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"http_route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) > 0)",
+          "expr": "1 - sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace((sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" | status >= 500 [$__auto])) or 0 * (sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" [$__auto])) > 0)), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) / (sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" [$__auto])), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) > 0)",
           "legendFormat": "{{journey}}",
           "editorMode": "code",
-          "instant": false,
-          "range": true
+          "queryType": "range"
         }
       ],
       "interval": "10m",
@@ -682,21 +687,20 @@
       "title": "Requests, by journey",
       "description": "Requests each interval of the chart (10 minutes or more).",
       "datasource": {
-        "type": "prometheus",
-        "uid": "${prom}"
+        "type": "loki",
+        "uid": "${loki}"
       },
       "targets": [
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (http_route) (increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\"}[$__rate_interval])), \"journey\", \"Sign in\", \"http_route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"http_route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"http_route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"http_route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"http_route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"http_route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"http_route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"http_route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"http_route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"http_route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"http_route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"http_route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\"))",
+          "expr": "sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" [$__auto])), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\"))",
           "legendFormat": "{{journey}}",
           "editorMode": "code",
-          "instant": false,
-          "range": true
+          "queryType": "range"
         }
       ],
       "interval": "10m",
@@ -743,21 +747,20 @@
       "title": "Codes sent",
       "description": "Sign-in codes emailed over the range (POST /api/auth/email/start answered 200; a second tap within the minute counts again).",
       "datasource": {
-        "type": "prometheus",
-        "uid": "${prom}"
+        "type": "loki",
+        "uid": "${loki}"
       },
       "targets": [
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "sum(increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\", http_route=~\"/api/auth/email/start\", http_response_status_code=~\"200\"}[$__range])) or vector(0)",
+          "expr": "sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" | route =~ \"/api/auth/email/start\" | status = 200 [$__range])) or vector(0)",
           "legendFormat": "",
           "editorMode": "code",
-          "instant": true,
-          "range": false
+          "queryType": "instant"
         }
       ],
       "fieldConfig": {
@@ -805,21 +808,20 @@
       "title": "Signed in",
       "description": "Codes that signed a fan in (POST /api/auth/email/verify answered 200).",
       "datasource": {
-        "type": "prometheus",
-        "uid": "${prom}"
+        "type": "loki",
+        "uid": "${loki}"
       },
       "targets": [
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "sum(increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\", http_route=~\"/api/auth/email/verify\", http_response_status_code=~\"200\"}[$__range])) or vector(0)",
+          "expr": "sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" | route =~ \"/api/auth/email/verify\" | status = 200 [$__range])) or vector(0)",
           "legendFormat": "",
           "editorMode": "code",
-          "instant": true,
-          "range": false
+          "queryType": "instant"
         }
       ],
       "fieldConfig": {
@@ -867,21 +869,20 @@
       "title": "Codes used",
       "description": "Sign-ins by code for each code sent, over the range. Low: codes aren't arriving (Resend, the spam folder) or fans give up. Few sign-ins make it jumpy.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "${prom}"
+        "type": "loki",
+        "uid": "${loki}"
       },
       "targets": [
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "(sum(increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\", http_route=~\"/api/auth/email/verify\", http_response_status_code=~\"200\"}[$__range])) or vector(0)) / (sum(increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\", http_route=~\"/api/auth/email/start\", http_response_status_code=~\"200\"}[$__range])) > 0)",
+          "expr": "(sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" | route =~ \"/api/auth/email/verify\" | status = 200 [$__range])) or vector(0)) / (sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" | route =~ \"/api/auth/email/start\" | status = 200 [$__range])) > 0)",
           "legendFormat": "",
           "editorMode": "code",
-          "instant": true,
-          "range": false
+          "queryType": "instant"
         }
       ],
       "fieldConfig": {
@@ -933,21 +934,20 @@
       "title": "Wrong codes",
       "description": "Codes refused at sign-in (verify answered 400: wrong, run out, or not 6 digits).",
       "datasource": {
-        "type": "prometheus",
-        "uid": "${prom}"
+        "type": "loki",
+        "uid": "${loki}"
       },
       "targets": [
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "sum(increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\", http_route=~\"/api/auth/email/verify\", http_response_status_code=~\"400\"}[$__range])) or vector(0)",
+          "expr": "sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" | route =~ \"/api/auth/email/verify\" | status = 400 [$__range])) or vector(0)",
           "legendFormat": "",
           "editorMode": "code",
-          "instant": true,
-          "range": false
+          "queryType": "instant"
         }
       ],
       "fieldConfig": {
@@ -995,21 +995,20 @@
       "title": "Code limits hit",
       "description": "Sign-in requests refused with 429: an address or network asked for too many codes or tried too many wrong ones, or the day's codes ran out (fans read \"has sent all the sign-in codes it can today\").",
       "datasource": {
-        "type": "prometheus",
-        "uid": "${prom}"
+        "type": "loki",
+        "uid": "${loki}"
       },
       "targets": [
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "sum(increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\", http_route=~\"/api/auth/email/.+\", http_response_status_code=~\"429\"}[$__range])) or vector(0)",
+          "expr": "sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" | route =~ \"/api/auth/email/.+\" | status = 429 [$__range])) or vector(0)",
           "legendFormat": "",
           "editorMode": "code",
-          "instant": true,
-          "range": false
+          "queryType": "instant"
         }
       ],
       "fieldConfig": {
@@ -1061,21 +1060,20 @@
       "title": "Send failed",
       "description": "email/start answered 502 (Resend refused or didn't answer) or 503 (email isn't set up on the server). Fans can't sign in by email while this grows.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "${prom}"
+        "type": "loki",
+        "uid": "${loki}"
       },
       "targets": [
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "sum(increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\", http_route=~\"/api/auth/email/start\", http_response_status_code=~\"5..\"}[$__range])) or vector(0)",
+          "expr": "sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" | route =~ \"/api/auth/email/start\" | status >= 500 [$__range])) or vector(0)",
           "legendFormat": "",
           "editorMode": "code",
-          "instant": true,
-          "range": false
+          "queryType": "instant"
         }
       ],
       "fieldConfig": {
@@ -1127,21 +1125,20 @@
       "title": "Sign-in requests, by step and answer",
       "description": "Each interval of the chart: start = a code asked for, verify = a code tried, google/start and google/callback = Continue with Google (the callback always answers 303: its failures are in the API's warnings).",
       "datasource": {
-        "type": "prometheus",
-        "uid": "${prom}"
+        "type": "loki",
+        "uid": "${loki}"
       },
       "targets": [
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "${prom}"
+            "type": "loki",
+            "uid": "${loki}"
           },
-          "expr": "sum by (step, http_response_status_code) (label_replace(increase(http_server_request_duration_seconds_count{job=\"sports-follow-api\", http_route=~\"/api/auth/.+\"}[$__rate_interval]), \"step\", \"$1\", \"http_route\", \"/api/auth/(?:email/)?(.+)\"))",
-          "legendFormat": "{{step}} {{http_response_status_code}}",
+          "expr": "sum by (step, status) (label_replace(sum by (route, status) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | route != \"/api/health\" | route !~ \".*/stream\" | route =~ \"/api/auth/.+\" [$__auto])), \"step\", \"$1\", \"route\", \"/api/auth/(?:email/)?(.+)\"))",
+          "legendFormat": "{{step}} {{status}}",
           "editorMode": "code",
-          "instant": false,
-          "range": true
+          "queryType": "range"
         }
       ],
       "interval": "10m",
