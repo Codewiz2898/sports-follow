@@ -37,7 +37,7 @@ touches() {
       sports_follow/*) area="API and worker" ;;
       migrations/* | alembic.ini) area=database ;;
       mobile/* | android/*) area="Android app" ;;
-      .github/* | deploy/deploy-summary.sh) area="CI and deploys" ;;
+      .github/* | deploy/deploy-summary.sh | deploy/cancel-replaced.sh) area="CI and deploys" ;;
       deploy/grafana/*) area=Grafana ;;
       Dockerfile | .dockerignore | requirements.txt | deploy/*) area="server setup" ;;
       *) continue ;;
