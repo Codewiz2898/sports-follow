@@ -2,6 +2,7 @@
 
 import { endpoints } from './endpoints'
 import { report } from './errors'
+import { lookKeeper } from './look'
 import type { StreamEvent } from './types'
 
 export type * from './types'
@@ -34,6 +35,9 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = endpoints(request)
+
+/** Teams' looks (look.ts), asked of this origin and kept for the page's life. */
+export const useLooks = lookKeeper(api.looks)
 
 const RETRY_MS = 1000
 const RETRY_MAX_MS = 30_000

@@ -3,13 +3,16 @@
 // What each says is worked out by the shared web/src/lines.ts and format.ts; only the drawing is here.
 
 import { router } from 'expo-router'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutRectangle, type StyleProp, type ViewStyle } from 'react-native'
 import { Image, type ImageStyle } from 'expo-image'
 import { LinearGradient } from 'expo-linear-gradient'
+import Animated, { Easing, ReduceMotion, useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated'
+import Svg, { Polygon } from 'react-native-svg'
 import { outlets } from '../../web/src/feed'
 import { clockPieces, countdown, dateOnly, dateTime, day, hostname, initials, lineStats, longestWordEms, parseDate, playedOn, relative, resultOutcome, safeHref, shortName, statFit } from '../../web/src/format'
 import { bareScore, comingCard, liveLine, playerLine, resultCard, statusLine, teamLine, teamNameSize, wordSize, type GameResult } from '../../web/src/lines'
+import type { Banner } from '../../web/src/teamColours'
 import type { LatestMoment } from '../../web/src/today'
 import { absolute, type Card, type FollowedTeam, type LiveStatus, type NewsItem, type Photo, type Provenance, type RecentResult, type Stat, type UpcomingEvent } from './api'
 import { Backdrop } from './art'
@@ -24,6 +27,14 @@ const go = (path: string) => () => router.push(path as never)
 // The share of the player band the words take beside a photo: they stop where its fade starts to show, so
 // they're read on the band (.player-band.with-photo on the web).
 const BESIDE_PHOTO = 0.64
+// A team's banner (.team-band on the web): its second colour from SEAM_AT in from the right edge below the status bar,
+// leaning back 18° (LEAN, 7a's slant); its crest (MARK across) on the seam MARK_TOP below the status bar; at least
+// BANNER_TALL below the status bar, its words clear of the seam at their foot.
+const SEAM_AT = 40
+const LEAN = 0.3249  // tan 18°
+const MARK = 132
+const MARK_TOP = 84
+const BANNER_TALL = 380
 
 /** A game's match page (app/match/), by its address after /match/ ("<source>/<game id>", as the API gives it). */
 export function matchHref(address: string) {
@@ -491,23 +502,39 @@ function framed(crop: Photo['crop'], box: LayoutRectangle): ImageStyle {
   }
 }
 
+/** A team's banner on its band (the web's .team-band): its colours, the ink and soft ink on its colour, and its crest
+ * for the seam; shown once its look is known, its sport's colour alone till then. */
+export interface BandBanner extends Banner { soft: string; mark: ReactNode; shown: boolean }
+
 /** The top of a player's page (and an athlete's preview): a block of their sport's colour edge to edge, with
  * their photo in its own colours fading in on the right and its credit when there is one. Beside the photo
  * the words stop short of it (b.besidePhoto, also for a note in `children`). The name is as large as fits
  * its longest word on a line in their room (longestWordEms), so it never breaks inside a word: the room
- * the screen leaves them until the words are laid out, then the room they have. */
-export function PlayerBand({ name, sport, meta, photo, back, actions, children, topInset }: { name: string; sport?: string | null; meta?: string; photo?: Photo | null; back: ReactNode; actions?: ReactNode; children?: ReactNode; topInset: number }) {
+ * the screen leaves them until the words are laid out, then the room they have. A team's page draws its banner
+ * on it (banner): its colours past a slanted seam, its crest on the seam, its words at the foot. */
+export function PlayerBand({ name, sport, meta, photo, back, actions, children, topInset, banner }: { name: string; sport?: string | null; meta?: string; photo?: Photo | null; back: ReactNode; actions?: ReactNode; children?: ReactNode; topInset: number; banner?: BandBanner }) {
   const sports = useSports()
   const tone = toneOf(sports, sport)
   const [broken, setBroken] = useState<string | null>(null)
   const [box, setBox] = useState<LayoutRectangle | null>(null)
   const [laidOut, setLaidOut] = useState<number | null>(null)
   const screen = useWindowDimensions().width
+  const [band, setBand] = useState<{ width: number; height: number } | null>(null)
   const shown = photo && photo.url !== broken ? photo : null
-  const room = laidOut ?? (screen - 2 * GUTTER) * (shown ? BESIDE_PHOTO : 1)
+  // The seam's left edge, y down the band; and the words' room, clear of it where it crosses their foot.
+  const seam = (y: number) => (band?.width ?? screen) - SEAM_AT - LEAN * (y - topInset)
+  const clear = seam(topInset + BANNER_TALL - 22) - GUTTER - 12
+  const room = laidOut ?? (banner ? clear : (screen - 2 * GUTTER) * (shown ? BESIDE_PHOTO : 1))
   const credit = shown ? safeHref(shown.page) : undefined
+  const colours = banner?.shown ? banner : null
+  const ink = colours ? colours.ink : tone.on
+  const soft = colours ? colours.soft : tone.onSoft
   return (
-    <View style={[b.band, { backgroundColor: tone.sport, paddingTop: topInset + 16 }]}>
+    <View
+      style={[b.band, { backgroundColor: colours ? colour.raised : tone.sport, paddingTop: topInset + 16 }, banner ? { minHeight: topInset + BANNER_TALL } : null]}
+      onLayout={banner ? (e) => setBand({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height }) : undefined}
+    >
+      {colours && band ? <BannerBack banner={colours} width={band.width} height={band.height} seam={seam} /> : null}
       {shown ? (
         <View pointerEvents="none" style={[b.bandPhoto, { top: topInset + 64 }]} onLayout={(e) => setBox(e.nativeEvent.layout)}>
           {box ? <Image source={{ uri: absolute(shown.url) }} style={framed(shown.crop, box)} contentFit="cover" contentPosition={{ top: '18%', left: '50%' }} onError={() => setBroken(shown.url)} /> : null}
@@ -519,14 +546,63 @@ export function PlayerBand({ name, sport, meta, photo, back, actions, children, 
         {back}
         <View style={{ flexDirection: 'row', gap: 8 }}>{actions}</View>
       </View>
-      <View style={[{ gap: 10 }, shown ? b.besidePhoto : null]} onLayout={(e) => setLaidOut(e.nativeEvent.layout.width)}>
-        {sport ? <Text style={[t.tag, { color: tone.onSoft }]}>{sports.name(sport)}</Text> : null}
-        <Dsp size={Math.min(56, room / longestWordEms(name))} color={tone.on}>{breakable(name)}</Dsp>
-        {meta ? <Text style={{ fontFamily: font[700], fontSize: 15, lineHeight: 21, color: tone.onSoft }}>{meta}</Text> : null}
+      {colours ? <BannerMark x={seam(topInset + MARK_TOP + MARK / 2) + 3} y={topInset + MARK_TOP + MARK / 2}>{colours.mark}</BannerMark> : null}
+      <View style={[{ gap: 10 }, shown ? b.besidePhoto : null, banner ? { marginTop: 'auto', maxWidth: clear } : null]} onLayout={(e) => setLaidOut(e.nativeEvent.layout.width)}>
+        {sport && banner ? (
+          <View style={[b.sportPill, { backgroundColor: tone.sport }]}><Text style={[t.tag, { color: tone.on }]}>{sports.name(sport)}</Text></View>
+        ) : sport ? <Text style={[t.tag, { color: tone.onSoft }]}>{sports.name(sport)}</Text> : null}
+        {/* A little short of its room: Android sets a word a pixel or two wider than the table says, which broke
+            "Mönchengladbach" in two on a team's banner. */}
+        <Dsp size={Math.min(56, (room * 0.97) / longestWordEms(name))} color={ink}>{breakable(name)}</Dsp>
+        {meta ? <Text style={{ fontFamily: font[700], fontSize: 15, lineHeight: 21, color: soft }}>{meta}</Text> : null}
       </View>
       {children}
       {shown ? <Text onPress={credit ? () => Linking.openURL(credit) : undefined} style={[{ fontFamily: font[700], fontSize: 10, lineHeight: 13, color: tone.onSoft, marginTop: -6 }, b.besidePhoto]}>{shown.credit}</Text> : null}
     </View>
+  )
+}
+
+const SWEEP = { duration: 500, easing: Easing.bezier(0.2, 0.8, 0.2, 1), reduceMotion: ReduceMotion.System }
+
+/** A team's colours behind its band (the web's .team-band::before and ::after): its colour sweeping in from the left,
+ * then its second from the right, past a seam stripe of the seam's colour. */
+function BannerBack({ banner, width, height, seam }: { banner: Banner; width: number; height: number; seam: (y: number) => number }) {
+  const fill = useSharedValue(-width)
+  const second = useSharedValue(width)
+  useEffect(() => {
+    fill.value = withTiming(0, SWEEP)
+    second.value = withDelay(80, withTiming(0, SWEEP), ReduceMotion.System)
+  }, [fill, second])
+  const fillIn = useAnimatedStyle(() => ({ transform: [{ translateX: fill.value }] }))
+  const secondIn = useAnimatedStyle(() => ({ transform: [{ translateX: second.value }] }))
+  const top = seam(0)
+  const foot = seam(height)
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: banner.fill }, fillIn]} />
+      <Animated.View style={[StyleSheet.absoluteFill, secondIn]}>
+        <Svg width={width} height={height}>
+          <Polygon points={`${top},0 ${width},0 ${width},${height} ${foot},${height}`} fill={banner.seam} />
+          <Polygon points={`${top + 6},0 ${width},0 ${width},${height} ${foot + 6},${height}`} fill={banner.accent} />
+        </Svg>
+      </Animated.View>
+    </View>
+  )
+}
+
+/** A team's crest on its banner's seam, centred at x, y (the web's .team-mark), sliding and turning in from the right
+ * after the colours. */
+function BannerMark({ x, y, children }: { x: number; y: number; children: ReactNode }) {
+  const at = useSharedValue(0)
+  useEffect(() => {
+    at.value = withDelay(320, withTiming(1, { duration: 800, easing: Easing.bezier(0.2, 1.25, 0.35, 1), reduceMotion: ReduceMotion.System }), ReduceMotion.System)
+  }, [at])
+  const slide = useAnimatedStyle(() => ({ opacity: Math.min(1, at.value), transform: [{ translateX: (1 - at.value) * 220 }, { rotate: `${(1 - at.value) * 16}deg` }] }))
+  const side = MARK + 28  // room for its ring, and a flag's plate
+  return (
+    <Animated.View pointerEvents="none" style={[{ position: 'absolute', left: x - side / 2, top: y - side / 2, width: side, height: side, alignItems: 'center', justifyContent: 'center' }, slide]}>
+      {children}
+    </Animated.View>
   )
 }
 
@@ -570,4 +646,5 @@ export const b = StyleSheet.create({
   band: { overflow: 'hidden', gap: 16, marginHorizontal: -16, paddingHorizontal: 16, paddingBottom: 22, borderBottomLeftRadius: 28, borderBottomRightRadius: 28 },
   bandPhoto: { position: 'absolute', right: 0, bottom: 0, width: '46%', overflow: 'hidden' },
   besidePhoto: { maxWidth: `${BESIDE_PHOTO * 100}%` },
+  sportPill: { alignSelf: 'flex-start', justifyContent: 'center', height: 26, paddingHorizontal: 11, borderRadius: 13, borderWidth: 2, borderColor: colour.surface },  // .team-band .tag.soft
 })

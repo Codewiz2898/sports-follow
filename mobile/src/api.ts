@@ -6,6 +6,7 @@
 
 import Constants from 'expo-constants'
 import { endpoints, json } from '../../web/src/endpoints'
+import { lookKeeper } from '../../web/src/look'
 import type { PushSettings, SportCatalog } from '../../web/src/types'
 import { within } from './deadline'
 
@@ -61,6 +62,9 @@ export const api = {
   unregisterPush: (token: string) => request<{ ok: boolean }>('/api/push/fcm', json('DELETE', { token })),
   opened: (notificationId: number) => request<{ ok: boolean }>(`/api/notifications/${notificationId}/opened`, { method: 'POST' }),
 }
+
+/** Teams' looks (web/src/look.ts), asked of the API and kept while the app runs. */
+export const useLooks = lookKeeper(api.looks)
 
 /** A URL the API gives relative to itself ("/api/photos/…", "/player/7"), made whole. */
 export function absolute(url?: string | null): string | undefined {

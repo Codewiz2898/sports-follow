@@ -1,7 +1,7 @@
 // How a team's colours are drawn (look.ts has its look): the ink that reads on a colour, whether its logo needs a disc on
 // one, both sides of a game's band (7a) and a team's banner on its page (9c). Plain functions of colours, shared with
 // the Android app.
-import type { Look, TeamColours } from './look'
+import type { Look, TeamColours } from './types'
 
 function rgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16)
