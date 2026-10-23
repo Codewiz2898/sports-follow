@@ -16,7 +16,7 @@ import { LinearGradient } from 'expo-linear-gradient'
 import * as ScreenOrientation from 'expo-screen-orientation'
 import { useIsFocused } from 'expo-router'
 import { useEffect, useState } from 'react'
-import { ActivityIndicator, AppState, Image, Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, AppState, Image, Linking, Modal, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { WebView } from 'react-native-webview'
 import { watchPage, watchPoster } from '../../web/src/endpoints'
@@ -25,7 +25,7 @@ import { streamNote } from '../../web/src/match'
 import { API_URL, type MatchStream } from './api'
 import type { Tone } from './catalog'
 import { CollapseIcon, ExpandIcon, OutIcon, PlayIcon } from './icons'
-import { colour, dsp, RADIUS_TILE, t } from './theme'
+import { colour, dsp, GUTTER, RADIUS_TILE, t } from './theme'
 import { Btn, ListCard, SectionHead } from './ui'
 
 const open = (url: string) => {
@@ -43,10 +43,13 @@ export function Watch({ streams, tone, playing, onPlay }: {
   const [opened] = useState(Date.now)
   const [shown, setShown] = useState<string | null>(null)
   // The play button in the middle and the words at the foot, both by the player's width, as on the web, so a
-  // phone's (some 190 tall) keeps them apart.
-  const [wide, setWide] = useState(0)
-  const button = Math.min(64, Math.max(44, wide * 0.14))
-  const words = Math.min(40, Math.max(18, wide * 0.065))
+  // phone's (some 190 tall) keeps them apart. The content's width till it's measured; whole sizes, as Android draws
+  // Anton's ink on whole pixels (theme.dspInk).
+  const screen = useWindowDimensions().width
+  const [measured, setWide] = useState(0)
+  const wide = measured || screen - 2 * GUTTER
+  const button = Math.round(Math.min(64, Math.max(44, wide * 0.14)))
+  const words = Math.round(Math.min(40, Math.max(18, wide * 0.065)))
   // The stream playing stays first while it's listed, though another comes to the top of the list meanwhile; one no
   // longer listed stops.
   const first = streams.find((x) => x.url === playing) ?? streams[0]
