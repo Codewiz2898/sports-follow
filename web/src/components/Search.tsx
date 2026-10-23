@@ -7,7 +7,8 @@ import { allowance, exactName as namesakesName, highlightParts, liveNote as spor
 import { runningSports, sportInfo, sportName } from '../sports'
 import { useFollowing } from '../following'
 import { Avatar } from './Blocks'
-import { Crest, onWhite } from './Crest'
+import { Crest } from './Crest'
+import { onWhite } from '../teamColours'
 import { CheckIcon, PlusIcon, SparkIcon } from './Icons'
 
 /**

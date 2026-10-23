@@ -9,7 +9,8 @@ import type { LatestMoment } from '../today'
 import { outlets } from '../feed'
 import { callNote } from '../predictions'
 import { CallTag } from './Calls'
-import { Crest, CrestPair, onColour, onWhite } from './Crest'
+import { Crest, CrestPair } from './Crest'
+import { onColour, onWhite } from '../teamColours'
 import { ErrorBoundary } from './ErrorBoundary'
 
 /** The photo to show, if any, and a way to drop it when it doesn't load (one Commons removed, say): then

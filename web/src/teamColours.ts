@@ -39,6 +39,16 @@ export function discFor(look: Look | null | undefined, fill: string): string | n
   return lum(main) > 0.5 ? '#0d0d0d' : '#ffffff'
 }
 
+/** The disc a logo sits in on a colour (a card's, a pill's): white, or ink for a light logo. */
+export function onColour(look: Look | null | undefined): string {
+  return discFor(look, '#ffffff') ?? '#ffffff'
+}
+
+/** The disc a logo needs on white (a list, a board, a white card): none, or ink for a light logo. */
+export function onWhite(look: Look | null | undefined): string | null {
+  return discFor(look, '#ffffff')
+}
+
 /** A side of a game's band: its colours, the ink on them, and the disc its logo needs. */
 export interface Side { fill: string; accent: string; ink: string; disc: string | null }
 

@@ -2,8 +2,7 @@
 // there's none or its logos are off, and its two colours for its side of a game's band (BHA-665). Looks are asked for
 // by the ids a game's board, its fixtures and Call it carry ("system:team id"), a few screens' worth at once, and kept
 // for the page's life: a logo taken down stops being served at once, and a page loaded after shows our badge. Shared
-// with the Android app: each app keeps its own, asked with its own api.looks (lookKeeper, in its api.ts).
-import { useEffect, useMemo, useState } from 'react'
+// with the Android app: each app keeps its own, asked with its own api.looks, behind its useLooks (its api.ts).
 import type { Look, TeamColours } from './types'
 
 export type { Look, TeamColours }
@@ -18,8 +17,21 @@ export function teamKey(match: string | null | undefined, id: string | number | 
   return system && id != null && String(id) !== '' ? `${system}:${id}` : null
 }
 
-/** An app's looks, asked for its way (its api.looks): its useLooks. */
-export function lookKeeper(asked: (keys: string[]) => Promise<{ looks: Record<string, Look> }>) {
+/** The teams a screen wants looks for, once each: its keys with none missing. */
+export function lookKeys(keys: (string | null | undefined)[]): string[] {
+  return [...new Set(keys.filter((k): k is string => !!k))]
+}
+
+/** An app's looks, asked for its way (its api.looks), for its useLooks: some teams' as kept (undefined while asking,
+ * null for a team the registry hasn't); asking for those not asked yet and those gone stale; and hearing of each
+ * answer. */
+export interface LookKeeper {
+  looks: (keys: string[]) => Record<string, Look | null | undefined>
+  ask: (keys: string[]) => void
+  hear: (heard: () => void) => () => void
+}
+
+export function lookKeeper(asked: (keys: string[]) => Promise<{ looks: Record<string, Look> }>): LookKeeper {
   const kept = new Map<string, Look | null>()  // null: asked, and the registry hasn't the team
   const stale = new Set<string>()  // a minute after a failed ask: asked again by the screens that want it
   const asking = new Set<string>()
@@ -57,16 +69,12 @@ export function lookKeeper(asked: (keys: string[]) => Promise<{ looks: Record<st
     if (!timer) timer = setTimeout(flush, WAIT_MS)
   }
 
-  /** These teams' looks, by key: undefined while asking, null for a team the registry hasn't. */
-  return function useLooks(keys: (string | null | undefined)[]): Record<string, Look | null | undefined> {
-    const wanted = useMemo(() => [...new Set(keys.filter((k): k is string => !!k))], [keys.join('|')])  // eslint-disable-line react-hooks/exhaustive-deps
-    const [, heardAgain] = useState(0)
-    useEffect(() => {
-      const again = () => heardAgain((n) => n + 1)
-      heard.add(again)
-      return () => { heard.delete(again) }
-    }, [wanted])
-    useEffect(() => { ask(wanted) })  // after every render: those not asked yet, and those gone stale
-    return Object.fromEntries(wanted.map((k) => [k, kept.get(k)]))
+  return {
+    looks: (keys) => Object.fromEntries(keys.map((k) => [k, kept.get(k)])),
+    ask,
+    hear(fn) {
+      heard.add(fn)
+      return () => { heard.delete(fn) }
+    },
   }
 }

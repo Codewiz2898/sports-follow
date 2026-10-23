@@ -7,16 +7,10 @@ import { Image } from 'expo-image'
 import { useState } from 'react'
 import { Text, View } from 'react-native'
 import { initials } from '../../web/src/format'
-import { discFor } from '../../web/src/teamColours'
 import { absolute, type Look } from './api'
 import { colour, font } from './theme'
 
 const RING = 4  // the ring's width (.team-mark .crest)
-
-/** The disc a logo sits in on a colour: white, or ink for a light logo (the web's onColour). */
-export function onColour(look: Look | null | undefined): string {
-  return discFor(look, '#ffffff') ?? '#ffffff'
-}
 
 export function Crest({ look, name, size = 40, disc = null, ring }: { look: Look | null | undefined; name: string; size?: number; disc?: string | null; ring?: string }) {
   const [failed, setFailed] = useState<string | null>(null)  // the address that didn't load

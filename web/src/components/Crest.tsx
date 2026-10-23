@@ -1,6 +1,6 @@
 import { useState, type CSSProperties } from 'react'
 import { useLooks, type Look } from '../api'
-import { discFor } from '../teamColours'
+import { onColour, onWhite } from '../teamColours'
 import { initials } from '../format'
 
 /**
@@ -39,16 +39,6 @@ export function CrestPair({ keys, size = 30 }: { keys?: (string | null | undefin
       {found.map((l, n) => <Crest key={n} look={l} name="" size={size} disc={onColour(l)} />)}
     </span>
   )
-}
-
-/** The disc a logo sits in on a colour (a card's, a pill's): white, or ink for a light logo. */
-export function onColour(look: Look | null | undefined): string {
-  return discFor(look, '#ffffff') ?? '#ffffff'
-}
-
-/** The disc a logo needs on white (a list, a board, a white card): none, or ink for a light logo. */
-export function onWhite(look: Look | null | undefined): string | null {
-  return discFor(look, '#ffffff')
 }
 
 /** One team's crest by its key (a board's side), on white: nothing while it's asked for, or for a team the registry

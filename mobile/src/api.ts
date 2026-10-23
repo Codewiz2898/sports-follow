@@ -5,9 +5,10 @@
 // the app is one fan from its first request on.
 
 import Constants from 'expo-constants'
+import { useEffect, useMemo, useState } from 'react'
 import { endpoints, json } from '../../web/src/endpoints'
-import { lookKeeper } from '../../web/src/look'
-import type { PushSettings, SportCatalog } from '../../web/src/types'
+import { lookKeeper, lookKeys } from '../../web/src/look'
+import type { Look, PushSettings, SportCatalog } from '../../web/src/types'
 import { within } from './deadline'
 
 export type * from '../../web/src/types'
@@ -64,7 +65,17 @@ export const api = {
 }
 
 /** Teams' looks (web/src/look.ts), asked of the API and kept while the app runs. */
-export const useLooks = lookKeeper(api.looks)
+const looks = lookKeeper(api.looks)
+
+/** These teams' looks, by key (look.ts): undefined while asking, null for a team the registry hasn't. Asked again after
+ * every render: those not asked yet, and those gone stale. */
+export function useLooks(keys: (string | null | undefined)[]): Record<string, Look | null | undefined> {
+  const wanted = useMemo(() => lookKeys(keys), [keys.join('|')])  // eslint-disable-line react-hooks/exhaustive-deps
+  const [, heardAgain] = useState(0)
+  useEffect(() => looks.hear(() => heardAgain((n) => n + 1)), [wanted])
+  useEffect(() => { looks.ask(wanted) })
+  return looks.looks(wanted)
+}
 
 /** A URL the API gives relative to itself ("/api/photos/…", "/player/7"), made whole. */
 export function absolute(url?: string | null): string | undefined {

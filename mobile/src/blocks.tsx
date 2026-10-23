@@ -4,7 +4,7 @@
 
 import { router } from 'expo-router'
 import { useEffect, useState, type ReactNode } from 'react'
-import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutRectangle, type StyleProp, type ViewStyle } from 'react-native'
+import { Linking, PixelRatio, Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutRectangle, type StyleProp, type ViewStyle } from 'react-native'
 import { Image, type ImageStyle } from 'expo-image'
 import { LinearGradient } from 'expo-linear-gradient'
 import Animated, { Easing, ReduceMotion, useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated'
@@ -551,9 +551,10 @@ export function PlayerBand({ name, sport, meta, photo, back, actions, children, 
         {sport && banner ? (
           <View style={[b.sportPill, { backgroundColor: tone.sport }]}><Text style={[t.tag, { color: tone.on }]}>{sports.name(sport)}</Text></View>
         ) : sport ? <Text style={[t.tag, { color: tone.onSoft }]}>{sports.name(sport)}</Text> : null}
-        {/* A little short of its room: Android sets a word a pixel or two wider than the table says, which broke
-            "Mönchengladbach" in two on a team's banner. */}
-        <Dsp size={Math.min(56, (room * 0.97) / longestWordEms(name))} color={ink}>{breakable(name)}</Dsp>
+        {/* A little to spare, as Android's measure of the slanted face runs wider than the web's, and the phone's font
+            scale, which Android multiplies every size by (yourSports.tsx's tiles too): without them a team banner's
+            narrower room broke "Mönchengladbach" in two. */}
+        <Dsp size={Math.min(56, room / (longestWordEms(name) * 1.06 * PixelRatio.getFontScale()))} color={ink}>{breakable(name)}</Dsp>
         {meta ? <Text style={{ fontFamily: font[700], fontSize: 15, lineHeight: 21, color: soft }}>{meta}</Text> : null}
       </View>
       {children}
