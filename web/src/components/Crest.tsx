@@ -1,5 +1,6 @@
 import { useState, type CSSProperties } from 'react'
-import { discFor, useLooks, type Look } from '../look'
+import { useLooks, type Look } from '../look'
+import { discFor } from '../teamColours'
 import { initials } from '../format'
 
 /**
