@@ -362,6 +362,18 @@ def test_a_handle_another_games_pro_goes_by_names_a_pro_in_a_feed_every_game_rea
     assert all(f.shared for f in listed.values() if "valorant" in f.sports) and not any(f.shared for f in listed.values() if "cricket" in f.sports)
 
 
+def test_a_digit_ending_a_name_isnt_an_initial_in_a_story_either():
+    """As in a video's title (BHA-678): "dota 6!" isn't named by "dota", as "Gukesh D" is by "Gukesh", so a Dota 2
+    story in a feed every game reads isn't one about them."""
+    group = [Followed(30, "dota2", "dota 6!", ["dota 6"])]
+
+    def hits(title: str) -> list[int]:
+        return sorted(f.player_id for f in news.link([story(title)], group, news.names(group), set(), shared=True))
+
+    assert hits("Valve announces big Dota 2 patch 7.40 changes") == [] and hits("Team Spirit win The International in Dota 2") == []
+    assert hits("dota 6! signs with Team Spirit") == [30]
+
+
 def test_a_feed_that_names_its_encoding_only_in_its_xml_declaration_keeps_its_accents():
     body = '<?xml version="1.0" encoding="ISO-8859-1"?><rss><channel><item><title>Müller scores</title><link>https://x.example.com/1</link></item></channel></rss>'.encode("latin-1")
     assert publisher_rss.decode(body, None).count("Müller") == 1

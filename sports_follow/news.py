@@ -52,7 +52,7 @@ from sqlalchemy.orm import Session
 
 from . import db, metrics, naming, shutdown, sports
 from .adapters import NEWS, AdapterError, Article, NewsSource, budget, news
-from .candidates import _POSSESSIVE, SHORT_NAME, Followed, _holds, _longest_first, followed
+from .candidates import _POSSESSIVE, SHORT_NAME, Followed, _holds, _initial, _longest_first, followed
 from .models import Athlete, FeedCandidate
 
 log = logging.getLogger("sports_follow.news")
@@ -158,7 +158,7 @@ def names(players: Sequence[Followed]) -> dict[int, Names]:
         single: dict[str, bool] = {}
         own: dict[str, bool] = {}
         nick: set[tuple[str, ...]] = set()
-        theirs = [[w for w in spelling if len(w) > 1] for spelling in naming.spellings(_bare(p.name))]  # their own name's words, no initials
+        theirs = [[w for w in spelling if not _initial(w)] for spelling in naming.spellings(_bare(p.name))]  # their own name's words, no initials
         for spelt in theirs:
             if len(spelt) >= 2 or (spelt and len(spelt) < len(naming.words(p.name))):  # "Gukesh D": Gukesh
                 if len(spelt[-1]) >= SHORT_NAME:
