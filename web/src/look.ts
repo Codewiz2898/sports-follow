@@ -13,7 +13,7 @@ const MOST = 80  // keys one ask carries (logos.LOOKS_MOST)
 const WAIT_MS = 20  // keys asked for this close together go in one ask
 const AGAIN_MS = 60_000  // after a failed ask, its keys are asked again this long after
 const kept = new Map<string, Look | null>()  // null: asked, and the registry hasn't the team
-const stale = new Set<string>()  // a minute after a failed ask: asked again by the next screen that wants it
+const stale = new Set<string>()  // a minute after a failed ask: asked again by the screens that want it
 const asking = new Set<string>()
 const heard = new Set<() => void>()
 let queued: string[] = []
