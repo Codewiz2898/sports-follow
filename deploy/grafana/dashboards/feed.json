@@ -41,7 +41,7 @@
         "label": "Metrics",
         "type": "datasource",
         "query": "prometheus",
-        "regex": "/^(?!.*usage).*$/",
+        "regex": "/^(?!.*(usage|ml-metrics)).*$/",
         "hide": 0,
         "current": {},
         "refresh": 1

@@ -87,8 +87,10 @@ alerts. Bharath opens it in the browser. From the Mac, [grafana.py](grafana.py) 
   - The rest: `rid`, `fan`, `job`, `player_id`, `event_id`, `system`, `route`, `status`, `outcome`,
     `error`, `place`, `trace_id`.
   - `|= "text"` matches the message.
-- **Dashboards** (folder Sports Follow): **API**, **Sources**, **Jobs and live polls**, **Notifications**
-  and **Errors**. Errors groups every exception by what failed (`error`) and where (`place`), with its stack.
+- **Dashboards** (folder Sports Follow): **Health** and **Performance** first (each fan journey's success
+  rate and time taken), then **API**, **Sources**, **Jobs and live polls**, **Notifications**, **Feed** and
+  **Errors**. Errors groups every exception by what failed (`error`) and where (`place`), with its stack.
+  `deploy/RUNBOOK.md` says what's normal and what to check for each alert.
 - **Alerts** email Bharath. Each rule's summary in `deploy/grafana/app-rules.json` and `rules.json` says
   what it means and where to look.
 
