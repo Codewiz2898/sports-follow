@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useActivity } from '../activity'
 import { LEVELS } from '../alerts'
 import { api, ApiError, type GameTeam, type Match, type MatchFollowState } from '../api'
 import { useNow } from '../clock'
-import { Avatar, GameBoard, PlainScore, SectionHead, StatGrid } from '../components/Blocks'
+import { GameBoard, PlainScore, SectionHead, StatGrid } from '../components/Blocks'
+import { Crest } from '../components/Crest'
 import { ClipsSection } from '../components/Clips'
 import { BlockError, ErrorBoundary } from '../components/ErrorBoundary'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon } from '../components/Icons'
@@ -13,8 +14,9 @@ import { Picks, usePredictions } from '../components/Picks'
 import { InSide } from '../components/Side'
 import { useFollowToggle } from '../components/Starters'
 import { Watch } from '../components/Watch'
-import { dateTime, relative } from '../format'
+import { dateTime, longestWordEms, relative } from '../format'
 import { useFollowing } from '../following'
+import { discFor, sidesOf, useLooks, type Look, type Side } from '../look'
 import { boardOf, EVERY, followedOf, followHead, keyEvents, nextLook, ownResult, pageResult, startsIn, watchable } from '../match'
 import { AlertLevels, gameLevelText } from '../notifications'
 import { sportDrawn, sportKey, sportName, viewOf } from '../sports'
@@ -108,6 +110,7 @@ function useFollowGame(match: Match | null) {
  * the page's last look; a tap shows at once.
  */
 function GameTeams({ teams }: { teams: GameTeam[] }) {
+  const looks = useLooks(teams.map((t) => t.key))
   const following = useFollowing()
   const [busy, setBusy] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -126,7 +129,7 @@ function GameTeams({ teams }: { teams: GameTeam[] }) {
           return (
             <li key={t.team_id} className="result">
               <Link to={`/team/${t.team_id}`} className="result-main">
-                <Avatar name={t.name} sport={t.sport} />
+                <Crest look={t.key ? looks[t.key] : null} name={t.name} size={44} disc={discFor(t.key ? looks[t.key] : null, '#ffffff')} />
                 <span className="stack">
                   <span className="title">{t.name}</span>
                   <span className="small muted">{on ? 'Every game of theirs, from both sides' : t.can_follow ? 'Follow every game of theirs' : "Its games can't be followed here now"}</span>
@@ -144,6 +147,34 @@ function GameTeams({ teams }: { teams: GameTeam[] }) {
       </ul>
       {error && <div className="error-box" role="alert">{error}</div>}
     </section>
+  )
+}
+
+/** A game's two sides, as the team registry has them, in its board's order (home first, or away first where the
+ * sport's board draws it so): none for a game of more or fewer (a lobby, a chess board's players), or of a side the
+ * registry hasn't. */
+function facing(match: Match | null): [GameTeam, GameTeam] | null {
+  const teams = match?.teams ?? []
+  if (!match || teams.length !== 2 || !teams.every((t) => t.key)) return null
+  return viewOf(sportDrawn(match.sport))?.awayFirst ? [teams[1], teams[0]] : [teams[0], teams[1]]
+}
+
+/**
+ * The two sides face to face at the top of the band (BHA-667): each crest slides in from its side, the V pops and
+ * the names rise. On the teams' colours (sides), each crest in a disc where it would vanish on its colour; on the
+ * sport's, each logo in a white disc.
+ */
+function FaceOff({ teams, looks, sides, v }: { teams: [GameTeam, GameTeam]; looks: Record<string, Look | null | undefined>; sides: [Side, Side] | null; v: boolean }) {
+  return (
+    <div className="faceoff">
+      {teams.map((t, n) => (
+        <Link key={t.team_id} to={`/team/${t.team_id}`} className={`faceoff-side ${n ? 'r' : 'l'}`}>
+          <Crest look={looks[t.key]} name={t.name} size={104} disc={sides ? sides[n].disc : (discFor(looks[t.key], '#ffffff') ?? '#ffffff')} eager />
+          <span className="dsp faceoff-name" style={{ '--ems': longestWordEms(t.name) } as CSSProperties}>{t.name}</span>
+        </Link>
+      ))}
+      {v && <span className="faceoff-v" aria-hidden="true"><span>V</span></span>}
+    </div>
   )
 }
 
@@ -165,6 +196,8 @@ export function MatchPage() {
   const now = useNow()
   const [playing, setPlaying] = useState<string | null>(null)  // the stream a fan has started here (Watch), by its address
   const calls = usePredictions(match?.predictions)  // kept here: a screen narrowed or widened moves the cards, not their picks
+  const faced = facing(match)
+  const looks = useLooks(faced ? faced.map((t) => t.key) : [])
   useEffect(() => { setPlaying(null) }, [source, game])
   const back = <Link to="/" className="btn icon" aria-label="Back to Today"><BackIcon width={20} height={20} /></Link>
 
@@ -178,6 +211,15 @@ export function MatchPage() {
   const live = match.live
   const board = boardOf(match)
   const soon = startsIn(match, now)
+  // Its sides' looks: the band in their colours where both have them, else the sport's; until they're known, neither.
+  const pending = faced != null && faced.some((t) => looks[t.key] === undefined)
+  // Home and away as the server sends them, for the clash rule (the away side changes), then in the board's order.
+  const flipped = faced != null && faced[0] !== match.teams?.[0]
+  const paired = faced && !pending ? sidesOf(looks[(flipped ? faced[1] : faced[0]).key], looks[(flipped ? faced[0] : faced[1]).key]) : null
+  const sides: [Side, Side] | null = paired && flipped ? [paired[1], paired[0]] : paired
+  const colours = sides
+    ? ({ '--l': sides[0].fill, '--la': sides[0].accent, '--ra': sides[1].accent, '--r': sides[1].fill, '--l-ink': sides[0].ink, '--r-ink': sides[1].ink } as CSSProperties)
+    : undefined
   const events = keyEvents(match)
   // Where to watch it: while it's on or about to be, and while a fan's player is on though it's been called over.
   const streams = watchable(match, now)
@@ -190,7 +232,7 @@ export function MatchPage() {
 
   return (
     <>
-      <header className="player-band match-band" data-sport={key}>
+      <header className={`player-band match-band${sides ? ' duo' : ''}`} data-sport={key} style={colours}>
         <div className="bar">
           {back}
           {/* Following the game itself: none for one that's over, and no promise of alerts its source can't send. */}
@@ -226,15 +268,30 @@ export function MatchPage() {
             )}
           </div>
         )}
-        <div className="stack" style={{ gap: 10 }}>
-          <span className="row" style={{ justifyContent: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
-            <Status match={match} />
-            <span className="tag soft">{[match.competition, match.detail].filter(Boolean).join(' · ') || sportName(match.sport)}</span>
-          </span>
-          {/* The board names the sides; without one yet, the title does. */}
-          <h1 className={board ? 'sr-only' : 'dsp match-title'}>{match.title}</h1>
-          {soon && <span className="dsp match-count">{soon}</span>}
-        </div>
+        {sides ? (
+          <>
+            {/* On the teams' colours, what's the game's sits in a pill of the sport's colour; its time in an ink one. */}
+            <span className="match-meta">
+              {match.status === 'live' && <span className="badge-live">Live</span>}
+              {[match.status === 'final' ? 'Result' : match.status === 'postponed' ? 'Off' : '', match.competition, match.detail].filter(Boolean).join(' · ') || sportName(match.sport)}
+            </span>
+            <h1 className="sr-only">{match.title}</h1>
+            {faced && <FaceOff teams={faced} looks={looks} sides={sides} v={!board} />}
+            {!board && (match.status === 'scheduled' || match.status === 'armed') && (soon || match.start_utc) && <span className="dsp match-time">{soon ?? dateTime(match.start_utc ?? '')}</span>}
+          </>
+        ) : (
+          <div className="stack" style={{ gap: 10 }}>
+            <span className="row" style={{ justifyContent: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+              <Status match={match} />
+              <span className="tag soft">{[match.competition, match.detail].filter(Boolean).join(' · ') || sportName(match.sport)}</span>
+            </span>
+            {/* The board names the sides; without one yet, the faces or the title do. */}
+            <h1 className={board || faced ? 'sr-only' : 'dsp match-title'}>{match.title}</h1>
+            {faced && !pending && <FaceOff teams={faced} looks={looks} sides={null} v={!board} />}
+            {faced && pending && <div className="faceoff" aria-hidden="true" style={{ minHeight: 168 }} />}
+            {soon && <span className="dsp match-count">{soon}</span>}
+          </div>
+        )}
         {board && (
           <div className="match-board">
             {/* A state in a shape this app doesn't know shows as the plain score. The board's live block names no

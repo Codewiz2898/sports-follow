@@ -34,4 +34,4 @@ function BasketballBoard({ state, clock, compact }: BoardProps<BasketballState>)
   )
 }
 
-export const basketball: SportView = { ...facts, Board: BasketballBoard as SportView['Board'] }
+export const basketball: SportView = { ...facts, Board: BasketballBoard as SportView['Board'], awayFirst: true }
