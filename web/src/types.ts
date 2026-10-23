@@ -197,6 +197,11 @@ export interface SearchResponse {
   teams?: TeamSummary[]  // teams by that name fans can follow (sports_follow/teams.py), from the registry alone
 }
 
+export interface TeamColours { fill: string; accent: string }
+/** How a team is drawn (look.ts, GET /api/looks): logo, its address on our origin, or null (our badge); colours, null for
+ * its sport's; tones, its logo's own colours, most used first. */
+export interface Look { logo: string | null; short: string; colours: TeamColours | null; tones: string[]; set: boolean }
+
 /** A team fans can follow (sports_follow/teams.py), as search and Following list it: what it plays in and where
  * it's from (`detail`), how many follow it, whether this fan does, and its next game as last read. */
 export interface TeamSummary {

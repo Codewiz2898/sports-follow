@@ -2,7 +2,7 @@
 // and the Android app (mobile/src/api.ts, which asks stann.in over the network), each with its own way of
 // making a request. Types only and calls: nothing of a browser's.
 
-import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Clip, ClipsOf, Credits, Feed, FeedPage, FeedTabKey, FeedVerdict, FollowedMatch, FollowedTeam, FollowTarget, Form, FriendLeague, FriendLeagueSummary, GameDetail, League, LeagueInvite, LiveSport, Match, Me, MyPredictions, Prediction, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, TeamPage, WeekPoster, WireRow } from './types'
+import type { Account, ActivityItem, AlertLevel, AthletePreview, Campaign, Card, Clip, ClipsOf, Credits, Feed, FeedPage, FeedTabKey, FeedVerdict, FollowedMatch, FollowedTeam, FollowTarget, Form, FriendLeague, FriendLeagueSummary, GameDetail, League, LeagueInvite, LiveSport, Look, Match, Me, MyPredictions, Prediction, PushSettings, Research, ResultsPage, SearchResponse, ServerConfig, StarterSport, TeamPage, WeekPoster, WireRow } from './types'
 
 /** Asks the API for a path ("/api/…") and answers its JSON, or throws the refusal. */
 export type Request = <T>(path: string, init?: RequestInit) => Promise<T>
@@ -54,6 +54,8 @@ export function endpoints(request: Request) {
     team: (teamId: number) => request<TeamPage>(`/api/teams/${teamId}`),
     followTeam: (teamId: number, on: boolean) => request<{ team_id: number; following: boolean }>(`/api/teams/${teamId}/follow`, { method: on ? 'PUT' : 'DELETE' }),
     setTeamAlerts: (teamId: number, level: AlertLevel) => request<{ team_id: number; alerts: AlertLevel }>(`/api/teams/${teamId}/alerts`, json('PUT', { level })),
+    // Teams' looks by their keys ("system:team id"), a few screens' worth at once (look.ts): logo, colours.
+    looks: (keys: string[]) => request<{ looks: Record<string, Look> }>(`/api/looks?teams=${keys.map(encodeURIComponent).join(',')}`),
     unfollowMatch: (eventId: number) => request<{ event_id: number; following: false }>(`/api/me/matches/${eventId}`, { method: 'DELETE' }),
     setMatchAlerts: (eventId: number, level: AlertLevel) => request<{ event_id: number; alerts: AlertLevel }>(`/api/me/matches/${eventId}/alerts`, json('PUT', { level })),
     // The fan's UTC offset, so "since yesterday" is by their days; fresh: past any copy the browser keeps.

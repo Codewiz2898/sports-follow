@@ -1,4 +1,4 @@
-// One team's page, the web's TeamPage.tsx: a band of its sport's colour with share, alerts and follow, then its
+// One team's page, the web's TeamPage.tsx: its banner (its two colours, its crest on the seam) with share, alerts and follow, then its
 // game on now (to its match page), its games to come, its form and last results from its side, and its squad to
 // follow player by player. Read again every 30 s while the page is open, sooner while a read of its games is on
 // its way (a team nobody followed yet is read when its page opens). Following a team doesn't follow its players.
@@ -12,11 +12,13 @@ import { LEVELS, teamLevelText } from '../../../../web/src/alerts'
 import { relative } from '../../../../web/src/format'
 import { EVERY, nextLook } from '../../../../web/src/match'
 import { shareTeam } from '../../../../web/src/share'
+import { bannerOf, onColour } from '../../../../web/src/teamColours'
 import { useActivity } from '../../activity'
-import { api, ApiError, type TeamPage } from '../../api'
-import { FormStrip, LiveScoreboard, PlayerBand, ResultsList, UpcomingList } from '../../blocks'
+import { api, ApiError, useLooks, type TeamPage } from '../../api'
+import { FormStrip, LiveScoreboard, PlayerBand, ResultsList, UpcomingList, type BandBanner } from '../../blocks'
 import { toneOf, useSports } from '../../catalog'
 import { useNow } from '../../clock'
+import { Crest } from '../../crest'
 import { useFollowing } from '../../following'
 import { BackIcon, BellIcon, CheckIcon, PlusIcon } from '../../icons'
 import { Page } from '../../page'
@@ -25,7 +27,7 @@ import { ShareButton } from '../../share'
 import { colour, t } from '../../theme'
 import { FollowPills } from '../../today/live'
 import { useFollowToggle } from '../../today/starters'
-import { Btn, Card, ErrorBoundary, ErrorBox, Eyebrow, SectionHead, Spinner } from '../../ui'
+import { alpha, Btn, Card, ErrorBoundary, ErrorBox, Eyebrow, SectionHead, Spinner } from '../../ui'
 
 const APP = Constants.expoConfig?.name ?? ''
 
@@ -39,6 +41,7 @@ export default function TeamScreen() {
   const follow = useFollowToggle()
   const now = useNow()
   const [team, setTeam] = useState<TeamPage | null>(null)
+  const looks = useLooks([team?.key])
   const [error, setError] = useState<string | null>(null)
   const [failure, setFailure] = useState<string | null>(null) // a follow or alert change the server refused
   const [open, setOpen] = useState(false)
@@ -89,8 +92,20 @@ export default function TeamScreen() {
   const level = mine?.alerts ?? team.alerts
   const live = team.live?.is_live ? team.live : null
   const eventId = live?.event_id ?? null
-  const onBand = { fg: tone.on, border: tone.on, bg: 'transparent' }
-  const filled = { fg: tone.sport, border: tone.on, bg: tone.on }
+  // Its banner (9c): its colours, or its sport's with an ink second where it has none; its sport's alone, and no crest,
+  // until its look is known. White buttons ringed in ink, so they show on any colour, as the web's.
+  const look = team.key ? looks[team.key] : null
+  const own = bannerOf(look)
+  const colours = own ?? { fill: tone.sport, accent: colour.text, seam: colour.surface, ink: tone.on }
+  const banner: BandBanner = {
+    ...colours,
+    soft: own ? alpha(own.ink, 0.82) : tone.onSoft,
+    shown: look !== undefined,
+    mark: <Crest look={look} name={team.name} size={132} disc={onColour(look)} ring={colours.seam} />,
+  }
+  const white = { fg: colour.text, border: colour.text, bg: colour.surface }
+  const inked = { fg: colour.surface, border: colour.text, bg: colour.text }
+  const ringed = { borderWidth: 2, borderColor: colour.text }
   const attempt = (work: () => Promise<unknown>) => {
     setFailure(null)
     return work().catch((e: Error) => setFailure(e.message))
@@ -106,21 +121,22 @@ export default function TeamScreen() {
   }
 
   return (
-    <Page top={false} bar={tone.sport}>
+    <Page top={false} bar={banner.shown ? banner.fill : tone.sport}>
       <PlayerBand
         topInset={insets.top}
+        banner={banner}
         name={team.name}
         sport={team.sport}
         meta={[team.detail, team.followers ? `${team.followers} following` : ''].filter(Boolean).join(' · ')}
-        back={<Btn kind="icon" accessibilityLabel="Back" colours={{ bg: tone.on }} icon={<BackIcon size={20} color={tone.sport} />} onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))} />}
+        back={<Btn kind="icon" accessibilityLabel="Back" colours={white} icon={<BackIcon size={20} color={colour.text} />} style={ringed} onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))} />}
         actions={
           <>
-            <ShareButton {...shareTeam(team.team_id, team.name, APP)} colours={{ bg: tone.on, fg: tone.sport }} />
+            <ShareButton {...shareTeam(team.team_id, team.name, APP)} colours={white} style={ringed} />
             {isFollowing ? (
-              <Btn kind="icon" accessibilityLabel={`Alerts: ${LEVELS.find((l) => l.value === level)?.label}`} colours={{ bg: tone.on }} icon={<BellIcon size={20} color={tone.sport} />} onPress={() => setOpen((o) => !o)} style={open ? { borderWidth: 3, borderColor: tone.sport } : undefined} />
+              <Btn kind="icon" accessibilityLabel={`Alerts: ${LEVELS.find((l) => l.value === level)?.label}`} colours={white} icon={<BellIcon size={20} color={colour.text} />} onPress={() => setOpen((o) => !o)} style={open ? { borderWidth: 4, borderColor: colour.text } : ringed} />
             ) : null}
             {team.can_follow || isFollowing ? (
-              <Btn label={isFollowing ? 'Following' : 'Follow'} icon={isFollowing ? <CheckIcon size={16} color={tone.sport} /> : <PlusIcon size={16} color={tone.on} />} colours={isFollowing ? filled : onBand} busy={busy} onPress={toggle} />
+              <Btn label={isFollowing ? 'Following' : 'Follow'} icon={isFollowing ? <CheckIcon size={16} color={colour.surface} /> : <PlusIcon size={16} color={colour.text} />} colours={isFollowing ? inked : white} busy={busy} onPress={toggle} />
             ) : null}
           </>
         }

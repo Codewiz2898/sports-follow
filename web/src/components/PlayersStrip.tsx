@@ -1,10 +1,10 @@
 import { Link } from 'react-router-dom'
-import type { Card, FollowedTeam } from '../api'
+import { useLooks, type Card, type FollowedTeam } from '../api'
 import { shortName } from '../format'
-import { useLooks } from '../look'
 import { sportKey } from '../sports'
 import { liveShort, nextWhen, teamNextWhen, teamOrder, tileOrder } from '../today'
-import { Crest, onColour } from './Crest'
+import { Crest } from './Crest'
+import { onColour } from '../teamColours'
 import { ChevronIcon } from './Icons'
 import { Rail } from './Rail'
 

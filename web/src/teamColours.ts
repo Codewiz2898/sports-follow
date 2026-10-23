@@ -1,7 +1,7 @@
 // How a team's colours are drawn (look.ts has its look): the ink that reads on a colour, whether its logo needs a disc on
 // one, both sides of a game's band (7a) and a team's banner on its page (9c). Plain functions of colours, shared with
 // the Android app.
-import type { Look, TeamColours } from './look'
+import type { Look, TeamColours } from './types'
 
 function rgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16)
@@ -37,6 +37,16 @@ export function discFor(look: Look | null | undefined, fill: string): string | n
   const main = look?.tones[0]
   if (!look?.logo || !main || apart(main, fill) >= NEAR) return null
   return lum(main) > 0.5 ? '#0d0d0d' : '#ffffff'
+}
+
+/** The disc a logo sits in on a colour (a card's, a pill's): white, or ink for a light logo. */
+export function onColour(look: Look | null | undefined): string {
+  return discFor(look, '#ffffff') ?? '#ffffff'
+}
+
+/** The disc a logo needs on white (a list, a board, a white card): none, or ink for a light logo. */
+export function onWhite(look: Look | null | undefined): string | null {
+  return discFor(look, '#ffffff')
 }
 
 /** A side of a game's band: its colours, the ink on them, and the disc its logo needs. */
