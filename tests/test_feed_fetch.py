@@ -459,6 +459,17 @@ def test_a_name_initial_player_is_named_by_their_name_alone_and_an_aliass_last_w
     assert not any(len(phrase) == 1 and len(phrase[0]) == 1 for phrase in candidates.phrases(group)[20])  # no initial alone
 
 
+def test_a_digit_ending_a_name_isnt_an_initial():
+    """A name ending in a digit ("dota 6!", as a source named a Dota 2 pro) isn't named by the word before it, as
+    "Gukesh D" is by "Gukesh": on production every Dota 2 title named it by "dota" (22 Oct 2026)."""
+    junk = Followed(30, "dota2", "dota 6!", ["dota 6"])
+    names = candidates.phrases([junk])
+    assert ("dota",) not in names[30]
+    assert candidates.named(up("Team Spirit vs Team Yandex - Dota 2 Highlights in 3 Mins"), names[30]) is None
+    assert candidates.named(up("dota 6! wins the lane"), names[30]) == ("dota 6", "title")
+    assert candidates.search_name(junk, names) == "dota 6!"
+
+
 # ---------------------------------------------------------------- what a row keeps
 
 

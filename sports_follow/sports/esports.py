@@ -613,6 +613,7 @@ GAMES: tuple[Game, ...] = (
         "UCwlKnVP2b9m2riIqBFrAUfw",  # Paper Rex
         "UCE5oMiJ540R4BwnlEKf93SQ",  # Team Liquid VALORANT
         "UCY2Mt2Aa95FP3-F6_9aQm5w",  # FNATIC Valorant
+        "UCckPYr9b_iVucz8ID1Q67sw",  # TenZ: his own, daily (2.8M subscribers); its descriptions name him (BHA-678)
     )),
     Game("cs2", "CS2", _dark("#334155", "#a8b8cc"), ("Counter-Strike 2", "Counter-Strike", "CS:GO", "CSGO"), r"\bcs2\b|counter-?strike|\bcs:? ?go\b", channels=(
         "UCx1kGL8Qox1jEiHRMsnn9Ag",  # StarLadder CS2

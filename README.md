@@ -797,9 +797,9 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   lists the candidates newest first with the verdict, score and reason, to approve, hide or pin each, and
   sets each channel's trust. The feed only reads the table and never waits on the curator. YouTube's
   free quota is 10,000 units a day (reset at midnight Pacific), counted as the `youtube-data` budget with 1,000
-  never spent: the channel poll is 48 units a channel a day (its uploads playlist every half hour: 4,848 for the
-  101 channels the sports list now, and 101 more for a curator restarted mid-day), and reading what's new and what's
-  stored again a few hundred more, so about 5,450 of the 9,000 spendable with the searches' reads. Each channel a
+  never spent: the channel poll is 48 units a channel a day (its uploads playlist every half hour: 4,896 for the
+  102 channels the sports list now, and 102 more for a curator restarted mid-day), and reading what's new and what's
+  stored again a few hundred more, so about 5,500 of the 9,000 spendable with the searches' reads. Each channel a
   sport adds costs 48 a day: about 70 more fit before the poll needs a slower cadence or more quota
   (`tests/test_moment_search.py` holds all of it to that). Searches
   have a quota of their own (BHA-342; YouTube moved `search.list` to it on 1 June 2026): 100 a day, 1 unit each,
