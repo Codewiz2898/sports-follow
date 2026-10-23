@@ -82,7 +82,8 @@ A launch, a final, anything many fans follow live.
 
 Health's counts come from each API request's log line, so they're exact. Times come from the request metric's
 buckets (Performance), which are approximate, and which miss each process's first request on a route: a rare
-route can be missing from the slowest routes until it's been asked a few times.
+route can be missing from the slowest routes until it's been asked a few times. Counts reach back only as far as
+the logs are kept (Grafana Cloud's free tier keeps 14 days); times as far as the metrics are.
 
 Also in Grafana: **Testing & synthetics** (the uptime check's results by probe, with each failure's reason) and
 **Explore** (any log line or trace: the `debug` skill has the queries).

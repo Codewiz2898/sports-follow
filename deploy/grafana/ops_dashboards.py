@@ -39,7 +39,10 @@ REQ = "http_server_request_duration_seconds"  # metrics.request: by http_route a
 # Each API request's log line (server.RequestLog), by its route and status: counts come from these, exactly. The
 # metric's increase() misses each series' first request (metrics.seed says why), which on a quiet day is most of
 # them: one 5xx, or the day's sign-ins. Times come from the metric's buckets, which a missed request barely moves.
-LINES = '{service_name="sports-follow-api"} | scope_name="sports_follow.requests" | route != "/api/health" | route !~ ".*/stream"'
+# Only the requests metrics.request counts (tracing.measured): an API path, not a health check or a stream. RequestLog
+# also logs every refused page or file (a scanner's 404s), which aren't the API's.
+LINES = ('{service_name="sports-follow-api"} | scope_name="sports_follow.requests"'
+         ' | path =~ "/api/.+" | path != "/api/health" | path !~ ".*/stream"')
 RANGE, STEP, AUTO = "$__range", "$__rate_interval", "$__auto"
 PROM = {"type": "prometheus", "uid": "${prom}"}
 LOKI = {"type": "loki", "uid": "${loki}"}

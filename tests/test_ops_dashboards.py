@@ -41,7 +41,8 @@ def test_every_route_fans_call_is_in_one_journey():
 
 
 def alternatives(pattern: str) -> list[str]:
-    """A regular expression's top-level alternatives: "a|b(c|d)" is "a" and "b(c|d)"."""
+    """A regular expression's top-level alternatives: "a|b(c|d)" is "a" and "b(c|d)". Enough for JOURNEYS: it doesn't
+    know escaped brackets, or a | inside [...]."""
     parts, depth, start = [], 0, 0
     for i, char in enumerate(pattern):
         depth += {"(": 1, ")": -1}.get(char, 0)
