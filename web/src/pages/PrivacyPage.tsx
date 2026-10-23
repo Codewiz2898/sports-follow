@@ -38,6 +38,10 @@ export function PrivacyPage() {
         <p>Watching them, you agree to YouTube's Terms of Service: see <Link to="/terms" className="link">Terms</Link>.</p>
       </Part>
 
+      <Part title="Live streams">
+        <p>A game's Watch live plays its broadcast in Twitch's, Kick's or YouTube's own player, which loads only once you tap play, and may set cookies and collect data on your device as that platform's privacy policy says. Before that, the match page shows the platform's picture of it (a live Twitch channel's latest frame, a YouTube video's thumbnail), which your device loads from the platform's servers.</p>
+      </Part>
+
       <Part title="Deleting it">
         <p>Signed in: <Link to="/account" className="link">Account</Link>, then Delete account. Everything above goes at once, and our daily backups are kept for 14 days.</p>
         <p>Without an account: unfollow your players, teams and games, untick your sports in Following, and turn alerts off in Alerts, then clear this site's data in your browser, or uninstall the Android app.</p>

@@ -3383,6 +3383,35 @@ def watch_page(player: str, plays: str, request: Request) -> Response:
     return HTMLResponse(body, headers={"Content-Security-Policy": policy, "Cache-Control": "public, max-age=3600", "X-Robots-Tag": "noindex, nofollow"})
 
 
+POSTERS_PER_ADDRESS = 120  # an hour: streams one client address has the server ask a platform about (a page asks for one)
+POSTERS_PER_IPV6_48 = 480  # an hour, from one IPv6 /48's /64s together (_address_limits)
+POSTERS_UNKNOWN_ADDRESS = 1200  # an hour, from every client without a public address together
+
+
+@app.get("/api/watch/{player}/{plays}/poster")
+async def watch_poster(player: str, plays: str, request: Request) -> Response:
+    """A stream's picture on its match page till a fan plays it (a stream's `embed.poster`): the platform's own (a
+    live Twitch channel's latest frame, a YouTube video's thumbnail), sent on to where the platform serves it. Only
+    while it has one: Twitch's for a channel that isn't live is its grey "offline" picture (watch.pictured), so that's
+    a 404, as are a player without pictures and what isn't of its player's shape, and the page keeps its own poster.
+    The platform is asked at most once every watch.POSTER_FOR seconds a stream, whoever asks; asking anew counts
+    against POSTERS_PER_ADDRESS an hour, as anyone could otherwise have the server ask about name after name."""
+    address = watch.poster(player, plays)
+    if address is None:
+        raise HTTPException(404, "Not Found")
+    key = f"watch:poster:{address}"
+    there = await state["redis"].get(key)
+    if there is None:
+        await _take_address("watch-posters", _address_limits(client_address(request), POSTERS_PER_ADDRESS, POSTERS_PER_IPV6_48, POSTERS_UNKNOWN_ADDRESS),
+                            str(int(time.time() // 3600)), 7200, "That's a lot of pictures from your network. Try again in a while.")
+        there = "1" if await watch.pictured(address) else "0"
+        await state["redis"].set(key, there, ex=watch.POSTER_FOR)
+    kept = {"Cache-Control": f"public, max-age={watch.POSTER_FOR}"}
+    if there != "1":
+        return Response(status_code=404, headers=kept)
+    return RedirectResponse(address, 302, headers=kept)
+
+
 # ---------------------------------------------------------------- link previews of invites, teams, clips and games
 
 

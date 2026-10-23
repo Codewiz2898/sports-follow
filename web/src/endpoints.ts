@@ -136,3 +136,8 @@ export function endpoints(request: Request) {
 /** The site's page of a stream's player alone (sports_follow/watch.py's page), for a stream's `embed`: the Android
  * app plays it in its match page, as Twitch's player must sit in a page on the site it's told. */
 export const watchPage = (embed: { player: string; id: string }) => `/watch/${encodeURIComponent(embed.player)}/${encodeURIComponent(embed.id)}`
+
+/** A stream's picture till it's played (its `embed.poster`), as of when the page opened, to the five minutes: the
+ * server asks the platform anew that often (sports_follow/watch.py's POSTER_FOR), and the Android app keeps a picture
+ * by its address for good, so one address for every visit would show a channel's frame from days before. */
+export const watchPoster = (poster: string, opened: number) => `${poster}?at=${Math.floor(opened / 300_000)}`

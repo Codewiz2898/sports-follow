@@ -263,7 +263,19 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   than the site's (no script of its own, its one style by its hash, only its player's frame), which the Caddyfile
   leaves it. A platform is one entry in `watch.PLATFORMS`, with its player (what it plays, its address) as a
   `watch.Player`; the web app makes the same address itself (`components/Watch.tsx`'s `playerUrl`), and the
-  Caddyfile's `frame-src` names each player's host, which `tests/test_watch.py` keeps in step.
+  Caddyfile's `frame-src` names each player's host, which `tests/test_watch.py` keeps in step. Till a fan
+  taps play, the web and the Android app show the platform's own picture of the stream where it has one
+  (`Player.poster`: a live Twitch channel's latest frame from static-cdn.jtvnw.net, a YouTube video's
+  thumbnail; Kick has no address for one), darkened under "Watch on Twitch", and the sport's colour while it
+  loads or without one; its play button is in the middle, it and the words sized by the player's width so a
+  phone's keeps them apart. The privacy page says the picture comes from the platform's servers. A stream's `embed.poster` is `/api/watch/<player>/<id>/poster`, which sends the page
+  on to the picture only once the platform has said there is one (`watch.pictured`, a HEAD): Twitch's
+  address for a channel that isn't live, which Watch live shows half an hour before the start, sends to its
+  grey "offline" picture instead, so that's a 404. The server asks a platform about a stream at most once
+  every 5 minutes for every fan (`watch.POSTER_FOR`, in Redis), and an address can have it ask anew 120 times
+  an hour (`POSTERS_PER_ADDRESS`), as anyone could otherwise send it asking about name after name. The apps
+  add when the page opened, to the 5 minutes (`endpoints.ts`'s `watchPoster`), as Android keeps a picture
+  by its address for good; a page open while a channel goes live shows its picture from the next visit.
 - **Following a game by itself** (`sports_follow/matches.py`, the match page's Follow): its key moments
   from both sides reach the fan until it ends, whoever they follow in it. A follow is a row
   (`match_follow`: the fan, the game's event, their level, and when it lapsed); following a game nobody
