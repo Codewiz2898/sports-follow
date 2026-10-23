@@ -273,6 +273,28 @@ class Team(Base):
     fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # its games last read
     seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # the last import that listed it
     created_at: Mapped[datetime] = _now()
+    logo_url: Mapped[str | None] = mapped_column(Text)  # where its source keeps its logo (SourceTeam.logo); ours is its TeamLogo
+    # Its two colours as an operator set them (logos.py: the admin panel's Teams, or `logos colours`): {"fill": "#004d98",
+    # "accent": "#a50044"}. None: the ones read from its logo.
+    colours: Mapped[dict | None] = mapped_column(JSONB)
+
+
+class TeamLogo(Base):
+    """Our copy of a team's logo (logos.py), downloaded once from its source's address (Team.logo_url) and drawn again
+    at one size, with the colours read from it; served from our own origin by its digest. Removing the team takes it."""
+
+    __tablename__ = "team_logo"
+
+    team_id: Mapped[int] = mapped_column(ForeignKey("team.id", ondelete="CASCADE"), primary_key=True)
+    url: Mapped[str] = mapped_column(Text)  # the source's address it was fetched from: a new one is a new logo
+    status: Mapped[str] = mapped_column(String(10))  # ok | failed
+    reason: Mapped[str | None] = mapped_column(Text)  # why there's none: "not an image", "HTTP 404"
+    digest: Mapped[str | None] = mapped_column(String(32), index=True)  # of the PNG: its address
+    data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)  # a PNG, SIZE pixels at most each way
+    # The colours it's drawn in, most used first, each with its share of the logo: [{"hex": "#004d98", "share": 0.31,
+    # "grey": false}], greys (white, black) too, so the app can tell a logo that would vanish on a colour.
+    palette: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    fetched_at: Mapped[datetime] = _now()
 
 
 class TeamOverride(Base):

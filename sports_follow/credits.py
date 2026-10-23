@@ -17,7 +17,7 @@ from typing import Any
 from . import engine, sports, wiki
 from .adapters import ALL, KNOWN, NEWS, VIDEOS, Provider, pick, providers
 from .agent import MODEL
-from .config import APP_NAME, SOURCES
+from .config import APP_NAME, CONTACT_EMAIL, SOURCES
 
 # Server, web app and services, with the licence each is used under (tests check the Python ones against the
 # installed packages, and that each package the web app ships, by its npm name, is here with its licence).
@@ -57,6 +57,9 @@ SOFTWARE: list[dict[str, str]] = [
 NOTICES = [
     "Scores and statistics come from the providers above and aren't official records; if one looks wrong, the governing body's record is the one that counts.",
     f"Team, league and competition names belong to their owners. {APP_NAME} isn't affiliated with or endorsed by any league, team, player, governing body or data provider.",
+    # Teams' logos (logos.py): shown only to name a game's sides, as scores apps do, and taken down on request.
+    "Team logos belong to their owners too. We show one only to name a team in a game, never to say a team or league is with us"
+    + (f"; to have one taken down, write to {CONTACT_EMAIL}." if CONTACT_EMAIL else "; ask us and we'll take one down."),
 ]
 
 

@@ -32,6 +32,7 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
                                 ├─ import_registry, weekly: Wikidata ──▶ athlete table (the player registry)
                                 ├─ prune, daily: finished games' timelines, old moments and pushes, idle hot cards
                                 ├─ fetch_photos, every 15 min: followed and starter players' photos from Wikimedia Commons, for their profiles
+                                ├─ fetch_logos, every 30 min: teams' logos from their sources, kept and served by us (logos.py)
                                 ├─ read_sidelined, twice a day: who's out and who's back, league-wide, for the Wire (sidelined.py)
                                 ├─ refresh_campaigns, daily: each campaign page's teams' rosters from their sources (campaigns.py)
                                 └─ tick, every minute, beside the jobs (no slot): arm events, queue polls, refreshes and rebuilds
@@ -106,6 +107,13 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   (`crop`) with the photo, and the profile shows that square; a photo with no face found is shown from
   near its top.
   `python -m sports_follow.photos` runs the job once.
+- **Team logos, kept and served by us** (`sports_follow/logos.py`). A source that has teams' logos says where
+  (`SourceTeam.logo`, on its `logo_hosts`); the worker downloads each once, from those hosts only, redraws it as
+  a PNG and keeps it in Postgres with the colours read from it, and the app draws each team by its key
+  (`GET /api/looks`). Logos belong to their owners: the admin panel turns a sport's off, and its Teams tab takes
+  one team's down or sets its colours where its logo reads them wrong. From a shell:
+  `python -m sports_follow.logos` runs the job once; `python -m sports_follow.logos hide <team>` takes one down
+  (`show` puts it back); `python -m sports_follow.logos colours <team> <fill> [accent]` sets its colours.
 - **Profiles from Wikidata and Wikipedia, no model.** A player with a Wikidata person (their registry
   athlete; an esports pro's, once roster_wikidata.py has matched them) gets the facts on their page from
   Wikidata (`sports_follow/wiki.py`): date of birth, the country they compete for, current teams (one club
@@ -696,7 +704,8 @@ React app (web/) ──/api──▶ FastAPI (sports_follow/server.py) ──▶
   `teams` and `team_fixtures` for a source fans can follow teams from (every team it covers in its sports that
   run, read weekly for the team registry in a few requests, and one team's games, finished and to come, over
   the window `fixtures` reads for a player; `sports_follow/teams.py`; its `team` gives the team page its squad,
-  and its `result_label` says each result from the team's side),
+  and its `result_label` says each result from the team's side; where it has teams' logos, each `SourceTeam.logo`
+  says where, and `logo_hosts` the hosts they're on: `sports_follow/logos.py` keeps our own copy and serves it),
   `spare` for background reads, `rekey` for a source that changes
   how it names its athletes (the worker moves every player bound to it to the new ids, and the registry
   drops its rows with an id of the old shape).

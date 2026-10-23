@@ -453,7 +453,7 @@ def parse_teams(rows: list[dict[str, Any]], league: dict[str, Any], system: str 
     competition = _competition({"league": league})
     return [
         SourceTeam(system=system, team_id=str(t["id"]), name=_named(t), short=str(t.get("short_code") or ""), competition=competition,
-                   country=str((t.get("country") or {}).get("name") or ""))
+                   country=str((t.get("country") or {}).get("name") or ""), logo=str(t.get("image_path") or ""))
         for t in rows if t.get("id") and _named(t) and not t.get("placeholder")
     ]
 
@@ -474,7 +474,7 @@ def parse_team(t: dict[str, Any], today: date | None = None, system: str = "spor
             continue
         players.setdefault(str(p["id"]), PlayerRef(system=system, athlete_id=str(p["id"]), name=who, team_ids=[team_id], team_names=[name], born=p.get("date_of_birth")))
     return SourceTeam(system=system, team_id=team_id, name=name, players=list(players.values()), short=str(t.get("short_code") or ""),
-                      country=str((t.get("country") or {}).get("name") or ""))
+                      country=str((t.get("country") or {}).get("name") or ""), logo=str(t.get("image_path") or ""))
 
 
 # ---------------------------------------------------------------- the adapter
@@ -486,6 +486,7 @@ class SportmonksFootball(Adapter):
     name = "Sportmonks"
     provider = sportmonks.PROVIDER
     covers = "Football"
+    logo_hosts = sportmonks.LOGO_HOSTS
     live_cadence = 15  # one fixtures/multi request for every live match: 240 an hour, of 2,000
     MULTI_MAX = 50  # fixture ids fixtures/multi takes in one request
     WINDOW_BACK, WINDOW_AHEAD = 120, 60  # days of fixtures a refresh reads; older ones come from history_pages

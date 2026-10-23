@@ -56,6 +56,8 @@ PROVIDER = Provider(
 
 RateLimited = budget.RateLimited
 
+LOGO_HOSTS = ("cdn-api.pandascore.co", "cdn.pandascore.co")  # where a team's image_url points (Adapter.logo_hosts)
+
 
 class NotFound(AdapterError):
     """No such player or match."""

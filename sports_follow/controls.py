@@ -1,6 +1,7 @@
 """What the admin panel changes on the running app (admin.py): the sports and sources turned off, what each
 source may spend (its allowance a window, the reserve kept for live games, the fans' share), each video channel's
-trust, and how the apps draw the fan's Feed (its layout).
+trust, how the apps draw the fan's Feed (its layout), and whose team logos show (the sports with logos off, and the
+teams whose logo is taken down).
 
 The server's settings stay the ceiling: SPORTS_FOLLOW_SPORTS and SPORTS_FOLLOW_SOURCES say what this
 build may run, and a licensed source still needs its token. The panel turns things off within that, and
@@ -29,7 +30,8 @@ BUDGET = "budget:"  # + a budget's name: what the panel changed of it (budget.ef
 CHANNEL_TRUST = "channel_trust"  # {video channel id: trust, 0 to 1}: the Feed's ranking (rank.trust); 0 hides it
 FEED_LAYOUT = "feed_layout"  # "edge" or "full": how the apps draw the fan's Feed (feed.layout); unset, config.FEED_LAYOUT
 FEED_LAYOUTS = ("edge", "full")
-
+LOGOS_OFF = "logos_off"  # [sport key, …]: sports whose teams show our badge, not their logos (logos.py)
+LOGOS_HIDDEN = "logos_hidden"  # ["system:team id", …]: teams whose logo is taken down, whatever their sport
 
 @dataclass(frozen=True)
 class Controls:
@@ -38,6 +40,8 @@ class Controls:
     budgets: dict[str, dict[str, Any]] = field(default_factory=dict)  # by budget name
     channel_trust: dict[str, float] = field(default_factory=dict)  # by video channel id
     feed_layout: str | None = None  # one of FEED_LAYOUTS, or None for the server's setting
+    logos_off: frozenset[str] = frozenset()
+    logos_hidden: frozenset[str] = frozenset()
 
 
 def parse(rows: dict[str, Any]) -> Controls:
@@ -51,7 +55,7 @@ def parse(rows: dict[str, Any]) -> Controls:
     trust = {k: float(v) for k, v in trusts.items() if isinstance(k, str) and isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1} if isinstance(trusts, dict) else {}
     layout = rows.get(FEED_LAYOUT)
     return Controls(sports_off=names(rows.get(SPORTS_OFF)), sources_off=names(rows.get(SOURCES_OFF)), budgets=budgets, channel_trust=trust,
-                    feed_layout=layout if layout in FEED_LAYOUTS else None)
+                    feed_layout=layout if layout in FEED_LAYOUTS else None, logos_off=names(rows.get(LOGOS_OFF)), logos_hidden=names(rows.get(LOGOS_HIDDEN)))
 
 
 # ---------------------------------------------------------------- where they're kept
@@ -226,6 +230,16 @@ def turn_sport(key: str, on: bool, stands_for: dict[str, list[str]] | None = Non
 
 def turn_source(system: str, on: bool) -> None:
     _switch(SOURCES_OFF, system, on)
+
+
+def turn_logos(sport: str, on: bool) -> None:
+    """Show a sport's team logos, or our badges in their place (logos.py)."""
+    _switch(LOGOS_OFF, sport, on)
+
+
+def hide_logo(team: str, hidden: bool) -> None:
+    """Take one team's logo down ("system:team id"), or put it back."""
+    _switch(LOGOS_HIDDEN, team, not hidden)
 
 
 class Stale(Exception):

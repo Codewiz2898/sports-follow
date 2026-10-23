@@ -1,6 +1,7 @@
 """The admin panel (/admin): turn sports and sources off and on, set what each source may spend, look after
-accounts (sign one out everywhere, block it, delete it), and check the Feed's judge (approve, hide or pin what
-it read, and say how far each video channel is trusted), on the running app.
+accounts (sign one out everywhere, block it, delete it), check the Feed's judge (approve, hide or pin what
+it read, and say how far each video channel is trusted), and look after teams' logos and colours (turn a sport's
+logos off, take one team's down, set a team's colours), on the running app.
 
 It opens with a password of its own, not a fan's account, and a 6-digit code from an authenticator app
 (TOTP, RFC 6238: Google Authenticator, 1Password, Authy…). Both live in one file,
@@ -38,10 +39,10 @@ from typing import Any
 from sqlalchemy import func, or_, select, tuple_, update
 from sqlalchemy.orm import Session
 
-from . import accounts, controls, feed, feedstats, rank, sports
+from . import accounts, controls, feed, feedstats, logos, rank, sports
 from .adapters import ADAPTERS, ALL, KNOWN, NEWS, VIDEOS, budget, news, videos
 from .config import APP_NAME, FEED_LAYOUT, SOURCES
-from .models import Account, AccountSession, Event, FeedCandidate, Follow, LeagueMember, MatchFollow, Pick, Player, PushSubscription, Team, TeamFollow
+from .models import Account, AccountSession, Event, FeedCandidate, Follow, LeagueMember, MatchFollow, Pick, Player, PushSubscription, Team, TeamFollow, TeamLogo
 
 log = logging.getLogger("sports_follow.admin")
 
@@ -169,7 +170,8 @@ def sports_view() -> list[dict[str, Any]]:
     """Every sport: whether the server's settings let it run, whether the panel has it on, its sources, whether
     fans are offered it (sports.offered: a sport on with no source running and research off isn't, and the
     panel says to turn it off), and the group it's one of (each esports game is a sport, under "Esports")."""
-    off = controls.load().sports_off  # what's stored: this process's copy may be a read behind another's change
+    stored = controls.load()  # what's stored: this process's copy may be a read behind another's change
+    off = stored.sports_off
     running = sports.ENABLED
     rows = []
     for s in sports.ALL:
@@ -183,6 +185,7 @@ def sports_view() -> list[dict[str, Any]]:
             "running": s in running,
             "sources": sources,
             "offered": sports.offered(s, bool(sources)),
+            "logos": s.key not in stored.logos_off,  # its teams' logos show (logos.py), else our badges
         })
     return rows
 
@@ -195,6 +198,42 @@ def set_sport(key: str, on: bool) -> None:
         raise LookupError(key)
     group = sports.BY_KEY.get(sport.group)
     controls.turn_sport(key, on, {group.key: [m.key for m in sports.members(group)]} if group else None)
+
+
+def set_logos(key: str, on: bool) -> None:
+    """Show a sport's team logos, or our badges in their place (logos.py): off, its teams' logos stop showing within
+    seconds, wherever they are."""
+    sport = sports.BY_KEY.get(key)
+    if sport is None or sport not in sports.ALL:
+        raise LookupError(key)
+    controls.turn_logos(key, on)
+
+
+# ---------------------------------------------------------------- teams' looks (logos.py)
+
+
+def teams_view(db: Session, query: str) -> list[dict[str, Any]]:
+    """The registry's teams named like this: each with its logo and colours, and whether its logo is taken down."""
+    return logos.for_admin(db, query)
+
+
+def set_team_look(db: Session, team_id: int, body: dict[str, Any]) -> dict[str, Any]:
+    """Change a team's look: its colours ({"fill", "accent"}; null for its logo's), and whether its logo is taken
+    down ("hidden"). Either may be left out. LookupError for no such team, ValueError for a colour that isn't one."""
+    team = db.get(Team, team_id)
+    if team is None:
+        raise LookupError(team_id)
+    if "colours" in body:
+        given = body["colours"]
+        if given is not None and not isinstance(given, dict):
+            raise ValueError("colours is {fill, accent}, or null for its logo's.")
+        logos.set_colours(db, team, logos.colours_of(given.get("fill"), given.get("accent")) if given else None)
+    if "hidden" in body:
+        if not isinstance(body["hidden"], bool):
+            raise ValueError("hidden is true or false.")
+        controls.hide_logo(logos.key(team), body["hidden"])
+    db.flush()
+    return logos.row(team, db.get(TeamLogo, team.id))
 
 
 # ---------------------------------------------------------------- sources and what they may spend
