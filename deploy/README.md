@@ -712,11 +712,14 @@ whole traces (Alloy's tail sampling) in between.
 
 ## Dashboards
 
-Six dashboards in the stack's Grafana, in the **Sports Follow** folder the alert rules use. They're built
-from the traces, log lines and metrics (above), so they need nothing more on the server:
+Eight dashboards in the stack's Grafana, in the **Sports Follow** folder the alert rules use. They're built
+from the traces, log lines and metrics (above), so they need nothing more on the server. [RUNBOOK.md](RUNBOOK.md)
+says which to open when, what's normal, and what to check when each alert emails.
 
 | Dashboard | Shows | From |
 |---|---|---|
+| **Health** | reachable from outside, alerts firing, server errors and errors logged; each fan journey's requests, server errors, refusals and share answered without a server error; sign-in codes sent, used, wrong, held back and failed; late games, old scores, unsent moments, pushes delivered, the Feed's last day, failed cards | each API request's log line, its route grouped into a journey (exact counts); the uptime check; the worker's and curator's metrics; error lines |
+| **Performance** | API time taken (p50, p95, p99) overall, by journey and by route; from outside, by phase; moment to push; job time and queue wait by job; time taken by source; the server's CPU, memory and load | the API's request metrics, the uptime check, the worker's metrics, source requests, the server's own metrics |
 | **API** | requests, server errors and refusals, time taken (p95) by route; the failed requests and the API's warnings | each request's log line |
 | **Sources** | requests a second, errors, 429s and time taken (p95) by source; requests by rate-limit lane; slow requests; refusals and source warnings; each source's allowance used this window, what it says is left, pauses, this hour's requests by lane | the source requests' spans, the worker's metrics |
 | **Jobs and live polls** | live games, games behind (not polled for 3 minutes) and since each source's games were last polled; jobs waiting and the oldest's wait; job runs, failures, time in the queue and time taken by job; live poll rounds and their time; failed cards and how old live cards' scores are; card builds and refreshes; the worker's warnings | the worker's metrics, each job's closing log line, the rounds' spans |
@@ -725,8 +728,10 @@ from the traces, log lines and metrics (above), so they need nothing more on the
 | **Errors** | errors from the API, the worker and the web app, grouped by what failed and where, with how many lines and when each was first and last seen; the error lines with their stacks | lines with an exception, and the web app's error lines |
 
 A failed request's line opens its trace (its `traceID`), and a trace's id offers **Log lines of this
-trace** (a correlation from Tempo to Loki). The dashboards find their Loki and Tempo data sources
-themselves, so the same JSON works on another Grafana.
+trace** (a correlation from Tempo to Loki). The dashboards find their Loki, Tempo and Prometheus data
+sources themselves (not Grafana Cloud's own usage, ML or alert-history ones), so the same JSON works on another
+Grafana. Health and Performance are written by `grafana/ops_dashboards.py`, which groups the API's routes into
+fan journeys: after changing a journey, run it before applying (`.venv/bin/python deploy/grafana/ops_dashboards.py`).
 
 **Putting them in** (or back, after a change): from the Mac, with the same `grafana-admin.env` as the
 alert rules:
@@ -741,7 +746,7 @@ Traces' panels may miss the last few minutes on a long range; a shorter range sh
 ## Operating
 
 On the server, as `deploy`, in `/opt/sports-follow`, with `c() { docker compose -f deploy/compose.yaml "$@"; }`.
-To find out why something went wrong (a fan's missing push, a stuck card, a stale score), Claude sessions
+What to look at every day, after a deploy, and when an alert emails: [RUNBOOK.md](RUNBOOK.md). To find out why something went wrong (a fan's missing push, a stuck card, a stale score), Claude sessions
 follow the `debug` skill (`.claude/skills/debug/SKILL.md`), which also says what's safe to run here.
 
 | | |

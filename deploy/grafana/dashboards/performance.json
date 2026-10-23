@@ -1,0 +1,1775 @@
+{
+  "uid": "sports-follow-performance",
+  "title": "Sports Follow · Performance",
+  "description": "How fast is it? API time taken (p50, p95, p99) overall, by fan journey and by route; from outside, by phase; moment to push; worker jobs' time and queue wait; the sources' time; the server's CPU, memory and load. deploy/RUNBOOK.md says what's normal.",
+  "tags": [
+    "sports-follow"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "5m",
+  "graphTooltip": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "loki",
+        "label": "Logs",
+        "type": "datasource",
+        "query": "loki",
+        "regex": "/^(?!.*(alert-state-history|usage)).*$/",
+        "hide": 0,
+        "current": {},
+        "refresh": 1
+      },
+      {
+        "name": "prom",
+        "label": "Metrics",
+        "type": "datasource",
+        "query": "prometheus",
+        "regex": "/^(?!.*(usage|ml-metrics)).*$/",
+        "hide": 0,
+        "current": {},
+        "refresh": 1
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [
+    {
+      "title": "Sports Follow",
+      "type": "dashboards",
+      "tags": [
+        "sports-follow"
+      ],
+      "asDropdown": true,
+      "includeVars": false,
+      "keepTime": true
+    },
+    {
+      "title": "Runbook",
+      "type": "link",
+      "icon": "doc",
+      "targetBlank": true,
+      "url": "https://github.com/Codewiz2898/sports-follow/blob/main/deploy/RUNBOOK.md"
+    }
+  ],
+  "panels": [
+    {
+      "type": "stat",
+      "title": "API p50",
+      "description": "Half of API requests over the range took longer than this (health checks and live streams aren't counted; the buckets make it approximate). From the API's side: a fan's phone adds the trip to Sydney.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_request_duration_seconds_bucket{job=\"sports-follow-api\"}[$__range])))",
+          "legendFormat": "",
+          "editorMode": "code",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No requests",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "API p95",
+      "description": "The slowest 5% of API requests over the range took longer than this (health checks and live streams aren't counted; the buckets make it approximate). From the API's side: a fan's phone adds the trip to Sydney.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{job=\"sports-follow-api\"}[$__range])))",
+          "legendFormat": "",
+          "editorMode": "code",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No requests",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "API p99",
+      "description": "The slowest 1% of API requests over the range took longer than this (health checks and live streams aren't counted; the buckets make it approximate). From the API's side: a fan's phone adds the trip to Sydney.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket{job=\"sports-follow-api\"}[$__range])))",
+          "legendFormat": "",
+          "editorMode": "code",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No requests",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Outside p95",
+      "description": "The slowest 5% of the uptime checks from Mumbai and Singapore over the range, from DNS to the last byte of /api/health: what the trip to the server costs before any work.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(probe_all_duration_seconds_bucket{job=\"sports-follow-uptime\"}[$__range])))",
+          "legendFormat": "",
+          "editorMode": "code",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1.5
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No checks",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "id": 4
+    },
+    {
+      "type": "stat",
+      "title": "Push wait p95",
+      "description": "From a poll or build finding a moment (a goal, a wicket, a result) to its pushes going out, the slowest 5% over the range.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(sports_follow_push_wait_seconds_bucket{job=~\"sports-follow-(api|worker)\"}[$__range])))",
+          "legendFormat": "",
+          "editorMode": "code",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 30
+              },
+              {
+                "color": "red",
+                "value": 120
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No pushes",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "id": 5
+    },
+    {
+      "type": "stat",
+      "title": "Queue wait p95",
+      "description": "How long worker jobs waited for a slot before starting, the slowest 5% over the range. Long: polls, builds and pushes queue behind each other.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(sports_follow_job_wait_seconds_bucket{job=~\"sports-follow-(worker|curator)\"}[$__range])))",
+          "legendFormat": "",
+          "editorMode": "code",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 30
+              },
+              {
+                "color": "red",
+                "value": 120
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No jobs",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "id": 6
+    },
+    {
+      "type": "table",
+      "title": "Time taken by journey over the range",
+      "description": "Each fan journey's requests and how long they took (the runbook lists each journey's routes). A p95 over 1 s on a journey fans use often is worth a look; over 3 s for 10 minutes, \"The API is slow\" fires.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" [$__range])), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) > 0",
+          "legendFormat": "requests",
+          "editorMode": "code",
+          "queryType": "instant"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job=\"sports-follow-api\"}[$__range])), \"journey\", \"Sign in\", \"http_route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"http_route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"http_route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"http_route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"http_route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"http_route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"http_route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"http_route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"http_route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"http_route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"http_route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"http_route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\"))) >= 0",
+          "legendFormat": "p50",
+          "editorMode": "code",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job=\"sports-follow-api\"}[$__range])), \"journey\", \"Sign in\", \"http_route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"http_route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"http_route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"http_route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"http_route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"http_route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"http_route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"http_route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"http_route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"http_route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"http_route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"http_route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\"))) >= 0",
+          "legendFormat": "p95",
+          "editorMode": "code",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le, journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job=\"sports-follow-api\"}[$__range])), \"journey\", \"Sign in\", \"http_route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"http_route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"http_route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"http_route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"http_route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"http_route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"http_route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"http_route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"http_route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"http_route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"http_route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"http_route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\"))) >= 0",
+          "legendFormat": "p99",
+          "editorMode": "code",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "custom": {
+            "align": "auto",
+            "minWidth": 60
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Journey"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 180
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p50"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    },
+                    {
+                      "color": "red",
+                      "value": 3
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    },
+                    {
+                      "color": "red",
+                      "value": 3
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p99"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    },
+                    {
+                      "color": "red",
+                      "value": 3
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value #A": "Requests",
+              "Value #B": "p50",
+              "Value #C": "p95",
+              "Value #D": "p99",
+              "journey": "Journey"
+            },
+            "indexByName": {
+              "journey": 0,
+              "Value #A": 1,
+              "Value #B": 2,
+              "Value #C": 3,
+              "Value #D": 4
+            }
+          }
+        },
+        {
+          "id": "filterByValue",
+          "options": {
+            "type": "exclude",
+            "match": "any",
+            "filters": [
+              {
+                "fieldName": "p95",
+                "config": {
+                  "id": "isNull",
+                  "options": {}
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "p95",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 16
+      },
+      "id": 7
+    },
+    {
+      "type": "table",
+      "title": "Slowest routes over the range",
+      "description": "Every API route that answered in the range, slowest first by p95. A route with a handful of requests can top this on one slow one: read it with its count. A route whose few requests the metric hasn't timed (a process's first of each isn't) isn't listed; Health counts every request.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "sum by (http_route) (label_replace(sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" | route != \"\" [$__range])), \"http_route\", \"$1\", \"route\", \"(.+)\")) > 0",
+          "legendFormat": "requests",
+          "editorMode": "code",
+          "queryType": "instant"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job=\"sports-follow-api\"}[$__range]))) >= 0",
+          "legendFormat": "p50",
+          "editorMode": "code",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job=\"sports-follow-api\"}[$__range]))) >= 0",
+          "legendFormat": "p95",
+          "editorMode": "code",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job=\"sports-follow-api\"}[$__range]))) >= 0",
+          "legendFormat": "p99",
+          "editorMode": "code",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "custom": {
+            "align": "auto",
+            "minWidth": 60
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Route"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 230
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p50"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    },
+                    {
+                      "color": "red",
+                      "value": 3
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    },
+                    {
+                      "color": "red",
+                      "value": 3
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p99"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    },
+                    {
+                      "color": "red",
+                      "value": 3
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value #A": "Requests",
+              "Value #B": "p50",
+              "Value #C": "p95",
+              "Value #D": "p99",
+              "http_route": "Route"
+            },
+            "indexByName": {
+              "http_route": 0,
+              "Value #A": 1,
+              "Value #B": 2,
+              "Value #C": 3,
+              "Value #D": 4
+            }
+          }
+        },
+        {
+          "id": "filterByValue",
+          "options": {
+            "type": "exclude",
+            "match": "any",
+            "filters": [
+              {
+                "fieldName": "p95",
+                "config": {
+                  "id": "isNull",
+                  "options": {}
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "p95",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 16
+      },
+      "id": 8
+    },
+    {
+      "type": "timeseries",
+      "title": "Time taken p95, by journey",
+      "description": "The slowest 5% of each journey's requests, each interval of the chart (10 minutes or more).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job=\"sports-follow-api\"}[$__rate_interval])), \"journey\", \"Sign in\", \"http_route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"http_route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"http_route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"http_route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"http_route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"http_route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"http_route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"http_route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"http_route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"http_route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"http_route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"http_route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")))",
+          "legendFormat": "{{journey}}",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "interval": "10m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "noValue": "No data in this range",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 14
+      },
+      "id": 9
+    },
+    {
+      "type": "timeseries",
+      "title": "From outside, by phase",
+      "description": "Each uptime check's time, by phase: resolve (DNS), connect (the trip to the server), tls, processing (Caddy and the API answering, plus one more trip), transfer. Connect and tls are the distance; processing is ours.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "avg by (probe, phase) (avg_over_time(probe_http_duration_seconds{job=\"sports-follow-uptime\"}[$__rate_interval]))",
+          "legendFormat": "{{probe}} {{phase}}",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "interval": "10m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 14
+      },
+      "id": 10
+    },
+    {
+      "type": "timeseries",
+      "title": "API time taken, p50, p95 and p99",
+      "description": "Every API request together, each interval of the chart.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_request_duration_seconds_bucket{job=\"sports-follow-api\"}[$__rate_interval])))",
+          "legendFormat": "p50",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{job=\"sports-follow-api\"}[$__rate_interval])))",
+          "legendFormat": "p95",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket{job=\"sports-follow-api\"}[$__rate_interval])))",
+          "legendFormat": "p99",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "interval": "10m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "noValue": "No data in this range",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 12,
+        "h": 14
+      },
+      "id": 11
+    },
+    {
+      "type": "timeseries",
+      "title": "Moment to push, p95",
+      "description": "From a moment found to its pushes, the slowest 5%, each interval of the chart. A gap: no pushes then.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(sports_follow_push_wait_seconds_bucket{job=~\"sports-follow-(api|worker)\"}[$__rate_interval])))",
+          "legendFormat": "p95",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "interval": "10m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 34,
+        "w": 12,
+        "h": 14
+      },
+      "id": 12
+    },
+    {
+      "type": "timeseries",
+      "title": "Job time taken p95, by job",
+      "description": "How long each worker (and curator) job ran, the slowest 5%. Lane jobs (engine_lane, poll_lane, history_lane) run for minutes by design; the top bucket is 15 minutes.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, job_name) (rate(sports_follow_job_duration_seconds_bucket{job=~\"sports-follow-(worker|curator)\"}[$__rate_interval])))",
+          "legendFormat": "{{job_name}}",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "interval": "10m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "scaleDistribution": {
+              "type": "log",
+              "log": 10
+            }
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 12,
+        "h": 14
+      },
+      "id": 13
+    },
+    {
+      "type": "timeseries",
+      "title": "Job queue wait p95, by job",
+      "description": "How long each job waited for a worker slot, the slowest 5%. \"Jobs are waiting for the worker\" fires when one has waited 2 minutes for 5.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, job_name) (rate(sports_follow_job_wait_seconds_bucket{job=~\"sports-follow-(worker|curator)\"}[$__rate_interval])))",
+          "legendFormat": "{{job_name}}",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "interval": "10m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "scaleDistribution": {
+              "type": "log",
+              "log": 10
+            }
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 12,
+        "h": 14
+      },
+      "id": 14
+    },
+    {
+      "type": "timeseries",
+      "title": "Source time taken p95, by host",
+      "description": "Requests to the data sources, the model gateway, push services and email, by host, the slowest 5%. The Sources dashboard has their errors and allowances.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, server_address) (rate(http_client_request_duration_seconds_bucket{job=~\"sports-follow-(api|worker|curator)\"}[$__rate_interval])))",
+          "legendFormat": "{{server_address}}",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "interval": "10m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "scaleDistribution": {
+              "type": "log",
+              "log": 10
+            }
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 62,
+        "w": 24,
+        "h": 14
+      },
+      "id": 15
+    },
+    {
+      "type": "timeseries",
+      "title": "Server CPU",
+      "description": "Busy: the share of CPU time spent working. Held back: time Lightsail withheld (steal) once the burst allowance is used up; over 20% for 30 minutes alerts.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "1 - avg(rate(node_cpu_seconds_total{job=\"sports-follow\", mode=\"idle\"}[$__rate_interval]))",
+          "legendFormat": "busy",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "avg(rate(node_cpu_seconds_total{job=\"sports-follow\", mode=\"steal\"}[$__rate_interval]))",
+          "legendFormat": "held back",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "interval": "10m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 76,
+        "w": 8,
+        "h": 12
+      },
+      "id": 16
+    },
+    {
+      "type": "timeseries",
+      "title": "Server memory free",
+      "description": "Memory available to the app's processes; under 5% for 10 minutes alerts. docker stats on the server says which container holds it.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "node_memory_MemAvailable_bytes{job=\"sports-follow\"} / node_memory_MemTotal_bytes{job=\"sports-follow\"}",
+          "legendFormat": "free",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "interval": "10m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 76,
+        "w": 8,
+        "h": 12
+      },
+      "id": 17
+    },
+    {
+      "type": "timeseries",
+      "title": "Server load",
+      "description": "Processes running or waiting for the CPU, averaged over 1, 5 and 15 minutes. Past the CPU count for long, work queues.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "node_load1{job=\"sports-follow\"}",
+          "legendFormat": "1 min",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "node_load5{job=\"sports-follow\"}",
+          "legendFormat": "5 min",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "node_load15{job=\"sports-follow\"}",
+          "legendFormat": "15 min",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "count(count by (cpu) (node_cpu_seconds_total{job=\"sports-follow\"}))",
+          "legendFormat": "CPUs",
+          "editorMode": "code",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "interval": "10m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 76,
+        "w": 8,
+        "h": 12
+      },
+      "id": 18
+    }
+  ]
+}

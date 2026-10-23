@@ -1,0 +1,1587 @@
+{
+  "uid": "sports-follow-health",
+  "title": "Sports Follow · Health",
+  "description": "Is it working for fans? Reachability from outside, alerts firing, each fan journey's success rate, sign-in, and whether live scores, pushes, the Feed and player pages are fresh. Open it first: deploy/RUNBOOK.md says what to look for.",
+  "tags": [
+    "sports-follow"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "5m",
+  "graphTooltip": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "loki",
+        "label": "Logs",
+        "type": "datasource",
+        "query": "loki",
+        "regex": "/^(?!.*(alert-state-history|usage)).*$/",
+        "hide": 0,
+        "current": {},
+        "refresh": 1
+      },
+      {
+        "name": "prom",
+        "label": "Metrics",
+        "type": "datasource",
+        "query": "prometheus",
+        "regex": "/^(?!.*(usage|ml-metrics)).*$/",
+        "hide": 0,
+        "current": {},
+        "refresh": 1
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [
+    {
+      "title": "Sports Follow",
+      "type": "dashboards",
+      "tags": [
+        "sports-follow"
+      ],
+      "asDropdown": true,
+      "includeVars": false,
+      "keepTime": true
+    },
+    {
+      "title": "Runbook",
+      "type": "link",
+      "icon": "doc",
+      "targetBlank": true,
+      "url": "https://github.com/Codewiz2898/sports-follow/blob/main/deploy/RUNBOOK.md"
+    }
+  ],
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Reachable from outside",
+      "description": "Share of Grafana's uptime checks (Mumbai and Singapore, each minute) that got a healthy answer from /api/health over the range: DNS, the certificate, Caddy and the API together. Under 100%: the Synthetics page says which probe and why.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "sum(increase(probe_all_success_sum{job=\"sports-follow-uptime\"}[$__range])) / sum(increase(probe_all_success_count{job=\"sports-follow-uptime\"}[$__range]))",
+          "legendFormat": "",
+          "editorMode": "code",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.99
+              },
+              {
+                "color": "green",
+                "value": 0.995
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No checks",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "API answers without a server error",
+      "description": "Share of API requests over the range not answered with a 5xx (health checks and live streams aren't counted). Few requests make this jumpy: read it with the count beside it.",
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "1 - (sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" | status >= 500 [$__range])) or vector(0)) / (sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" [$__range])) > 0)",
+          "legendFormat": "",
+          "editorMode": "code",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.99
+              },
+              {
+                "color": "green",
+                "value": 0.999
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No requests",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "Server errors (5xx)",
+      "description": "API requests answered with a server error over the range. Each is on the API dashboard's Failed requests, with its trace.",
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "(sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" | status >= 500 [$__range])) or vector(0))",
+          "legendFormat": "",
+          "editorMode": "code",
+          "queryType": "instant"
+        }
+      ],
+      "links": [
+        {
+          "title": "API dashboard",
+          "url": "/d/sports-follow-api?${__url_time_range}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Errors logged",
+      "description": "Exceptions logged by the API and worker, and errors the web app reported, over the range. The Errors dashboard groups them by what failed and where.",
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "sum(count_over_time({service_name=~\"sports-follow-(api|worker)\"} | error != \"\" [$__range]))",
+          "legendFormat": "",
+          "editorMode": "code",
+          "queryType": "instant"
+        }
+      ],
+      "links": [
+        {
+          "title": "Errors dashboard",
+          "url": "/d/sports-follow-errors?${__url_time_range}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "id": 4
+    },
+    {
+      "type": "alertlist",
+      "title": "Alerts firing now",
+      "description": "The Sports Follow folder's alert rules (deploy/grafana/rules.json and app-rules.json) that are firing or about to. The runbook says what each means and what to do.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [],
+      "options": {
+        "viewMode": "list",
+        "groupMode": "default",
+        "groupBy": [],
+        "maxItems": 30,
+        "sortOrder": 1,
+        "dashboardAlerts": false,
+        "alertName": "",
+        "alertInstanceLabelFilter": "",
+        "folder": {
+          "uid": "sports-follow",
+          "title": "Sports Follow"
+        },
+        "stateFilter": {
+          "firing": true,
+          "pending": true,
+          "noData": false,
+          "normal": false,
+          "error": true
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 8,
+        "h": 16
+      },
+      "id": 5
+    },
+    {
+      "type": "table",
+      "title": "Fans' journeys over the range",
+      "description": "Each thing fans do, by the API routes it calls (the runbook lists them): its requests, how many were answered with a server error (5xx) or refused (4xx: a wrong code, a missing page), and the share answered without a server error.",
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" [$__range])), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) > 0",
+          "legendFormat": "requests",
+          "editorMode": "code",
+          "queryType": "instant"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace((sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" | status >= 500 [$__range])) or 0 * (sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" [$__range])) > 0)), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\"))",
+          "legendFormat": "5xx",
+          "editorMode": "code",
+          "queryType": "instant"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace((sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" | status >= 400 | status < 500 [$__range])) or 0 * (sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" [$__range])) > 0)), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\"))",
+          "legendFormat": "4xx",
+          "editorMode": "code",
+          "queryType": "instant"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "1 - sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace((sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" | status >= 500 [$__range])) or 0 * (sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" [$__range])) > 0)), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) / (sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" [$__range])), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) > 0)",
+          "legendFormat": "answered",
+          "editorMode": "code",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "custom": {
+            "align": "auto",
+            "minWidth": 60
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Journey"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 180
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Answered"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 0.99
+                    },
+                    {
+                      "color": "green",
+                      "value": 0.999
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Server errors"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value #A": "Requests",
+              "Value #B": "Server errors",
+              "Value #C": "Refused",
+              "Value #D": "Answered",
+              "journey": "Journey"
+            },
+            "indexByName": {
+              "journey": 0,
+              "Value #A": 1,
+              "Value #B": 2,
+              "Value #C": 3,
+              "Value #D": 4
+            }
+          }
+        },
+        {
+          "id": "filterByValue",
+          "options": {
+            "type": "exclude",
+            "match": "any",
+            "filters": [
+              {
+                "fieldName": "Answered",
+                "config": {
+                  "id": "isNull",
+                  "options": {}
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Answered",
+                "desc": false
+              }
+            ]
+          }
+        }
+      ],
+      "gridPos": {
+        "x": 8,
+        "y": 4,
+        "w": 16,
+        "h": 16
+      },
+      "id": 6
+    },
+    {
+      "type": "timeseries",
+      "title": "Answered without a server error, by journey",
+      "description": "The share of each journey's requests not answered with a 5xx, each interval of the chart (10 minutes or more). A gap: no requests then.",
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "1 - sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace((sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" | status >= 500 [$__auto])) or 0 * (sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" [$__auto])) > 0)), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) / (sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" [$__auto])), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\")) > 0)",
+          "legendFormat": "{{journey}}",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "interval": "10m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisSoftMin": 0.95,
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "noValue": "No data in this range",
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.99
+              },
+              {
+                "color": "green",
+                "value": 0.999
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 14
+      },
+      "id": 7
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests, by journey",
+      "description": "Requests each interval of the chart (10 minutes or more).",
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "sum by (journey) (label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(label_replace(sum by (route) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" [$__auto])), \"journey\", \"Sign in\", \"route\", \"/api/auth/.+\"), \"journey\", \"App start\", \"route\", \"/api/(config|sports|sports\\\\.css|looks|credits|me/account|me/start|me/source)\"), \"journey\", \"Today\", \"route\", \"/api/me/(activity|week|following|matches|results|research|sports)|/api/league|/api/starters\"), \"journey\", \"Live and match pages\", \"route\", \"/api/live|/api/match/[^/]+/[^/]+\"), \"journey\", \"Player and team pages\", \"route\", \"/api/players/[^/]+/(card|form|results|results/[^/]+|refresh)|/api/teams/[^/]+\"), \"journey\", \"Feed\", \"route\", \"/api/me/feed(/items)?|/api/players/[^/]+/feed(/.+)?\"), \"journey\", \"Search and follow\", \"route\", \"/api/search|/api/athletes/.+|/api/follows(/[^/]+)?|/api/teams/[^/]+/follow|/api/match/[^/]+/[^/]+/follow|/api/me/matches/[^/]+|/api/campaigns/[^/]+(/follow)?\"), \"journey\", \"Alerts settings\", \"route\", \"/api/push(/.+)?|/api/notifications/.+|/api/me/mutes(/[^/]+)?|/api/(follows|teams)/[^/]+/alerts|/api/me/matches/[^/]+/alerts\"), \"journey\", \"Call it and leagues\", \"route\", \"/api/predictions/[^/]+/pick|/api/me/(predictions|leagues)|/api/leagues(/[^/]+(/(invite|join|me|shared))?)?\"), \"journey\", \"Clips\", \"route\", \"/api/clips(/[^/]+(/(done|report))?)?\"), \"journey\", \"Pictures\", \"route\", \"/api/(photos|logos)/[^/]+|/api/(.+/)?share\\\\.png\"), \"journey\", \"Admin panel\", \"route\", \"/api/admin/.+\"), \"journey\", \"Other\", \"journey\", \"\"))",
+          "legendFormat": "{{journey}}",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "interval": "10m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 14
+      },
+      "id": 8
+    },
+    {
+      "type": "stat",
+      "title": "Codes sent",
+      "description": "Sign-in codes emailed over the range (POST /api/auth/email/start answered 200; a second tap within the minute counts again).",
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" | route =~ \"/api/auth/email/start\" | status = 200 [$__range])) or vector(0)",
+          "legendFormat": "",
+          "editorMode": "code",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 4,
+        "h": 4
+      },
+      "id": 9
+    },
+    {
+      "type": "stat",
+      "title": "Signed in",
+      "description": "Codes that signed a fan in (POST /api/auth/email/verify answered 200).",
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" | route =~ \"/api/auth/email/verify\" | status = 200 [$__range])) or vector(0)",
+          "legendFormat": "",
+          "editorMode": "code",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 34,
+        "w": 4,
+        "h": 4
+      },
+      "id": 10
+    },
+    {
+      "type": "stat",
+      "title": "Codes used",
+      "description": "Sign-ins by code for each code sent, over the range. Low: codes aren't arriving (Resend, the spam folder) or fans give up. Few sign-ins make it jumpy.",
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "(sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" | route =~ \"/api/auth/email/verify\" | status = 200 [$__range])) or vector(0)) / (sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" | route =~ \"/api/auth/email/start\" | status = 200 [$__range])) > 0)",
+          "legendFormat": "",
+          "editorMode": "code",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.5
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No codes sent",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 34,
+        "w": 4,
+        "h": 4
+      },
+      "id": 11
+    },
+    {
+      "type": "stat",
+      "title": "Wrong codes",
+      "description": "Codes refused at sign-in (verify answered 400: wrong, run out, or not 6 digits).",
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" | route =~ \"/api/auth/email/verify\" | status = 400 [$__range])) or vector(0)",
+          "legendFormat": "",
+          "editorMode": "code",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 34,
+        "w": 4,
+        "h": 4
+      },
+      "id": 12
+    },
+    {
+      "type": "stat",
+      "title": "Code limits hit",
+      "description": "Sign-in requests refused with 429: an address or network asked for too many codes or tried too many wrong ones, or the day's codes ran out (fans read \"has sent all the sign-in codes it can today\").",
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" | route =~ \"/api/auth/email/.+\" | status = 429 [$__range])) or vector(0)",
+          "legendFormat": "",
+          "editorMode": "code",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 34,
+        "w": 4,
+        "h": 4
+      },
+      "id": 13
+    },
+    {
+      "type": "stat",
+      "title": "Send failed",
+      "description": "email/start answered 502 (Resend refused or didn't answer) or 503 (email isn't set up on the server). Fans can't sign in by email while this grows.",
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "sum(count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" | route =~ \"/api/auth/email/start\" | status >= 500 [$__range])) or vector(0)",
+          "legendFormat": "",
+          "editorMode": "code",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 34,
+        "w": 4,
+        "h": 4
+      },
+      "id": 14
+    },
+    {
+      "type": "timeseries",
+      "title": "Sign-in requests, by step and answer",
+      "description": "Each interval of the chart: start = a code asked for, verify = a code tried, google/start and google/callback = Continue with Google (the callback always answers 303: its failures are in the API's warnings).",
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "sum by (step, status) (label_replace(sum by (route, status) (count_over_time({service_name=\"sports-follow-api\"} | scope_name=\"sports_follow.requests\" | path =~ \"/api/.+\" | path != \"/api/health\" | path !~ \".*/stream\" | route =~ \"/api/auth/.+\" [$__auto])), \"step\", \"$1\", \"route\", \"/api/auth/(?:email/)?(.+)\"))",
+          "legendFormat": "{{step}} {{status}}",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "interval": "10m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false
+          },
+          "noValue": "No data in this range"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 24,
+        "h": 10
+      },
+      "id": 15
+    },
+    {
+      "type": "stat",
+      "title": "Games behind",
+      "description": "Live games not polled for three of their rounds (at least 3 minutes), now: their scores and alerts are late. The Jobs and live polls dashboard shows why.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "sum(sports_follow_live_games_behind{job=\"sports-follow-worker\"})",
+          "legendFormat": "",
+          "editorMode": "code",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No reading",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 4,
+        "h": 4
+      },
+      "id": 16
+    },
+    {
+      "type": "stat",
+      "title": "Oldest score",
+      "description": "How old the live score is on the live card that's furthest behind, now.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "max(sports_follow_cards_live_data_age_seconds{job=\"sports-follow-worker\"})",
+          "legendFormat": "",
+          "editorMode": "code",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 180
+              },
+              {
+                "color": "red",
+                "value": 600
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No live cards"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 48,
+        "w": 4,
+        "h": 4
+      },
+      "id": 17
+    },
+    {
+      "type": "stat",
+      "title": "Not pushed",
+      "description": "Moments found over 3 minutes ago that nobody has pushed yet, now. Over 0: fans aren't getting alerts.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "max(sports_follow_moments_unsent{job=\"sports-follow-worker\"})",
+          "legendFormat": "",
+          "editorMode": "code",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No reading",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 48,
+        "w": 4,
+        "h": 4
+      },
+      "id": 18
+    },
+    {
+      "type": "stat",
+      "title": "Delivered",
+      "description": "Share of pushes over the range that their push service took (unsubscribed devices, 404 and 410, are left out). The Notifications dashboard has the failures by push service.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "1 - (sum(increase(sports_follow_pushes_total{job=~\"sports-follow-(api|worker)\", result=\"failed\"}[$__range])) or vector(0)) / sum(increase(sports_follow_pushes_total{job=~\"sports-follow-(api|worker)\", result=~\"delivered|failed\"}[$__range]))",
+          "legendFormat": "",
+          "editorMode": "code",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.95
+              },
+              {
+                "color": "green",
+                "value": 0.99
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No pushes",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 4,
+        "h": 4
+      },
+      "id": 19
+    },
+    {
+      "type": "stat",
+      "title": "Feed, 24 h",
+      "description": "New videos about followed players the curator kept in the last day, whatever the range. 0 for a day: the Feed is going stale, and the Feed dashboard shows where its funnel stops.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "sum(increase(sports_follow_feed_kept_total{job=\"sports-follow-curator\"}[24h]))",
+          "legendFormat": "",
+          "editorMode": "code",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "No reading",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 48,
+        "w": 4,
+        "h": 4
+      },
+      "id": 20
+    },
+    {
+      "type": "stat",
+      "title": "Cards failed",
+      "description": "Player pages (cards) whose build failed, now: fans see an error on them. The Jobs and live polls dashboard has the builds; the worker's warnings say why.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prom}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prom}"
+          },
+          "expr": "sum(sports_follow_cards{job=\"sports-follow-worker\", status=\"failed\"})",
+          "legendFormat": "",
+          "editorMode": "code",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "0",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 48,
+        "w": 4,
+        "h": 4
+      },
+      "id": 21
+    }
+  ]
+}
