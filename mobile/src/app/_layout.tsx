@@ -55,6 +55,7 @@ function Fan() {
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
+      {/* Dark icons, on paper; a page sets its own over its strip while it's in front (page.tsx). */}
       <StatusBar style="dark" />
       <AccountProvider>
         <SportsProvider>
