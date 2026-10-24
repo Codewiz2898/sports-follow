@@ -1,12 +1,23 @@
 // A page (the web's .main): paper, 20px below the status bar, 16px a side, 120px at the foot so the floating
 // tab bar covers nothing, and 16px between its blocks; what just happened to this phone's sign-in at its top,
-// on every page, as the web says it.
+// on every page, as the web says it. The status bar's icons read on the strip under them.
 
+import { useIsFocused } from 'expo-router'
+import { StatusBar } from 'expo-status-bar'
 import { useEffect, useRef, type ReactElement, type ReactNode } from 'react'
 import { FlatList, RefreshControl, ScrollView, StyleSheet, View, type FlatListProps } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { inkOn } from '../../web/src/teamColours'
 import { AccountNotice, useAccount } from './account'
 import { colour, GUTTER } from './theme'
+
+/** The status bar's icons, light on a dark `bar` and dark on a light one (the ink that reads on it), while this
+ * page is in front. A page under another stays mounted, and the StatusBar mounted last wins, so it's there only
+ * while the page is: the page in front's own, or _layout.tsx's dark icons. */
+function BarIcons({ bar }: { bar: string }) {
+  const focused = useIsFocused()
+  return focused ? <StatusBar style={inkOn(bar) === '#ffffff' ? 'light' : 'dark'} /> : null
+}
 
 /** `top`, false for a page whose header is a block of colour up to the top edge (a player's band): a notice
  * then sits above the band, below the status bar. `bar`, the colour behind the status bar. */
@@ -29,6 +40,7 @@ export function Page({ children, onRefresh, refreshing, top = true, bar = colour
       </ScrollView>
       {/* The status bar's own strip, of the page's ground (a band's colour on a player's page), over what scrolls under it. */}
       <View pointerEvents="none" style={[s.bar, { height: insets.top, backgroundColor: bar }]} />
+      <BarIcons bar={bar} />
     </View>
   )
 }
@@ -50,6 +62,7 @@ export function PageList<T>({ head, foot, onRefresh, refreshing, gap = 14, ...li
         refreshControl={onRefresh ? <RefreshControl refreshing={Boolean(refreshing)} onRefresh={onRefresh} /> : undefined}
       />
       <View pointerEvents="none" style={[s.bar, { height: insets.top, backgroundColor: colour.bg }]} />
+      <BarIcons bar={colour.bg} />
     </View>
   )
 }
